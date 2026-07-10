@@ -1,4 +1,5 @@
 import type { YogaInitialContext } from 'graphql-yoga'
+import type { SourceApi } from '../sources/types'
 
 import { createSchema, createYoga } from 'graphql-yoga'
 import { expose } from 'osra'
@@ -6,9 +7,18 @@ import { expose } from 'osra'
 import typeDefs from './schema.gql?raw'
 import { resolvers } from './resolvers'
 
-export type ServerContext = YogaInitialContext
+type UserContext = {
+  source: SourceApi
+}
 
-const yoga = createYoga({
+export type ServerContext = YogaInitialContext & UserContext
+
+const source = await expose<SourceApi>({}, {
+  key: 'source',
+  transport: globalThis,
+})
+
+const yoga = createYoga<UserContext>({
   graphqlEndpoint: '/graphql',
   maskedErrors: false,
   schema: createSchema({ typeDefs, resolvers }),
@@ -16,7 +26,7 @@ const yoga = createYoga({
 
 const api = {
   handleRequest: (input: RequestInfo | URL, init?: RequestInit) =>
-    yoga.handleRequest(new Request(input, init), {}),
+    yoga.handleRequest(new Request(input, init), { source }),
 }
 
 export type WorkerApi = typeof api

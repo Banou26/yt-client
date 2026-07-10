@@ -2,12 +2,9 @@ import type { Resolvers } from '../generated/resolvers'
 
 export const resolvers = {
   Query: {
-    home: () => ({ items: [] }),
-    search: () => ({ items: [] }),
-    video: () => null,
-    channel: (_, { id }) => ({
-      channel: { id, name: id },
-      videos: { items: [] },
-    }),
+    home: (_, { cursor }, context) => context.source.home(cursor ?? undefined),
+    search: (_, { query, cursor }, context) => context.source.search(query, cursor ?? undefined),
+    video: (_, { id }, context) => context.source.video(id).then((video) => video ?? null),
+    channel: (_, { id, cursor }, context) => context.source.channel(id, cursor ?? undefined),
   },
 } satisfies Resolvers
