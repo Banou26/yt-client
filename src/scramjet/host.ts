@@ -1,0 +1,80 @@
+import type { EgressApi } from './protocol'
+
+import { relayWorker } from '@fkn/lib'
+import { defaultConfigDev } from '@mercuryworkshop/scramjet'
+import { Controller } from '@mercuryworkshop/scramjet-controller'
+import { expose } from 'osra'
+
+import { EGRESS_KEY, ENGINE_READY } from './protocol'
+import { createWebvpnTransport } from './webvpn-transport'
+
+const waitForWorker = async (registration: ServiceWorkerRegistration) => {
+  if (registration.active) return registration.active
+  await new Promise<void>((resolve) => {
+    const worker = registration.installing ?? registration.waiting
+    worker?.addEventListener('statechange', () => {
+      if (worker.state === 'activated') resolve()
+    })
+  })
+  if (!registration.active) throw new Error('yt-client: Scramjet service worker did not activate')
+  return registration.active
+}
+
+const boot = async () => {
+  const registration = await navigator.serviceWorker.register('/__yt_scramjet__/sw.js', {
+    scope: '/__yt_scramjet__/',
+    type: 'classic',
+    updateViaCache: 'none',
+  })
+  const serviceworker = await waitForWorker(registration)
+  const worker = new Worker(new URL('./egress.worker.ts', import.meta.url), { type: 'module' })
+  const relayAbort = new AbortController()
+  relayWorker(worker, { unregisterSignal: relayAbort.signal })
+
+  const channel = new MessageChannel()
+  worker.postMessage({ type: EGRESS_KEY, port: channel.port1 }, [channel.port1])
+  channel.port2.start()
+  const remote = expose<EgressApi>({}, {
+    key: EGRESS_KEY,
+    transport: { receive: channel.port2, emit: channel.port2 },
+  })
+  const transport = createWebvpnTransport(remote)
+  await transport.init()
+  await (await remote).prewarm('www.youtube.com')
+
+  const controller = new Controller({
+    serviceworker,
+    transport,
+    config: {
+      prefix: '/__yt_scramjet__/proxy/',
+      scramjetPath: '/__yt_scramjet__/scramjet/scramjet.js',
+      injectPath: '/__yt_scramjet__/controller/controller.inject.js',
+      wasmPath: '/__yt_scramjet__/scramjet/scramjet.wasm',
+      virtualWasmPath: 'scramjet.wasm.js',
+    },
+    scramjetConfig: defaultConfigDev,
+  })
+  await controller.wait()
+
+  const frame = document.createElement('iframe')
+  frame.hidden = true
+  frame.setAttribute('allow', 'autoplay; encrypted-media')
+  document.body.appendChild(frame)
+  const proxiedFrame = controller.createFrame(frame)
+
+  window.parent.postMessage({ type: ENGINE_READY }, location.origin)
+  window.addEventListener('pagehide', () => {
+    relayAbort.abort()
+    channel.port2.close()
+    worker.terminate()
+  }, { once: true })
+
+  return { controller, frame: proxiedFrame }
+}
+
+void boot().catch((error) => {
+  window.parent.postMessage({
+    type: ENGINE_READY,
+    error: error instanceof Error ? error.message : String(error),
+  }, location.origin)
+})
