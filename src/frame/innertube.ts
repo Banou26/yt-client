@@ -27,6 +27,17 @@ type YoutubeFormat = {
   init_range?: { start: number, end: number }
 }
 
+type InnertubeContext = {
+  client: {
+    visitorData: string
+    clientVersion: string
+    clientName: string
+    osName: string
+    osVersion: string
+    userAgent: string
+  }
+}
+
 const FALLBACK_CLIENT_VERSION = '2.20260618.05.00'
 
 ;(Constants as unknown as { CLIENTS: { WEB: { VERSION: string } } }).CLIENTS.WEB.VERSION = FALLBACK_CLIENT_VERSION
@@ -40,12 +51,21 @@ Platform.shim.eval = async (data: Types.BuildScriptResult, env: Record<string, T
 
 export const catalogInnertube = Innertube.create({
   fetch: globalThis.fetch.bind(globalThis),
+  generate_session_locally: true,
+  retrieve_innertube_config: false,
   retrieve_player: false,
 })
 
-const innertube = Innertube.create({
-  fetch: globalThis.fetch.bind(globalThis),
-  retrieve_player: true,
+const innertube = catalogInnertube.then((client) => {
+  const context = client.session.context as unknown as InnertubeContext
+  return Innertube.create({
+    fetch: globalThis.fetch.bind(globalThis),
+    generate_session_locally: true,
+    retrieve_innertube_config: false,
+    retrieve_player: true,
+    visitor_data: context.client.visitorData,
+    user_agent: context.client.userAgent,
+  })
 })
 
 const extractInitialPlayerResponse = (html: string) => {
@@ -116,7 +136,11 @@ export type SabrSource = {
 }
 
 export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
+  const catalogClient = await catalogInnertube
+  const preparedPoToken = preparePoToken(catalogClient.session.context as unknown as InnertubeContext)
+  void preparedPoToken.catch(() => {})
   const client = await innertube
+  const context = client.session.context as unknown as InnertubeContext
   const html = await fetch(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`).then((response) => response.text())
   const raw = extractInitialPlayerResponse(html)
   const info = new YT.VideoInfo([{ data: raw } as never], client.actions, Utils.generateRandomString(16))
@@ -129,15 +153,6 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
     if (!format.has_audio || format.has_video) return true
     return !format.xtags && !format.is_drc && !format.is_dubbed && !format.is_auto_dubbed && !format.is_descriptive
   }) as unknown as YoutubeFormat[]
-  const context = client.session.context as unknown as {
-    client: {
-      visitorData: string
-      clientVersion: string
-      clientName: string
-      osName: string
-      osVersion: string
-    }
-  }
   const datasyncId = (raw as {
     responseContext?: { mainAppWebResponseContext?: { datasyncId?: string } }
   }).responseContext?.mainAppWebResponseContext?.datasyncId?.split('||')[0]
@@ -150,7 +165,7 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
     } as never),
     client.session.player!.decipher(streaming.server_abr_streaming_url),
     registerPlayback(raw, nonce, rawFormats),
-    preparePoToken(context),
+    preparedPoToken,
   ])
   const url = new URL(decipheredUrl)
   url.searchParams.set('alr', 'yes')
