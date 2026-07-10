@@ -14,6 +14,7 @@ type TrackState = {
   queue: ReturnType<typeof createSourceBufferQueue>
   nextTimeMs: number
   loading: boolean
+  finished: boolean
 }
 
 const waitForSourceOpen = (mediaSource: MediaSource) => new Promise<void>((resolve, reject) => {
@@ -77,6 +78,7 @@ export const startPlayback = async ({
       queue: createSourceBufferQueue(sourceBuffer, () => generation),
       nextTimeMs: 0,
       loading: false,
+      finished: false,
     }
   }
   const audio = makeTrack('audio', selectedAudio)
@@ -107,6 +109,7 @@ export const startPlayback = async ({
       track.nextTimeMs = segment.startMs !== undefined && segment.durationMs !== undefined
         ? segment.startMs + segment.durationMs
         : track.nextTimeMs + (segment.durationMs ?? 2_000)
+      track.finished = track.nextTimeMs >= session.durationMs - 250
       if (segment.elapsedMs > 0) {
         const measured = segment.data.byteLength * 8_000 / segment.elapsedMs
         bandwidth = bandwidth * 0.75 + measured * 0.25
@@ -125,7 +128,7 @@ export const startPlayback = async ({
   }
 
   const pump = async (track: TrackState) => {
-    if (track.loading || destroyed || signal.aborted || mediaSource.readyState !== 'open') return
+    if (track.loading || track.finished || destroyed || signal.aborted || mediaSource.readyState === 'closed') return
     if (bufferedAhead(track.sourceBuffer, video.currentTime) >= 12) return
     track.loading = true
     try {
@@ -141,6 +144,10 @@ export const startPlayback = async ({
       await request(track, 'media')
     } finally {
       track.loading = false
+      if (
+        mediaSource.readyState === 'open'
+        && tracks.every((candidate) => candidate.finished && !candidate.loading && !candidate.sourceBuffer.updating)
+      ) mediaSource.endOfStream()
     }
   }
 
@@ -160,6 +167,7 @@ export const startPlayback = async ({
       for (const track of tracks) {
         track.nextTimeMs = target
         track.loading = false
+        track.finished = false
         void track.queue.clear(current).then(() => pump(track))
       }
     }, 50)

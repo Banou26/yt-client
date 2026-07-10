@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 
-test('plays SABR segments requested after one minute', async ({ page }) => {
-  test.setTimeout(150_000)
+test('plays a complete static YouTube video', async ({ page }) => {
+  test.setTimeout(420_000)
   const logs: string[] = []
   page.on('console', (message) => logs.push(message.text()))
   await page.goto('/watch/dQw4w9WgXcQ')
@@ -15,9 +15,14 @@ test('plays SABR segments requested after one minute', async ({ page }) => {
       return {
         currentTime: player.currentTime,
         duration: player.duration,
+        ended: player.ended,
         networkState: player.networkState,
         paused: player.paused,
         readyState: player.readyState,
+        buffered: Array.from({ length: player.buffered.length }, (_, index) => [
+          player.buffered.start(index),
+          player.buffered.end(index),
+        ]),
         error: player.error?.message,
       }
     })
@@ -33,19 +38,16 @@ test('plays SABR segments requested after one minute', async ({ page }) => {
   await expect.poll(
     () => video.evaluate((element) => (element as HTMLVideoElement).duration),
     { timeout: 30_000 },
-  ).toBeGreaterThan(80).catch(fail)
-  await video.evaluate((element) => {
-    const player = element as HTMLVideoElement
-    player.currentTime = 75
-  })
+  ).toBeGreaterThan(120).catch(fail)
+  expect(await video.evaluate((element) => (element as HTMLVideoElement).duration)).toBeLessThan(240)
   await expect.poll(
     async () => Number(await frame?.locator('html').getAttribute('data-segment-start-ms')),
-    { timeout: 60_000 },
-  ).toBeGreaterThanOrEqual(75_000).catch(fail)
+    { timeout: 150_000 },
+  ).toBeGreaterThanOrEqual(60_000).catch(fail)
   await expect.poll(
-    () => video.evaluate((element) => (element as HTMLVideoElement).currentTime),
-    { timeout: 60_000 },
-  ).toBeGreaterThan(76).catch(fail)
+    () => video.evaluate((element) => (element as HTMLVideoElement).ended),
+    { timeout: 330_000 },
+  ).toBe(true).catch(fail)
 })
 
 test('boots the frame engine and loads YouTube search results', async ({ page }) => {
