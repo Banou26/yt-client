@@ -9,7 +9,8 @@
     "dev": "npm run build:frame && npm run generate && vite --port 4561",
     "generate": "graphql-codegen --config codegen.ts",
     "postinstall": "patch-package",
-    "test": "vitest run",
+    "test": "vitest run src",
+    "test:browser": "playwright test",
     "type-check": "npm run generate && tsc --noEmit"
   },
   "dependencies": {
@@ -37,6 +38,7 @@
     "@graphql-codegen/typescript": "^4.1.6",
     "@graphql-codegen/typescript-resolvers": "^4.5.1",
     "@preact/preset-vite": "^2.10.2",
+    "@playwright/test": "^1.54.2",
     "@types/node": "^24.0.0",
     "patch-package": "^8.0.1",
     "typescript": "^5.9.2",

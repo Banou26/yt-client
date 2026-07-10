@@ -60,4 +60,3 @@ export type FrameApi = SourceApi & {
 }
 
 export const FRAME_CONNECT = 'yt-client-frame-connect'
-export const FRAME_READY = 'yt-client-frame-ready'

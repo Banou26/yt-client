@@ -7,8 +7,12 @@ import { Controller } from '@mercuryworkshop/scramjet-controller'
 import { expose } from 'osra'
 
 import { EGRESS_KEY, ENGINE_READY } from './protocol'
-import { FRAME_CONNECT, FRAME_READY } from '../frame/protocol'
+import { FRAME_CONNECT } from '../frame/protocol'
 import { createWebvpnTransport } from './webvpn-transport'
+
+type FrameWindow = Window & {
+  [FRAME_CONNECT]?: (port: MessagePort) => void
+}
 
 const waitForWorker = async (registration: ServiceWorkerRegistration) => {
   if (registration.active) return registration.active
@@ -22,13 +26,19 @@ const waitForWorker = async (registration: ServiceWorkerRegistration) => {
   return registration.active
 }
 
+const stage = (value: string) => {
+  document.documentElement.dataset.stage = value
+}
+
 const boot = async () => {
+  stage('service-worker')
   const registration = await navigator.serviceWorker.register('/__yt_scramjet__/sw.js', {
     scope: '/__yt_scramjet__/',
     type: 'classic',
     updateViaCache: 'none',
   })
   const serviceworker = await waitForWorker(registration)
+  stage('egress-worker')
   const worker = new Worker(new URL('./egress.worker.ts', import.meta.url), { type: 'module' })
   const relayAbort = new AbortController()
   relayWorker(worker, { unregisterSignal: relayAbort.signal })
@@ -42,8 +52,13 @@ const boot = async () => {
   })
   const transport = createWebvpnTransport(remote)
   await transport.init()
-  await (await remote).prewarm('www.youtube.com')
+  stage('prewarm')
+  await Promise.race([
+    (await remote).prewarm('www.youtube.com'),
+    new Promise<void>((resolve) => setTimeout(resolve, 6_000)),
+  ])
 
+  stage('controller')
   const controller = new Controller({
     serviceworker,
     transport,
@@ -57,6 +72,7 @@ const boot = async () => {
     scramjetConfig: defaultConfigDev,
   })
   await controller.wait()
+  stage('frame')
 
   const frame = document.createElement('iframe')
   frame.hidden = true
@@ -66,15 +82,18 @@ const boot = async () => {
   const frameCode = await fetch('/__yt_scramjet__/youtube-frame.js').then((response) => response.text())
   Tap.tap(proxiedFrame.hooks.init.post, (context) => {
     if (!context.isTopLevel) return
-    context.window.eval(frameCode)
+    const run = context.client.natives.call('Function', null, frameCode)
+    run()
+    stage('frame-code')
     const apiChannel = new MessageChannel()
-    apiChannel.port2.start()
-    apiChannel.port2.addEventListener('message', function ready(event) {
-      if (event.data?.type !== FRAME_READY) return
-      apiChannel.port2.removeEventListener('message', ready)
-      window.parent.postMessage({ type: ENGINE_READY }, location.origin, [apiChannel.port2])
-    })
-    context.window.postMessage({ type: FRAME_CONNECT }, '*', [apiChannel.port1])
+    const frameWindow = context.window as FrameWindow
+    const connect = frameWindow[FRAME_CONNECT]
+    if (!connect) throw new Error('yt-client: frame connector is missing')
+    delete frameWindow[FRAME_CONNECT]
+    connect(apiChannel.port1)
+    stage('frame-connected')
+    window.parent.postMessage({ type: ENGINE_READY }, location.origin, [apiChannel.port2])
+    stage('frame-posted')
   })
   proxiedFrame.go('https://www.youtube.com/embed/dQw4w9WgXcQ')
   window.addEventListener('pagehide', () => {
@@ -87,6 +106,7 @@ const boot = async () => {
 }
 
 void boot().catch((error) => {
+  stage('error')
   window.parent.postMessage({
     type: ENGINE_READY,
     error: error instanceof Error ? error.message : String(error),

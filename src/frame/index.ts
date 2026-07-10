@@ -1,3 +1,4 @@
+import type { Transport } from 'osra'
 import type { FrameApi } from './protocol'
 
 import { expose } from 'osra'
@@ -5,7 +6,7 @@ import { expose } from 'osra'
 import { createYoutubeSource } from '../sources/youtube'
 import { innertube, getSabrSource } from './innertube'
 import { createSabrSession } from './sabr'
-import { FRAME_CONNECT, FRAME_READY } from './protocol'
+import { FRAME_CONNECT } from './protocol'
 
 const source = createYoutubeSource({
   fetch: globalThis.fetch.bind(globalThis),
@@ -49,13 +50,27 @@ const api = {
   },
 } satisfies FrameApi
 
-window.addEventListener('message', (event) => {
-  if (event.data?.type !== FRAME_CONNECT || !event.ports[0]) return
-  const port = event.ports[0]
+type FrameWindow = Window & {
+  [FRAME_CONNECT]?: (port: MessagePort) => void
+}
+
+const connect = (port: MessagePort) => {
   port.start()
-  port.postMessage({ type: FRAME_READY })
+  const transport = {
+    receive: (listener) => {
+      const receive = (event: MessageEvent) => listener(event.data, {})
+      port.addEventListener('message', receive)
+      return () => port.removeEventListener('message', receive)
+    },
+    emit: (message, transferables) => port.postMessage(message, transferables ?? []),
+  } satisfies Transport
   expose(api, {
     key: FRAME_CONNECT,
-    transport: { receive: port, emit: port },
+    transport,
   })
-}, { once: true })
+}
+
+Object.defineProperty(window, FRAME_CONNECT, {
+  configurable: true,
+  value: connect,
+})

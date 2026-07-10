@@ -47,7 +47,16 @@ const globalStyles = css`
 const root = document.createElement('div')
 root.id = 'app'
 document.body.appendChild(root)
-void startEngine().then(setSource)
+void startEngine().then(
+  (source) => {
+    setSource(source)
+    document.documentElement.dataset.engine = 'ready'
+  },
+  (error) => {
+    document.documentElement.dataset.engine = 'error'
+    document.documentElement.dataset.engineError = error instanceof Error ? error.message : String(error)
+  },
+)
 
 render(
   <Provider value={client}>
