@@ -2,10 +2,12 @@ import type { EgressApi } from './protocol'
 
 import { relayWorker } from '@fkn/lib'
 import { defaultConfigDev } from '@mercuryworkshop/scramjet'
+import { Tap } from '@mercuryworkshop/scramjet'
 import { Controller } from '@mercuryworkshop/scramjet-controller'
 import { expose } from 'osra'
 
 import { EGRESS_KEY, ENGINE_READY } from './protocol'
+import { FRAME_CONNECT, FRAME_READY } from '../frame/protocol'
 import { createWebvpnTransport } from './webvpn-transport'
 
 const waitForWorker = async (registration: ServiceWorkerRegistration) => {
@@ -61,8 +63,20 @@ const boot = async () => {
   frame.setAttribute('allow', 'autoplay; encrypted-media')
   document.body.appendChild(frame)
   const proxiedFrame = controller.createFrame(frame)
-
-  window.parent.postMessage({ type: ENGINE_READY }, location.origin)
+  const frameCode = await fetch('/__yt_scramjet__/youtube-frame.js').then((response) => response.text())
+  Tap.tap(proxiedFrame.hooks.init.post, (context) => {
+    if (!context.isTopLevel) return
+    context.window.eval(frameCode)
+    const apiChannel = new MessageChannel()
+    apiChannel.port2.start()
+    apiChannel.port2.addEventListener('message', function ready(event) {
+      if (event.data?.type !== FRAME_READY) return
+      apiChannel.port2.removeEventListener('message', ready)
+      window.parent.postMessage({ type: ENGINE_READY }, location.origin, [apiChannel.port2])
+    })
+    context.window.postMessage({ type: FRAME_CONNECT }, '*', [apiChannel.port1])
+  })
+  proxiedFrame.go('https://www.youtube.com/embed/dQw4w9WgXcQ')
   window.addEventListener('pagehide', () => {
     relayAbort.abort()
     channel.port2.close()

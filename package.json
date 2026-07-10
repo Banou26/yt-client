@@ -4,8 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build": "npm run generate && vite build",
-    "dev": "npm run generate && vite --port 4561",
+    "build": "npm run build:frame && npm run generate && vite build",
+    "build:frame": "vite build -c vite.frame.config.ts",
+    "dev": "npm run build:frame && npm run generate && vite --port 4561",
     "generate": "graphql-codegen --config codegen.ts",
     "postinstall": "patch-package",
     "test": "vitest run",

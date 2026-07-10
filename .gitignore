@@ -2,5 +2,6 @@ build/
 coverage/
 node_modules/
 playwright-report/
+public/__yt_scramjet__/youtube-frame.js
 test-results/
 src/generated/

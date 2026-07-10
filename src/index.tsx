@@ -5,6 +5,7 @@ import { Provider } from 'urql'
 import App from './app'
 import { client } from './graphql'
 import { startEngine } from './scramjet/client'
+import { setSource } from './sources/runtime'
 
 const globalStyles = css`
   :root {
@@ -46,7 +47,7 @@ const globalStyles = css`
 const root = document.createElement('div')
 root.id = 'app'
 document.body.appendChild(root)
-void startEngine()
+void startEngine().then(setSource)
 
 render(
   <Provider value={client}>
