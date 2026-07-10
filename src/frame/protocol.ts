@@ -59,4 +59,22 @@ export type FrameApi = SourceApi & {
   closePlayback(sessionId: string): Promise<void>
 }
 
+export type FrameRequest = {
+  [Method in keyof FrameApi]: {
+    id: number
+    method: Method
+    args: Parameters<FrameApi[Method]>
+  }
+}[keyof FrameApi]
+
+export type FrameResponse = {
+  id: number
+  result: unknown
+  error?: never
+} | {
+  id: number
+  result?: never
+  error: string
+}
+
 export const FRAME_CONNECT = 'yt-client-frame-connect'

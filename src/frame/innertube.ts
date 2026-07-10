@@ -39,7 +39,12 @@ Platform.shim.eval = async (data: Types.BuildScriptResult, env: Record<string, T
   return new Function(`${data.output}\nreturn { ${properties.join(', ')} }`)()
 }
 
-export const innertube = Innertube.create({
+export const catalogInnertube = Innertube.create({
+  fetch: globalThis.fetch.bind(globalThis),
+  retrieve_player: false,
+})
+
+const innertube = Innertube.create({
   fetch: globalThis.fetch.bind(globalThis),
   retrieve_player: true,
 })

@@ -32,7 +32,7 @@ const pageItems = (feed: Feed) =>
   [...feed.videos].map(normalizeFeedVideo).filter((video) => video !== undefined)
 
 export const createYoutubeSource = ({ fetch, createClient }: YoutubeSourceOptions): Source => {
-  const client = createClient?.() ?? Innertube.create({ fetch, retrieve_player: true }) as Promise<YoutubeClient>
+  const client = createClient?.() ?? Innertube.create({ fetch, retrieve_player: false }) as Promise<YoutubeClient>
   const continuations = new Map<string, () => Promise<SourceVideoPage>>()
   const channels = new Map<string, SourceChannel>()
   let cursorId = 0
