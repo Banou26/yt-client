@@ -5,18 +5,21 @@ export type TransportResponse = {
   body: ReadableStream<Uint8Array> | null
 }
 
+export type TransportRequest = {
+  method?: string
+  headers?: Record<string, string>
+  body?: ArrayBuffer | null
+  redirect?: 'follow' | 'manual'
+}
+
 export type EgressApi = {
-  fetch(
+  fknFetch(url: string, options: TransportRequest): Promise<TransportResponse>
+  libcurlFetch(
     requestId: string,
     url: string,
-    options: {
-      method?: string
-      headers?: Record<string, string>
-      body?: ArrayBuffer | null
-      redirect?: 'follow' | 'manual'
-    },
+    options: TransportRequest,
   ): Promise<TransportResponse>
-  cancelFetch(requestId: string): Promise<void>
+  cancelLibcurlFetch(requestId: string): Promise<void>
   prewarm(host: string): Promise<void>
 }
 

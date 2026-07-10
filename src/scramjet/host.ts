@@ -8,7 +8,7 @@ import { expose } from 'osra'
 
 import { EGRESS_KEY, ENGINE_READY } from './protocol'
 import { FRAME_CONNECT, FRAME_EGRESS_CONNECT } from '../frame/protocol'
-import { createWebvpnTransport } from './webvpn-transport'
+import { createFknTransport } from './fkn-transport'
 
 type FrameWindow = Window & {
   [FRAME_CONNECT]?: (port: MessagePort) => void
@@ -72,7 +72,7 @@ const boot = async () => {
     key: EGRESS_KEY,
     transport: { receive: channel.port2, emit: channel.port2 },
   })
-  const transport = createWebvpnTransport(remote)
+  const transport = createFknTransport(remote)
   await transport.init()
 
   stage('controller')
@@ -112,10 +112,10 @@ const boot = async () => {
       const request = event.data as FrameEgressRequest
       const egressRequestId = `frame:${proxiedFrame.id}:${request.id}`
       if (request.type === 'cancel') {
-        void remote.then((api) => api.cancelFetch(egressRequestId)).catch(() => {})
+        void remote.then((api) => api.cancelLibcurlFetch(egressRequestId)).catch(() => {})
         return
       }
-      void remote.then((api) => api.fetch(egressRequestId, request.url, request.options)).then(
+      void remote.then((api) => api.libcurlFetch(egressRequestId, request.url, request.options)).then(
         (response) => {
           const message = { id: request.id, response } satisfies FrameEgressResponse
           egressChannel.port2.postMessage(message, response.body ? [response.body] : [])

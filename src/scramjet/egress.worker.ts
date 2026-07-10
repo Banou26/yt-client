@@ -2,6 +2,7 @@
 
 import { expose } from 'osra'
 import { libcurl } from 'libcurl.js/bundled'
+import { fetch as fetchWithFkn } from '@fkn/lib'
 import * as net from '@fkn/lib/net'
 
 import type { EgressApi } from './protocol'
@@ -131,7 +132,22 @@ const withLanguage = (headers: Record<string, string> = {}) => {
 const requests = new Map<string, AbortController>()
 
 const api = {
-  fetch: async (requestId, url, options) => {
+  fknFetch: async (url, options) => {
+    const response = await fetchWithFkn(url, {
+      method: options.method,
+      headers: options.headers,
+      body: options.body,
+      credentials: 'omit',
+      redirect: options.redirect,
+    })
+    return {
+      status: response.status,
+      statusText: response.statusText,
+      headers: [...response.headers.entries()],
+      body: response.body,
+    }
+  },
+  libcurlFetch: async (requestId, url, options) => {
     const controller = new AbortController()
     requests.set(requestId, controller)
     let response: Awaited<ReturnType<typeof libcurl.fetch>>
@@ -182,7 +198,7 @@ const api = {
       body,
     }
   },
-  cancelFetch: async (requestId) => {
+  cancelLibcurlFetch: async (requestId) => {
     requests.get(requestId)?.abort()
     requests.delete(requestId)
   },
