@@ -14,6 +14,7 @@ import type { SabrSource } from './innertube'
 import { SabrStreamingAdapter, SabrUmpProcessor } from 'googlevideo/sabr-streaming-adapter'
 import { VideoPlaybackAbrRequest } from 'googlevideo/protos'
 import { FormatKeyUtils } from 'googlevideo/utils'
+import { resetPoTokenSession } from './botguard'
 
 type AdapterState = {
   snapshot: PlaybackSnapshot
@@ -95,6 +96,7 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     requestHeaders: Record<string, string>,
     startTimeMs: number,
     init: boolean,
+    attempt = 0,
   ): Promise<PlayerHttpResponse> => {
     const request: PlayerHttpRequest = {
       url,
@@ -136,6 +138,11 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
       },
       body: requestBody ? Uint8Array.from(requestBody).buffer : undefined,
     })
+    if (response.status === 403 && attempt === 0) {
+      await response.body?.cancel()
+      resetPoTokenSession()
+      return execute(url, requestHeaders, startTimeMs, init, attempt + 1)
+    }
     if (!response.ok) throw new Error(`youtube: segment returned ${response.status}`)
     const processor = new SabrUmpProcessor(metadata, state.cache ?? undefined)
     const reader = response.body?.getReader()

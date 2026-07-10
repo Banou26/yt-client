@@ -13,7 +13,9 @@ type BotguardContext = {
 }
 
 type MinterSession = {
+  client: InstanceType<typeof BG.BotGuardClient>
   minter: InstanceType<typeof BG.WebPoMinter>
+  script: HTMLScriptElement
   expiresAt: number
 }
 
@@ -79,7 +81,9 @@ const createSession = async (context: BotguardContext): Promise<MinterSession> =
   } satisfies IntegrityTokenData
   if (!token.integrityToken && !token.websafeFallbackToken) throw new Error('botguard: integrity token is missing')
   return {
+    client,
     minter: await BG.WebPoMinter.create(token, webPoSignalOutput),
+    script,
     expiresAt: performance.now() + (token.estimatedTtlSecs ?? 3_600) * 800,
   }
 }
@@ -102,3 +106,10 @@ const getSession = (context: BotguardContext) => {
 
 export const mintPoToken = async (identifier: string, context: BotguardContext) =>
   (await getSession(context)).minter.mintAsWebsafeString(identifier)
+
+export const resetPoTokenSession = () => {
+  if (!session) return
+  session.client.shutdown()
+  session.script.remove()
+  session = undefined
+}

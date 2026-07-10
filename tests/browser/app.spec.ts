@@ -50,6 +50,40 @@ test('plays a complete static YouTube video', async ({ page }) => {
   ).toBe(true).catch(fail)
 })
 
+test('starts repeated playback sessions in one frame', async ({ page }) => {
+  test.setTimeout(300_000)
+  const logs: string[] = []
+  page.on('console', (message) => {
+    logs.push(message.text())
+    if (logs.length > 100) logs.shift()
+  })
+  await page.goto('/watch/dQw4w9WgXcQ')
+  await expect(page.locator('html')).toHaveAttribute('data-engine', 'ready', { timeout: 75_000 })
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    if (attempt > 1) {
+      await page.evaluate(() => {
+        history.pushState(null, '', '/')
+        dispatchEvent(new PopStateEvent('popstate'))
+      })
+      await expect(page.locator('video')).toHaveCount(0)
+      await page.evaluate(() => {
+        history.pushState(null, '', '/watch/dQw4w9WgXcQ')
+        dispatchEvent(new PopStateEvent('popstate'))
+      })
+    }
+    const video = page.locator('video')
+    await expect(video).toBeVisible()
+    await expect.poll(
+      () => video.evaluate((element) => (element as HTMLVideoElement).currentTime),
+      { timeout: 100_000, message: `playback session ${attempt} did not start` },
+    ).toBeGreaterThan(1).catch(async (error) => {
+      const frame = page.frames().find((candidate) => candidate.url().includes('/proxy/'))
+      const api = await frame?.locator('html').getAttribute('data-frame-api').catch(() => null)
+      throw new Error(`${error.message}\napi=${api}\nconsole=${JSON.stringify(logs)}`)
+    })
+  }
+})
+
 test('boots the frame engine and loads YouTube search results', async ({ page }) => {
   const errors: string[] = []
   const logs: string[] = []
