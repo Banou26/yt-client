@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { TransportRequest } from './protocol'
 
-import { createFknTransport } from './fkn-transport'
+import { createFknTransport, FRAME_BOOTSTRAP_URL } from './fkn-transport'
 
 describe('FKN transport', () => {
   it('routes requests through the FKN fetch worker method', async () => {
@@ -39,5 +39,28 @@ describe('FKN transport', () => {
     expect(result.status).toBe(201)
     expect(result.headers).toEqual([['x-result', 'yes']])
     expect(result.body).toBeInstanceOf(ReadableStream)
+  })
+
+  it('serves the frame bootstrap without remote egress', async () => {
+    let fetched = false
+    const transport = createFknTransport(Promise.resolve({
+      fknFetch: async () => {
+        fetched = true
+        throw new Error('unexpected remote fetch')
+      },
+    }))
+    await transport.init()
+    const result = await transport.request(
+      new URL(FRAME_BOOTSTRAP_URL),
+      'GET',
+      null,
+      [],
+      undefined,
+    )
+
+    expect(fetched).toBe(false)
+    expect(result.status).toBe(200)
+    expect(result.headers).toContainEqual(['content-type', 'text/html; charset=utf-8'])
+    expect(result.body).toContain('<body></body>')
   })
 })

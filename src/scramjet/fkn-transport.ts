@@ -4,7 +4,13 @@ import type {
   TransferrableResponse,
   WebSocketDataType,
 } from '@mercuryworkshop/proxy-transports'
+
 import type { EgressApi } from './protocol'
+
+export const FRAME_BOOTSTRAP_URL = 'https://www.youtube.com/__yt_client__/frame'
+
+const frameBootstrap = new URL(FRAME_BOOTSTRAP_URL)
+const frameBootstrapHtml = '<!doctype html><html><head><meta charset="utf-8"></head><body></body></html>'
 
 export const createFknTransport = (remote: Promise<Pick<EgressApi, 'fknFetch'>>): ProxyTransport => {
   const transport: ProxyTransport = {
@@ -20,8 +26,19 @@ export const createFknTransport = (remote: Promise<Pick<EgressApi, 'fknFetch'>>)
       headers: RawHeaders,
       signal: AbortSignal | undefined,
     ): Promise<TransferrableResponse> {
-      const api = await remote
       if (signal?.aborted) throw signal.reason
+      if (method === 'GET' && url.origin === frameBootstrap.origin && url.pathname === frameBootstrap.pathname) {
+        return {
+          status: 200,
+          statusText: 'OK',
+          headers: [
+            ['content-type', 'text/html; charset=utf-8'],
+            ['cache-control', 'no-store'],
+          ],
+          body: frameBootstrapHtml,
+        }
+      }
+      const api = await remote
       const requestHeaders = Object.fromEntries(headers)
       const bytes = body === null ? undefined : await new Response(body).arrayBuffer()
       const response = await api.fknFetch(url.href, {

@@ -8,7 +8,7 @@ import { expose } from 'osra'
 
 import { EGRESS_KEY, ENGINE_READY } from './protocol'
 import { FRAME_CONNECT, FRAME_EGRESS_CONNECT } from '../frame/protocol'
-import { createFknTransport } from './fkn-transport'
+import { createFknTransport, FRAME_BOOTSTRAP_URL } from './fkn-transport'
 
 type FrameWindow = Window & {
   [FRAME_CONNECT]?: (port: MessagePort) => void
@@ -141,7 +141,7 @@ const boot = async () => {
     window.parent.postMessage({ type: ENGINE_READY }, location.origin, [apiChannel.port2])
     stage('frame-posted')
   })
-  proxiedFrame.go('https://www.youtube.com/oops')
+  proxiedFrame.go(FRAME_BOOTSTRAP_URL)
   window.addEventListener('pagehide', () => {
     relayAbort.abort()
     channel.port2.close()

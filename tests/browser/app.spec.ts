@@ -2,6 +2,8 @@ import type { ConsoleMessage } from '@playwright/test'
 
 import { expect, test } from '@playwright/test'
 
+import { FRAME_BOOTSTRAP_URL } from '../../src/scramjet/fkn-transport'
+
 test('plays a complete static YouTube video', async ({ page }) => {
   test.setTimeout(420_000)
   const logs: string[] = []
@@ -169,6 +171,8 @@ test('boots the frame engine and loads YouTube search results', async ({ page })
     })))
     throw new Error(`${error.message}\nframes=${JSON.stringify(state)}\nconsole=${JSON.stringify(logs)}`)
   })
+  const frame = page.frames().find((candidate) => candidate.url().includes('/proxy/'))
+  expect(decodeURIComponent(frame?.url() ?? '')).toContain(FRAME_BOOTSTRAP_URL)
   await expect(page.getByRole('heading', { name: 'Results for rick astley' })).toBeVisible()
   await expect(page.locator('article').first()).toBeVisible({ timeout: 75_000 }).catch(async (error) => {
     const content = await page.locator('main').innerText()
