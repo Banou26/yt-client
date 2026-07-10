@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "allowSyntheticDefaultImports": true,
+    "baseUrl": ".",
+    "jsx": "preserve",
+    "jsxImportSource": "@emotion/react",
+    "lib": ["dom", "dom.iterable", "esnext", "webworker"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
+    "paths": {
+      "react": ["./node_modules/preact/compat/"],
+      "react-dom": ["./node_modules/preact/compat/"],
+      "react/jsx-runtime": ["./node_modules/preact/jsx-runtime"],
+      "react/jsx-dev-runtime": ["./node_modules/preact/jsx-runtime"]
+    },
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "esnext",
+    "types": ["vite/client"]
+  },
+  "include": ["codegen.ts", "src", "vite.config.ts"]
+}

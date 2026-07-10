@@ -1,0 +1,33 @@
+type Channel {
+  id: ID!
+  name: String!
+  avatar: String
+}
+
+type Video {
+  id: ID!
+  title: String!
+  description: String
+  thumbnail: String
+  durationSeconds: Int
+  viewCount: String
+  publishedText: String
+  channel: Channel
+}
+
+type VideoPage {
+  items: [Video!]!
+  cursor: String
+}
+
+type ChannelPage {
+  channel: Channel!
+  videos: VideoPage!
+}
+
+type Query {
+  home(cursor: String): VideoPage!
+  search(query: String!, cursor: String): VideoPage!
+  video(id: ID!): Video
+  channel(id: ID!, cursor: String): ChannelPage!
+}
