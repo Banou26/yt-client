@@ -128,23 +128,63 @@ const withLanguage = (headers: Record<string, string> = {}) => {
   return result
 }
 
+const requests = new Map<string, AbortController>()
+
 const api = {
-  fetch: async (url, options) => {
-    await prepare()
-    const response = await libcurl.fetch(url, {
-      method: options.method,
-      headers: withLanguage(options.headers),
-      body: options.body ? new Uint8Array(options.body) : undefined,
-      redirect: options.redirect,
-    })
+  fetch: async (requestId, url, options) => {
+    const controller = new AbortController()
+    requests.set(requestId, controller)
+    let response: Awaited<ReturnType<typeof libcurl.fetch>>
+    try {
+      await prepare()
+      if (controller.signal.aborted) throw controller.signal.reason
+      const fetchOptions = {
+        method: options.method,
+        headers: withLanguage(options.headers),
+        body: options.body ? new Uint8Array(options.body) : undefined,
+        redirect: options.redirect,
+        signal: controller.signal,
+      }
+      response = await libcurl.fetch(url, fetchOptions)
+    } catch (error) {
+      requests.delete(requestId)
+      throw error
+    }
     const headers: [string, string][] = response.raw_headers ?? []
     if (!headers.length) response.headers.forEach((value, name) => headers.push([name, value]))
+    const reader = response.body?.getReader()
+    if (!reader) requests.delete(requestId)
+    const body = reader ? new ReadableStream<Uint8Array>({
+      async pull(stream) {
+        try {
+          const chunk = await reader.read()
+          if (chunk.done) {
+            requests.delete(requestId)
+            stream.close()
+          } else {
+            stream.enqueue(chunk.value)
+          }
+        } catch (error) {
+          requests.delete(requestId)
+          stream.error(error)
+        }
+      },
+      async cancel(reason) {
+        requests.delete(requestId)
+        controller.abort()
+        await reader.cancel(reason).catch(() => {})
+      },
+    }) : null
     return {
       status: response.status,
       statusText: response.statusText,
       headers,
-      body: response.body,
+      body,
     }
+  },
+  cancelFetch: async (requestId) => {
+    requests.get(requestId)?.abort()
+    requests.delete(requestId)
   },
   prewarm: async (host) => {
     await prepare()

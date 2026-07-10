@@ -1,3 +1,5 @@
+import type { ConsoleMessage } from '@playwright/test'
+
 import { expect, test } from '@playwright/test'
 
 test('plays a complete static YouTube video', async ({ page }) => {
@@ -8,7 +10,7 @@ test('plays a complete static YouTube video', async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-engine', 'ready', { timeout: 75_000 })
   const video = page.locator('video')
   await expect(video).toBeVisible()
-  const frame = page.frames().find((candidate) => candidate.url().includes('/proxy/'))
+  const currentFrame = () => page.frames().find((candidate) => candidate.url().includes('/proxy/'))
   const fail = async (error: Error): Promise<never> => {
     const media = await video.evaluate((element) => {
       const player = element as HTMLVideoElement
@@ -26,6 +28,7 @@ test('plays a complete static YouTube video', async ({ page }) => {
         error: player.error?.message,
       }
     })
+    const frame = currentFrame()
     const api = await frame?.locator('html').getAttribute('data-frame-api').catch(() => null)
     const segmentStartMs = await frame?.locator('html').getAttribute('data-segment-start-ms').catch(() => null)
     const content = await page.locator('main').innerText()
@@ -41,7 +44,7 @@ test('plays a complete static YouTube video', async ({ page }) => {
   ).toBeGreaterThan(120).catch(fail)
   expect(await video.evaluate((element) => (element as HTMLVideoElement).duration)).toBeLessThan(240)
   await expect.poll(
-    async () => Number(await frame?.locator('html').getAttribute('data-segment-start-ms')),
+    async () => Number(await currentFrame()?.locator('html').getAttribute('data-segment-start-ms')),
     { timeout: 150_000 },
   ).toBeGreaterThanOrEqual(60_000).catch(fail)
   await expect.poll(
@@ -53,9 +56,13 @@ test('plays a complete static YouTube video', async ({ page }) => {
 test('starts repeated playback sessions in one frame', async ({ page }) => {
   test.setTimeout(300_000)
   const logs: string[] = []
+  const startupWarnings: { text: string, location: ReturnType<ConsoleMessage['location']> }[] = []
   page.on('console', (message) => {
     logs.push(message.text())
     if (logs.length > 100) logs.shift()
+    if (message.text().includes('target origin provided') || message.text().startsWith('CAUGHT ERROR')) {
+      startupWarnings.push({ text: message.text(), location: message.location() })
+    }
   })
   await page.goto('/watch/dQw4w9WgXcQ')
   await expect(page.locator('html')).toHaveAttribute('data-engine', 'ready', { timeout: 75_000 })
@@ -82,6 +89,71 @@ test('starts repeated playback sessions in one frame', async ({ page }) => {
       throw new Error(`${error.message}\napi=${api}\nconsole=${JSON.stringify(logs)}`)
     })
   }
+  expect(startupWarnings).toEqual([])
+})
+
+test('starts promptly and sustains fast playback after rapid seeks', async ({ page }) => {
+  test.setTimeout(300_000)
+  await page.goto('/watch/dQw4w9WgXcQ')
+  const video = page.locator('video')
+  await expect.poll(
+    () => video.evaluate((element) => (element as HTMLVideoElement).currentTime),
+    { timeout: 35_000, message: 'playback did not start within 35 seconds' },
+  ).toBeGreaterThan(1)
+  await expect(page.locator('html')).toHaveAttribute('data-player-engine', 'shaka')
+
+  for (const target of [150, 30, 120]) {
+    await video.evaluate((element, time) => {
+      const player = element as HTMLVideoElement
+      player.playbackRate = 2
+      player.currentTime = time
+    }, target)
+    await page.waitForTimeout(500)
+  }
+
+  await video.evaluate(async (element) => {
+    const player = element as HTMLVideoElement
+    player.currentTime = 60
+    await player.play().catch(() => {})
+  })
+  await expect.poll(
+    () => video.evaluate((element) => (element as HTMLVideoElement).currentTime),
+    { timeout: 10_000, message: 'playback did not resume promptly after rapid seeks' },
+  ).toBeGreaterThan(64)
+  expect(await video.evaluate((element) => (element as HTMLVideoElement).playbackRate)).toBe(2)
+
+  const sustainedStart = await video.evaluate((element) => (element as HTMLVideoElement).currentTime)
+  await page.waitForTimeout(15_000)
+  const sustainedEnd = await video.evaluate((element) => (element as HTMLVideoElement).currentTime)
+  expect(sustainedEnd - sustainedStart).toBeGreaterThan(24)
+})
+
+test('rebuilds the engine after a lost segment request', async ({ page }) => {
+  test.setTimeout(180_000)
+  await page.addInitScript(() => {
+    const send = MessagePort.prototype.postMessage as (...args: unknown[]) => void
+    let dropped = false
+    Object.defineProperty(MessagePort.prototype, 'postMessage', {
+      configurable: true,
+      value(this: MessagePort, ...args: unknown[]) {
+        const message = args[0] as { method?: string } | undefined
+        if (!dropped && message?.method === 'requestSegment') {
+          dropped = true
+          document.documentElement.dataset.testDroppedSegment = 'true'
+          return
+        }
+        Reflect.apply(send, this, args)
+      },
+    })
+  })
+  await page.goto('/watch/dQw4w9WgXcQ')
+  await expect(page.locator('html')).toHaveAttribute('data-engine', 'ready', { timeout: 75_000 })
+  await expect(page.locator('html')).toHaveAttribute('data-test-dropped-segment', 'true', { timeout: 75_000 })
+  const video = page.locator('video')
+  await expect.poll(
+    () => video.evaluate((element) => (element as HTMLVideoElement).currentTime),
+    { timeout: 150_000 },
+  ).toBeGreaterThan(1)
 })
 
 test('boots the frame engine and loads YouTube search results', async ({ page }) => {

@@ -4,7 +4,7 @@ export default defineConfig({
   testDir: './tests/browser',
   timeout: 90_000,
   use: {
-    baseURL: 'http://127.0.0.1:4561',
+    baseURL: 'http://localhost:4561',
     browserName: 'chromium',
     headless: true,
     launchOptions: {
@@ -13,7 +13,7 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: 'npm run dev -- --host 127.0.0.1',
+    command: 'npm run dev -- --host localhost',
     port: 4561,
     reuseExistingServer: true,
     timeout: 120_000,

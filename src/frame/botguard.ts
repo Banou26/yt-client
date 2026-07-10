@@ -107,9 +107,14 @@ const getSession = (context: BotguardContext) => {
 export const mintPoToken = async (identifier: string, context: BotguardContext) =>
   (await getSession(context)).minter.mintAsWebsafeString(identifier)
 
-export const resetPoTokenSession = () => {
+export const preparePoToken = async (context: BotguardContext) => {
+  await getSession(context)
+}
+
+export const resetPoTokenSession = async () => {
   if (!session) return
-  session.client.shutdown()
-  session.script.remove()
+  const current = session
   session = undefined
+  current.script.remove()
+  await current.client.shutdown().catch(() => {})
 }

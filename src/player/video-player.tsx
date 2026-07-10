@@ -1,19 +1,9 @@
-import type { Media } from '@videojs/core/dom'
-import type { FunctionComponent } from 'preact'
-
 import { css } from '@emotion/react'
-import { videoFeatures } from '@videojs/core/dom'
-import { createPlayer, useMediaAttach } from '@videojs/react'
-import { VideoSkin as VideoSkinBase } from '@videojs/react/video'
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 
-import '@videojs/react/video/skin.css'
-
-import { startEngine } from '../scramjet/client'
-import { startPlayback } from './mse'
-
-const VideoSkin = VideoSkinBase as FunctionComponent<Parameters<typeof VideoSkinBase>[0]>
-const player = createPlayer({ features: videoFeatures, displayName: 'YouTubePlayer' })
+import { resetEngine, startEngine } from '../scramjet/client'
+import { setSource } from '../sources/runtime'
+import { startShakaPlayback } from './shaka'
 
 const playerStyle = css`
   width: 100%;
@@ -21,53 +11,83 @@ const playerStyle = css`
   overflow: hidden;
   border-radius: 14px;
   background: #000;
-
-  .media-default-skin,
-  video {
-    width: 100%;
-    height: 100%;
-  }
+  position: relative;
 
   video {
     display: block;
+    width: 100%;
+    height: 100%;
     object-fit: contain;
+  }
+
+  .playback-status {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+    color: #fff;
+    font: 600 14px/1.4 system-ui, sans-serif;
+    text-shadow: 0 1px 4px #000;
   }
 `
 
-const MediaSession = ({ video, videoId }: { video: HTMLVideoElement | null, videoId: string }) => {
-  const attach = useMediaAttach()
+const VideoPlayer = ({ videoId }: { videoId: string }) => {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const resumeAt = useRef(0)
+  const [attempt, setAttempt] = useState(0)
+  const [status, setStatus] = useState('Loading Shaka player')
+
   useEffect(() => {
-    if (!video || !attach) return
+    const video = videoRef.current
+    if (!video) return
     const abort = new AbortController()
-    let controller: Awaited<ReturnType<typeof startPlayback>> | undefined
-    attach(video as unknown as Media)
+    let controller: Awaited<ReturnType<typeof startShakaPlayback>> | undefined
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+    const restart = (error: unknown) => {
+      if (abort.signal.aborted || retryTimer !== undefined) return
+      resumeAt.current = video.currentTime
+      if (attempt >= 3) {
+        void controller?.destroy()
+        const message = error instanceof Error ? error.message : String(error)
+        setStatus(`Playback failed: ${message}`)
+        console.error(error)
+        return
+      }
+      retryTimer = setTimeout(() => {
+        if (!abort.signal.aborted) {
+          if (error instanceof Error && error.message.startsWith('youtube:')) resetEngine()
+          setAttempt((value) => value + 1)
+        }
+      }, 1_000)
+    }
+    setStatus('Loading Shaka player')
     void (async () => {
       const api = await startEngine()
-      const next = await startPlayback({ api, video, videoId, signal: abort.signal })
-      if (abort.signal.aborted) next.destroy()
-      else controller = next
+      setSource(api)
+      controller = await startShakaPlayback({
+        api,
+        video,
+        videoId,
+        startTime: resumeAt.current,
+        signal: abort.signal,
+        onError: restart,
+      })
+      if (!abort.signal.aborted) setStatus('')
     })().catch((error) => {
-      if (!abort.signal.aborted) console.error(error)
+      if (!abort.signal.aborted) restart(error)
     })
     return () => {
       abort.abort()
-      controller?.destroy()
-      attach(null)
+      clearTimeout(retryTimer)
+      void controller?.destroy()
     }
-  }, [attach, video, videoId])
-  return null
-}
+  }, [attempt, videoId])
 
-const VideoPlayer = ({ videoId }: { videoId: string }) => {
-  const [video, setVideo] = useState<HTMLVideoElement | null>(null)
   return (
     <div css={playerStyle}>
-      <player.Provider>
-        <MediaSession video={video} videoId={videoId} />
-        <VideoSkin>
-          <video ref={setVideo} playsInline preload="auto" />
-        </VideoSkin>
-      </player.Provider>
+      <video key={attempt} ref={videoRef} controls playsInline preload="auto" />
+      {status && <div class="playback-status">{status}</div>}
     </div>
   )
 }

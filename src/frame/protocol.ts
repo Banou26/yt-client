@@ -1,4 +1,5 @@
 import type { SourceApi } from '../sources/types'
+import type { TransportResponse } from '../scramjet/protocol'
 
 export type PlaybackFormat = {
   key: string
@@ -24,6 +25,7 @@ export type PlaybackSnapshot = {
 export type PlaybackSession = {
   id: string
   durationMs: number
+  manifest: string
   videoFormats: PlaybackFormat[]
   audioFormats: PlaybackFormat[]
   selectedVideoKey: string
@@ -31,15 +33,18 @@ export type PlaybackSession = {
 }
 
 export type SegmentRequest = {
+  requestId: string
   sessionId: string
   generation: number
   track: 'audio' | 'video'
   kind: 'init' | 'media'
+  formatKey?: string
+  range?: { start: number, end: number }
   startTimeMs: number
   snapshot: PlaybackSnapshot
 }
 
-export type SegmentEnvelope = {
+type SegmentMetadata = {
   generation: number
   track: 'audio' | 'video'
   kind: 'init' | 'media'
@@ -48,13 +53,21 @@ export type SegmentEnvelope = {
   sequenceNumber?: number
   startMs?: number
   durationMs?: number
-  data: ArrayBuffer
   elapsedMs: number
 }
+
+export type SegmentEnvelope = SegmentMetadata & ({
+  end: true
+  data?: never
+} | {
+  end?: false
+  data: ArrayBuffer
+})
 
 export type FrameApi = SourceApi & {
   openPlayback(videoId: string, maxHeight?: number): Promise<PlaybackSession>
   requestSegment(request: SegmentRequest): Promise<SegmentEnvelope>
+  cancelSegment(sessionId: string, requestId: string): Promise<void>
   selectVideoFormat(sessionId: string, formatKey: string): Promise<void>
   closePlayback(sessionId: string): Promise<void>
 }
@@ -77,4 +90,35 @@ export type FrameResponse = {
   error: string
 }
 
+export type FrameProgress = {
+  id: number
+  progress: string
+}
+
+export type FrameEgressRequest = {
+  type: 'fetch'
+  id: number
+  url: string
+  options: {
+    method?: string
+    headers?: Record<string, string>
+    body?: ArrayBuffer | null
+    redirect?: 'follow' | 'manual'
+  }
+} | {
+  type: 'cancel'
+  id: number
+}
+
+export type FrameEgressResponse = {
+  id: number
+  response: TransportResponse
+  error?: never
+} | {
+  id: number
+  response?: never
+  error: string
+}
+
 export const FRAME_CONNECT = 'yt-client-frame-connect'
+export const FRAME_EGRESS_CONNECT = 'yt-client-frame-egress-connect'

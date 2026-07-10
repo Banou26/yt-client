@@ -7,6 +7,7 @@ export type TransportResponse = {
 
 export type EgressApi = {
   fetch(
+    requestId: string,
     url: string,
     options: {
       method?: string
@@ -15,6 +16,7 @@ export type EgressApi = {
       redirect?: 'follow' | 'manual'
     },
   ): Promise<TransportResponse>
+  cancelFetch(requestId: string): Promise<void>
   prewarm(host: string): Promise<void>
 }
 

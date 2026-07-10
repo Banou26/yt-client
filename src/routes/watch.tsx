@@ -18,7 +18,7 @@ const WatchPage = ({ params }: { params: { videoId: string } }) => {
   const [{ data, error }] = useQuery({ query: VideoQuery, variables: { id: params.videoId } })
   return (
     <main>
-      <VideoPlayer videoId={params.videoId} />
+      <VideoPlayer key={params.videoId} videoId={params.videoId} />
       <h1>{data?.video?.title ?? params.videoId}</h1>
       {error ? <p>{error.message}</p> : null}
       {data?.video?.description ? <p>{data.video.description}</p> : null}

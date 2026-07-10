@@ -5,7 +5,7 @@ import { Constants, Innertube, Platform, Types, Utils, YT } from 'youtubei.js/we
 
 import type { PlaybackFormat } from './protocol'
 
-import { mintPoToken } from './botguard'
+import { mintPoToken, preparePoToken } from './botguard'
 
 type YoutubeFormat = {
   itag: number
@@ -106,6 +106,7 @@ const playbackFormat = (format: YoutubeFormat): PlaybackFormat | undefined => {
 export type SabrSource = {
   videoId: string
   durationMs: number
+  manifest: string
   streamingUrl: string
   ustreamerConfig: string
   formats: SabrFormat[]
@@ -128,13 +129,6 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
     if (!format.has_audio || format.has_video) return true
     return !format.xtags && !format.is_drc && !format.is_dubbed && !format.is_auto_dubbed && !format.is_descriptive
   }) as unknown as YoutubeFormat[]
-  const nonce = Utils.generateRandomString(16)
-  const url = new URL(await client.session.player!.decipher(streaming.server_abr_streaming_url))
-  url.searchParams.set('alr', 'yes')
-  url.searchParams.set('cpn', nonce)
-  await registerPlayback(raw, nonce, rawFormats)
-  const ustreamerConfig = info.player_config?.media_common_config?.media_ustreamer_request_config?.video_playback_ustreamer_config
-  if (!ustreamerConfig) throw new Error('youtube: ustreamer configuration is missing')
   const context = client.session.context as unknown as {
     client: {
       visitorData: string
@@ -147,9 +141,26 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
   const datasyncId = (raw as {
     responseContext?: { mainAppWebResponseContext?: { datasyncId?: string } }
   }).responseContext?.mainAppWebResponseContext?.datasyncId?.split('||')[0]
+  const allowedFormats = new Set(rawFormats.map((format) => format.itag))
+  const nonce = Utils.generateRandomString(16)
+  const [manifest, decipheredUrl] = await Promise.all([
+    info.toDash({
+      format_filter: (format: YoutubeFormat) => !allowedFormats.has(format.itag),
+      manifest_options: { is_sabr: true, include_thumbnails: false },
+    } as never),
+    client.session.player!.decipher(streaming.server_abr_streaming_url),
+    registerPlayback(raw, nonce, rawFormats),
+    preparePoToken(context),
+  ])
+  const url = new URL(decipheredUrl)
+  url.searchParams.set('alr', 'yes')
+  url.searchParams.set('cpn', nonce)
+  const ustreamerConfig = info.player_config?.media_common_config?.media_ustreamer_request_config?.video_playback_ustreamer_config
+  if (!ustreamerConfig) throw new Error('youtube: ustreamer configuration is missing')
   return {
     videoId,
     durationMs: Number(info.basic_info?.duration ?? 0) * 1_000,
+    manifest,
     streamingUrl: url.toString(),
     ustreamerConfig,
     formats: rawFormats.map((format) => buildSabrFormat(format as never)),

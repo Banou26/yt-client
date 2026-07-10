@@ -12,9 +12,10 @@ import type { PlaybackFormat, PlaybackSnapshot, SegmentEnvelope, SegmentRequest 
 import type { SabrSource } from './innertube'
 
 import { SabrStreamingAdapter, SabrUmpProcessor } from 'googlevideo/sabr-streaming-adapter'
-import { VideoPlaybackAbrRequest } from 'googlevideo/protos'
+import { UMPPartId, VideoPlaybackAbrRequest } from 'googlevideo/protos'
 import { FormatKeyUtils } from 'googlevideo/utils'
 import { resetPoTokenSession } from './botguard'
+import { egressFetch } from './egress'
 
 type AdapterState = {
   snapshot: PlaybackSnapshot
@@ -26,6 +27,18 @@ type AdapterState = {
   cache?: CacheManager | null
 }
 
+type ExecutedResponse = PlayerHttpResponse & {
+  metadata: SabrRequestMetadata
+  elapsedMs: number
+  endOfTrack: boolean
+  partial: boolean
+  partTypes: number[]
+  incomplete?: { actual: number, expected: number }
+}
+
+const MAX_SEGMENT_ATTEMPTS = 3
+const REFRESH_ERROR = 'SabrSessionRefreshError'
+
 const bytes = (value: ArrayBuffer | ArrayBufferView | null | undefined) => {
   if (!value) return undefined
   if (value instanceof ArrayBuffer) return new Uint8Array(value)
@@ -33,6 +46,108 @@ const bytes = (value: ArrayBuffer | ArrayBufferView | null | undefined) => {
 }
 
 const headers = (input: Headers) => Object.fromEntries(input.entries())
+
+const wait = (durationMs: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+  if (signal?.aborted) return reject(signal.reason)
+  const complete = () => {
+    signal?.removeEventListener('abort', aborted)
+    resolve()
+  }
+  const timer = setTimeout(complete, durationMs)
+  const aborted = () => {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', aborted)
+    reject(signal?.reason)
+  }
+  signal?.addEventListener('abort', aborted, { once: true })
+})
+
+const refreshError = (message: string) => Object.assign(new Error(message), { name: REFRESH_ERROR })
+
+export const isSabrSessionRefreshError = (error: unknown): error is Error =>
+  error instanceof Error && error.name === REFRESH_ERROR
+
+type UmpVarInt = { value: number, offset: number }
+
+const readUmpVarInt = (data: Uint8Array, offset: number): UmpVarInt | undefined => {
+  if (offset >= data.byteLength) return undefined
+  const first = data[offset]!
+  const length = first < 128 ? 1 : first < 192 ? 2 : first < 224 ? 3 : first < 240 ? 4 : 5
+  if (offset + length > data.byteLength) return undefined
+  if (length === 1) return { value: first, offset: offset + 1 }
+  if (length === 2) return { value: (first & 0x3f) + 64 * data[offset + 1]!, offset: offset + 2 }
+  if (length === 3) {
+    return {
+      value: (first & 0x1f) + 32 * (data[offset + 1]! + 256 * data[offset + 2]!),
+      offset: offset + 3,
+    }
+  }
+  if (length === 4) {
+    return {
+      value: (first & 0x0f) + 16 * (data[offset + 1]! + 256 * (data[offset + 2]! + 256 * data[offset + 3]!)),
+      offset: offset + 4,
+    }
+  }
+  return {
+    value: new DataView(data.buffer, data.byteOffset + offset + 1, 4).getUint32(0, true),
+    offset: offset + 5,
+  }
+}
+
+export const createUmpFramer = () => {
+  let pending = new Uint8Array()
+  return {
+    push(chunk: Uint8Array) {
+      const data = pending.byteLength
+        ? (() => {
+            const joined = new Uint8Array(pending.byteLength + chunk.byteLength)
+            joined.set(pending)
+            joined.set(chunk, pending.byteLength)
+            return joined
+          })()
+        : chunk
+      const frames: { type: number, data: Uint8Array }[] = []
+      let offset = 0
+      while (offset < data.byteLength) {
+        const start = offset
+        const type = readUmpVarInt(data, offset)
+        if (!type) break
+        const size = readUmpVarInt(data, type.offset)
+        if (!size || size.offset + size.value > data.byteLength) break
+        const end = size.offset + size.value
+        frames.push({ type: type.value, data: data.slice(start, end) })
+        offset = end
+      }
+      pending = data.slice(offset)
+      return frames
+    },
+    get partial() { return pending.byteLength > 0 },
+  }
+}
+
+export const inspectUmpChunks = (chunks: Uint8Array[]) => {
+  const framer = createUmpFramer()
+  const partTypes: number[] = []
+  for (const chunk of chunks) {
+    for (const frame of framer.push(chunk)) partTypes.push(frame.type)
+  }
+  return {
+    endOfTrack: partTypes.includes(UMPPartId.END_OF_TRACK),
+    partial: framer.partial,
+    partTypes,
+  }
+}
+
+const describeNoMedia = (response: ExecutedResponse) => {
+  const sabrError = response.metadata.error?.sabrError
+  if (sabrError) return `SABR error ${sabrError.type ?? 'unknown'}:${sabrError.code ?? 'unknown'}`
+  const streamStatus = response.metadata.streamInfo?.streamProtectionStatus?.status
+  if (streamStatus !== undefined) return `SABR stream status ${streamStatus}`
+  if (response.metadata.streamInfo?.reloadPlaybackContext) return 'SABR player reload requested'
+  if (response.partial) return 'truncated UMP response'
+  const parts = response.partTypes.map((type) => UMPPartId[type] ?? String(type)).join(', ')
+  return parts ? `UMP response contained ${parts}` : 'UMP response contained no parts'
+}
 
 const createPlayerAdapter = (state: AdapterState): SabrPlayerAdapter => ({
   initialize: (_player, metadata, cache) => {
@@ -64,7 +179,7 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     .sort((a, b) => Number(b.mimeType.includes('opus')) - Number(a.mimeType.includes('opus')))[0]
   if (!initialVideoFormat || !initialAudioFormat) throw new Error('youtube: no supported audio and video formats')
   let videoFormat: PlaybackFormat = initialVideoFormat
-  const audioFormat: PlaybackFormat = initialAudioFormat
+  let audioFormat: PlaybackFormat = initialAudioFormat
 
   const byKey = new Map(source.formats.map((format) => [FormatKeyUtils.fromFormat(format), format]))
   const state: AdapterState = {
@@ -88,16 +203,32 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
   adapter.onMintPoToken(source.mint)
   adapter.attach(null)
 
-  let lastMetadata: SabrRequestMetadata | undefined
   let chain: Promise<unknown> = Promise.resolve()
+
+  const selectFormat = (track: 'audio' | 'video', key: string) => {
+    const formats = track === 'video' ? videoFormats : audioFormats
+    const next = formats.find((format) => format.key === key)
+    if (!next) throw new Error(`youtube: unknown ${track} format ${key}`)
+    if (track === 'video') {
+      videoFormat = next
+      state.video = byKey.get(next.key)
+    } else {
+      audioFormat = next
+      state.audio = byKey.get(next.key)
+    }
+    return next
+  }
 
   const execute = async (
     url: string,
     requestHeaders: Record<string, string>,
     startTimeMs: number,
     init: boolean,
+    progress: (phase: string) => void,
+    signal?: AbortSignal,
     attempt = 0,
-  ): Promise<PlayerHttpResponse> => {
+  ): Promise<ExecutedResponse> => {
+    if (signal?.aborted) throw signal.reason
     const request: PlayerHttpRequest = {
       url,
       method: 'GET',
@@ -107,8 +238,9 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
         isInit: () => init,
       },
     }
+    progress('request-filter')
     const filtered = await state.requestFilter?.(request) ?? request
-    const requestBody = bytes(filtered.body)
+    let requestBody = bytes(filtered.body)
     if (requestBody && filtered.url.includes('googlevideo.com')) {
       const decoded = VideoPlaybackAbrRequest.decode(requestBody)
       decoded.clientAbrState ??= {}
@@ -122,13 +254,14 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
       decoded.clientAbrState.clientViewportWidth = state.snapshot.viewportWidth
       decoded.clientAbrState.clientViewportHeight = state.snapshot.viewportHeight
       decoded.clientAbrState.av1QualityThreshold = 1_080
-      filtered.body = VideoPlaybackAbrRequest.encode(decoded).finish()
+      requestBody = VideoPlaybackAbrRequest.encode(decoded).finish()
+      filtered.body = requestBody
     }
     const metadata = state.metadata?.getRequestMetadata(filtered.url)
     if (!metadata) throw new Error('youtube: SABR request metadata is missing')
-    lastMetadata = metadata
     const started = performance.now()
-    const response = await fetch(filtered.url, {
+    progress('fetch')
+    const response = await egressFetch(filtered.url, {
       method: filtered.method,
       headers: {
         ...filtered.headers,
@@ -137,72 +270,165 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
         'content-type': 'application/x-protobuf',
       },
       body: requestBody ? Uint8Array.from(requestBody).buffer : undefined,
-    })
+      redirect: 'manual',
+    }, signal)
+    progress('headers')
     if (response.status === 403 && attempt === 0) {
       await response.body?.cancel()
-      resetPoTokenSession()
-      return execute(url, requestHeaders, startTimeMs, init, attempt + 1)
+      progress('token-reset')
+      await resetPoTokenSession()
+      return execute(url, requestHeaders, startTimeMs, init, progress, signal, attempt + 1)
     }
-    if (!response.ok) throw new Error(`youtube: segment returned ${response.status}`)
+    if (!response.ok) {
+      if (response.status === 403) await resetPoTokenSession()
+      throw refreshError(`youtube: segment returned ${response.status}`)
+    }
     const processor = new SabrUmpProcessor(metadata, state.cache ?? undefined)
+    const framer = createUmpFramer()
     const reader = response.body?.getReader()
-    let result: Awaited<ReturnType<typeof processor.processChunk>>
+    const partTypes: number[] = []
+    type ProcessingResult = Awaited<ReturnType<typeof processor.processChunk>>
+    let result: ProcessingResult
+    const process = async (chunk: Uint8Array) => {
+      let completed: ProcessingResult
+      for (const frame of framer.push(chunk)) {
+        partTypes.push(frame.type)
+        const next = await processor.processChunk(frame.data)
+        if (next?.done && !completed) completed = next
+      }
+      return completed
+    }
     if (reader) {
       for (;;) {
         const chunk = await reader.read()
         if (chunk.done) break
-        result = await processor.processChunk(chunk.value)
-        if (result?.done) {
+        progress('body')
+        const completed = await process(chunk.value)
+        if (completed?.done) {
+          result = completed
           await reader.cancel()
           break
         }
       }
     } else {
-      result = await processor.processChunk(new Uint8Array(await response.arrayBuffer()))
+      const chunk = new Uint8Array(await response.arrayBuffer())
+      progress('body')
+      result = await process(chunk)
     }
     const data = result?.data
-    const output: PlayerHttpResponse = {
+    const mediaHeader = metadata.streamInfo?.mediaHeader
+    const expectedLength = Number(mediaHeader?.contentLength ?? 0)
+    const actualLength = data?.byteLength ?? 0
+    const incomplete = !init && expectedLength > 0 && actualLength !== expectedLength
+      ? { actual: actualLength, expected: expectedLength }
+      : undefined
+    if (incomplete && metadata.streamInfo) delete metadata.streamInfo.mediaHeader
+    const output: ExecutedResponse = {
       url: filtered.url,
       method: filtered.method,
       headers: headers(response.headers),
       data,
-      makeRequest: (nextUrl, nextHeaders) => execute(nextUrl, nextHeaders, startTimeMs, init),
+      makeRequest: (nextUrl, nextHeaders) => execute(nextUrl, nextHeaders, startTimeMs, init, progress, signal),
+      metadata,
+      elapsedMs: performance.now() - started,
+      incomplete,
+      endOfTrack: partTypes.includes(UMPPartId.END_OF_TRACK),
+      partial: framer.partial,
+      partTypes,
     }
+    progress('response-filter')
     const modified = await state.responseFilter?.(output)
     Object.assign(output, modified)
-    Object.assign(output, { elapsedMs: performance.now() - started })
+    if (incomplete && mediaHeader) {
+      metadata.streamInfo ??= {}
+      metadata.streamInfo.mediaHeader = mediaHeader
+    }
+    output.elapsedMs = performance.now() - started
     return output
   }
 
-  const requestSegment = (request: SegmentRequest) => {
-    state.snapshot = request.snapshot
-    const format = request.track === 'video' ? videoFormat : audioFormat
-    const range = request.kind === 'init' ? `bytes=${format.initRange.start}-${format.initRange.end}` : undefined
+  const requestSegment = (
+    request: SegmentRequest,
+    progress: (phase: string) => void = () => {},
+    signal?: AbortSignal,
+  ) => {
     const run = chain.then(async () => {
-      const response = await execute(
-        `sabr://${request.track}?key=${encodeURIComponent(format.key)}`,
-        range ? { Range: range } : {},
-        request.startTimeMs,
-        request.kind === 'init',
-      )
-      const data = bytes(response.data)
-      if (!data?.byteLength) throw new Error('youtube: segment response is empty')
-      const media = lastMetadata?.streamInfo?.mediaHeader
-      if (request.kind === 'media' && media?.contentLength && Number(media.contentLength) !== data.byteLength) {
-        throw new Error(`youtube: incomplete segment ${data.byteLength}/${media.contentLength}`)
+      if (signal?.aborted) throw signal.reason
+      state.snapshot = request.snapshot
+      const currentFormat = request.track === 'video' ? videoFormat : audioFormat
+      const format = request.formatKey && request.formatKey !== currentFormat.key
+        ? selectFormat(request.track, request.formatKey)
+        : currentFormat
+      const requestedRange = request.range ?? (request.kind === 'init' ? format.initRange : undefined)
+      const range = requestedRange ? `bytes=${requestedRange.start}-${requestedRange.end}` : undefined
+      if (request.kind === 'init' && requestedRange) {
+        const sabrFormat = byKey.get(format.key)
+        const cacheKey = sabrFormat && FormatKeyUtils.createSegmentCacheKey({
+          itag: sabrFormat.itag,
+          xtags: sabrFormat.xtags,
+          isInitSeg: true,
+        } as never, sabrFormat)
+        const cached = cacheKey ? bytes(state.cache?.getInitSegment(cacheKey)) : undefined
+        if (cached) {
+          return {
+            generation: request.generation,
+            track: request.track,
+            kind: request.kind,
+            formatKey: format.key,
+            mimeType: format.mimeType,
+            elapsedMs: 0,
+            end: false as const,
+            data: cached.slice(requestedRange.start, requestedRange.end + 1).buffer,
+          }
+        }
       }
-      return {
-        generation: request.generation,
-        track: request.track,
-        kind: request.kind,
-        formatKey: format.key,
-        mimeType: format.mimeType,
-        sequenceNumber: media?.sequenceNumber,
-        startMs: media?.startMs ? Number(media.startMs) : undefined,
-        durationMs: media?.durationMs ? Number(media.durationMs) : undefined,
-        data: Uint8Array.from(data).buffer as ArrayBuffer,
-        elapsedMs: (response as PlayerHttpResponse & { elapsedMs?: number }).elapsedMs ?? 0,
-      } satisfies SegmentEnvelope
+      const fetchSegment = async (attempt = 0): Promise<SegmentEnvelope> => {
+        const response = await execute(
+          `sabr://${request.track}?key=${encodeURIComponent(format.key)}`,
+          range ? { Range: range } : {},
+          request.startTimeMs,
+          request.kind === 'init',
+          progress,
+          signal,
+        )
+        const common = {
+          generation: request.generation,
+          track: request.track,
+          kind: request.kind,
+          formatKey: format.key,
+          mimeType: format.mimeType,
+          elapsedMs: response.elapsedMs,
+        }
+        const data = bytes(response.data)
+        const media = response.metadata.streamInfo?.mediaHeader
+        if (data?.byteLength && !response.incomplete) {
+          return {
+            ...common,
+            end: false,
+            sequenceNumber: media?.sequenceNumber,
+            startMs: media?.startMs !== undefined ? Number(media.startMs) : undefined,
+            durationMs: media?.durationMs !== undefined ? Number(media.durationMs) : undefined,
+            data: Uint8Array.from(data).buffer as ArrayBuffer,
+          }
+        }
+        if (request.kind === 'media' && response.endOfTrack && !data?.byteLength) {
+          return { ...common, end: true }
+        }
+        const streamStatus = response.metadata.streamInfo?.streamProtectionStatus?.status
+        const reason = response.incomplete
+          ? `incomplete segment ${response.incomplete.actual}/${response.incomplete.expected}`
+          : describeNoMedia(response)
+        if (response.metadata.streamInfo?.reloadPlaybackContext) throw refreshError(`youtube: ${reason}`)
+        if (attempt + 1 < MAX_SEGMENT_ATTEMPTS) {
+          if (streamStatus === 3) await resetPoTokenSession()
+          const serverBackoff = response.metadata.streamInfo?.nextRequestPolicy?.backoffTimeMs ?? 0
+          progress('retry')
+          await wait(Math.min(2_000, Math.max(serverBackoff, 200 * 2 ** attempt)), signal)
+          return fetchSegment(attempt + 1)
+        }
+        throw refreshError(`youtube: ${reason} after ${MAX_SEGMENT_ATTEMPTS} attempts`)
+      }
+      return fetchSegment()
     })
     chain = run.catch(() => {})
     return run
@@ -210,17 +436,14 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
 
   return {
     durationMs: source.durationMs,
+    manifest: source.manifest,
     videoFormats,
     audioFormats,
     get videoFormat() { return videoFormat },
     get audioFormat() { return audioFormat },
     requestSegment,
-    selectVideoFormat: (key: string) => {
-      const next = videoFormats.find((format) => format.key === key)
-      if (!next) throw new Error(`youtube: unknown video format ${key}`)
-      videoFormat = next
-      state.video = byKey.get(next.key)
-    },
+    selectVideoFormat: (key: string) => selectFormat('video', key),
+    selectAudioFormat: (key: string) => selectFormat('audio', key),
     close: () => adapter.dispose(),
   }
 }

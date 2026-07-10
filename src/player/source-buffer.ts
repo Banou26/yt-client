@@ -1,11 +1,18 @@
 export type SourceBufferQueue = {
   append(data: BufferSource, generation: number): Promise<void>
+  abort(): void
   clear(generation: number): Promise<void>
   dispose(): void
 }
 
 const waitForUpdate = (sourceBuffer: SourceBuffer) => new Promise<void>((resolve, reject) => {
+  const timeout = setTimeout(() => {
+    cleanup()
+    if (sourceBuffer.updating) sourceBuffer.abort()
+    reject(new Error('player: SourceBuffer update timed out'))
+  }, 8_000)
   const cleanup = () => {
+    clearTimeout(timeout)
     sourceBuffer.removeEventListener('updateend', complete)
     sourceBuffer.removeEventListener('abort', complete)
     sourceBuffer.removeEventListener('error', fail)
@@ -45,6 +52,9 @@ export const createSourceBufferQueue = (
       sourceBuffer.appendBuffer(data)
       await waitForUpdate(sourceBuffer)
     }),
+    abort: () => {
+      if (sourceBuffer.updating) sourceBuffer.abort()
+    },
     clear: (generation) => enqueue(generation, async () => {
       if (sourceBuffer.updating) sourceBuffer.abort()
       if (!sourceBuffer.buffered.length) return
