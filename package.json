@@ -4,12 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build": "npm run build:frame && npm run generate && vite build",
-    "build:frame": "vite build -c vite.frame.config.ts",
-    "dev": "npm run build:frame && npm run generate && vite --port 4561",
+    "build": "npm run build:frame && npm run generate && vp build",
+    "build:frame": "vp build -c vite.frame.config.ts",
+    "dev": "npm run build:frame && npm run generate && vp dev --port 4561",
     "generate": "graphql-codegen --config codegen.ts",
     "postinstall": "patch-package",
-    "test": "vitest run src",
+    "test": "vp test run src",
     "test:browser": "playwright test",
     "type-check": "npm run generate && tsc --noEmit"
   },
@@ -36,14 +36,26 @@
     "@graphql-codegen/client-preset": "^4.8.3",
     "@graphql-codegen/typescript": "^4.1.6",
     "@graphql-codegen/typescript-resolvers": "^4.5.1",
-    "@preact/preset-vite": "^2.10.2",
+    "@preact/preset-vite": "^2.10.5",
     "@playwright/test": "^1.54.2",
     "@types/node": "^24.0.0",
     "patch-package": "^8.0.1",
     "typescript": "^5.9.2",
-    "vite": "^6.2.1",
-    "vite-plugin-node-polyfills": "^0.25.0",
-    "vite-plugin-static-copy": "^2.3.2",
-    "vitest": "^3.2.4"
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.4",
+    "vite-plugin-node-polyfills": "^0.28.0",
+    "vite-plugin-static-copy": "^4.1.1",
+    "vitest": "4.1.10",
+    "vite-plus": "0.2.4"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "npm",
+      "version": "12.0.1",
+      "onFail": "download"
+    }
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.4",
+    "vitest": "4.1.10"
   }
 }
