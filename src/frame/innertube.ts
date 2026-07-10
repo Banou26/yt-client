@@ -28,7 +28,6 @@ type YoutubeFormat = {
 }
 
 const FALLBACK_CLIENT_VERSION = '2.20260618.05.00'
-const cpn = new Map<string, string>()
 
 ;(Constants as unknown as { CLIENTS: { WEB: { VERSION: string } } }).CLIENTS.WEB.VERSION = FALLBACK_CLIENT_VERSION
 
@@ -69,7 +68,7 @@ const extractInitialPlayerResponse = (html: string) => {
   throw new Error('youtube: player response is incomplete')
 }
 
-const registerPlayback = (raw: Record<string, unknown>, nonce: string, formats: YoutubeFormat[]) => {
+const registerPlayback = async (raw: Record<string, unknown>, nonce: string, formats: YoutubeFormat[]) => {
   const base = (raw as {
     playbackTracking?: { videostatsPlaybackUrl?: { baseUrl?: string } }
   }).playbackTracking?.videostatsPlaybackUrl?.baseUrl
@@ -81,7 +80,8 @@ const registerPlayback = (raw: Record<string, unknown>, nonce: string, formats: 
   const video = formats.find((format) => format.has_video)
   if (audio) url.searchParams.set('afmt', String(audio.itag))
   if (video) url.searchParams.set('fmt', String(video.itag))
-  void fetch(url, { method: 'POST' }).catch(() => {})
+  const response = await fetch(url, { method: 'POST' })
+  if (!response.ok) throw new Error(`youtube: playback registration returned ${response.status}`)
 }
 
 const playbackFormat = (format: YoutubeFormat): PlaybackFormat | undefined => {
@@ -128,12 +128,11 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
     if (!format.has_audio || format.has_video) return true
     return !format.xtags && !format.is_drc && !format.is_dubbed && !format.is_auto_dubbed && !format.is_descriptive
   }) as unknown as YoutubeFormat[]
-  const nonce = cpn.get(videoId) ?? Utils.generateRandomString(16)
-  cpn.set(videoId, nonce)
+  const nonce = Utils.generateRandomString(16)
   const url = new URL(await client.session.player!.decipher(streaming.server_abr_streaming_url))
   url.searchParams.set('alr', 'yes')
   url.searchParams.set('cpn', nonce)
-  registerPlayback(raw, nonce, rawFormats)
+  await registerPlayback(raw, nonce, rawFormats)
   const ustreamerConfig = info.player_config?.media_common_config?.media_ustreamer_request_config?.video_playback_ustreamer_config
   if (!ustreamerConfig) throw new Error('youtube: ustreamer configuration is missing')
   const context = client.session.context as unknown as {
