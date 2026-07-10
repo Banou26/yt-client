@@ -46,15 +46,16 @@ export default defineConfig({
       jsxImportSource: '@emotion/react',
     }),
     viteStaticCopy({
-      structured: false,
       targets: [
         {
           src: fromRoot('./node_modules/@mercuryworkshop/scramjet/dist/*'),
           dest: '__yt_scramjet__/scramjet',
+          rename: { stripBase: true },
         },
         {
           src: fromRoot('./node_modules/@mercuryworkshop/scramjet-controller/dist/*'),
           dest: '__yt_scramjet__/controller',
+          rename: { stripBase: true },
         },
       ],
     }),
