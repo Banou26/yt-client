@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { UMPPartId } from 'googlevideo/protos'
-import { createUmpFramer, inspectUmpChunks } from './sabr'
+import { MediaHeader, UMPPartId } from 'googlevideo/protos'
+import { createUmpFramer, createUmpSegmentCollector, inspectUmpChunks } from './sabr'
 
 const encodeVarInt = (value: number) => {
   if (value < 128) return [value]
@@ -9,11 +9,24 @@ const encodeVarInt = (value: number) => {
   throw new Error('test value is too large')
 }
 
-const part = (type: number, data: number[]) => new Uint8Array([
-  ...encodeVarInt(type),
-  ...encodeVarInt(data.length),
-  ...data,
-])
+const part = (type: number, input: Iterable<number>) => {
+  const data = [...input]
+  return new Uint8Array([
+    ...encodeVarInt(type),
+    ...encodeVarInt(data.length),
+    ...data,
+  ])
+}
+
+const join = (parts: Uint8Array[]) => {
+  const output = new Uint8Array(parts.reduce((size, value) => size + value.byteLength, 0))
+  let offset = 0
+  for (const value of parts) {
+    output.set(value, offset)
+    offset += value.byteLength
+  }
+  return output
+}
 
 describe('inspectUmpChunks', () => {
   it('recognizes an end-of-track response', () => {
@@ -51,5 +64,67 @@ describe('inspectUmpChunks', () => {
       ])
       expect(framer.partial, `split at byte ${split}`).toBe(false)
     }
+  })
+})
+
+describe('createUmpSegmentCollector', () => {
+  it('harvests interleaved audio and video across every network split', () => {
+    const audioHeader = MediaHeader.encode({
+      headerId: 1,
+      itag: 251,
+      startMs: '0',
+      durationMs: '5000',
+      contentLength: '3',
+    }).finish()
+    const videoHeader = MediaHeader.encode({
+      headerId: 2,
+      itag: 399,
+      startMs: '0',
+      durationMs: '5005',
+      contentLength: '3',
+    }).finish()
+    const envelope = join([
+      part(UMPPartId.MEDIA_HEADER, audioHeader),
+      part(UMPPartId.MEDIA_HEADER, videoHeader),
+      part(UMPPartId.MEDIA, [1, 10, 11]),
+      part(UMPPartId.MEDIA, [2, 20]),
+      part(UMPPartId.MEDIA, [1, 12]),
+      part(UMPPartId.MEDIA_END, [1]),
+      part(UMPPartId.MEDIA, [2, 21, 22]),
+      part(UMPPartId.MEDIA_END, [2]),
+    ])
+
+    for (let split = 1; split < envelope.byteLength; split += 1) {
+      const framer = createUmpFramer()
+      const collector = createUmpSegmentCollector()
+      const segments = [
+        ...framer.push(envelope.slice(0, split)),
+        ...framer.push(envelope.slice(split)),
+      ].flatMap((frame) => collector.push(frame) ?? [])
+
+      expect(segments.map((segment) => ({
+        key: segment.formatKey,
+        data: [...segment.data],
+      })), `split at byte ${split}`).toEqual([
+        { key: '251:', data: [10, 11, 12] },
+        { key: '399:', data: [20, 21, 22] },
+      ])
+    }
+  })
+
+  it('rejects a segment whose declared content is incomplete', () => {
+    const framer = createUmpFramer()
+    const collector = createUmpSegmentCollector()
+    const envelope = join([
+      part(UMPPartId.MEDIA_HEADER, MediaHeader.encode({
+        headerId: 1,
+        itag: 251,
+        contentLength: '3',
+      }).finish()),
+      part(UMPPartId.MEDIA, [1, 10, 11]),
+      part(UMPPartId.MEDIA_END, [1]),
+    ])
+
+    expect(framer.push(envelope).flatMap((frame) => collector.push(frame) ?? [])).toEqual([])
   })
 })

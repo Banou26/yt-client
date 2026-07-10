@@ -230,7 +230,7 @@ export const startShakaPlayback = async ({
       abr: { restrictToElementSize: true },
       streaming: {
         bufferingGoal: 30,
-        rebufferingGoal: 4,
+        rebufferingGoal: 0,
         bufferBehind: 30,
         segmentPrefetchLimit: 0,
         retryParameters: {
