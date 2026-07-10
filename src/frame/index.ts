@@ -34,6 +34,7 @@ const api = {
   requestSegment: async (request) => {
     const session = sessions.get(request.sessionId)
     if (!session) throw new Error(`youtube: unknown playback session ${request.sessionId}`)
+    document.documentElement.dataset.segmentStartMs = String(request.startTimeMs)
     return session.requestSegment(request)
   },
   selectVideoFormat: async (id, key) => {

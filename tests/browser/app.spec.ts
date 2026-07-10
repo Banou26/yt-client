@@ -1,5 +1,53 @@
 import { expect, test } from '@playwright/test'
 
+test('plays SABR segments requested after one minute', async ({ page }) => {
+  test.setTimeout(150_000)
+  const logs: string[] = []
+  page.on('console', (message) => logs.push(message.text()))
+  await page.goto('/watch/dQw4w9WgXcQ')
+  await expect(page.locator('html')).toHaveAttribute('data-engine', 'ready', { timeout: 75_000 })
+  const video = page.locator('video')
+  await expect(video).toBeVisible()
+  const frame = page.frames().find((candidate) => candidate.url().includes('/proxy/'))
+  const fail = async (error: Error): Promise<never> => {
+    const media = await video.evaluate((element) => {
+      const player = element as HTMLVideoElement
+      return {
+        currentTime: player.currentTime,
+        duration: player.duration,
+        networkState: player.networkState,
+        paused: player.paused,
+        readyState: player.readyState,
+        error: player.error?.message,
+      }
+    })
+    const api = await frame?.locator('html').getAttribute('data-frame-api').catch(() => null)
+    const segmentStartMs = await frame?.locator('html').getAttribute('data-segment-start-ms').catch(() => null)
+    const content = await page.locator('main').innerText()
+    throw new Error(`${error.message}\nmedia=${JSON.stringify(media)}\napi=${api}\nsegmentStartMs=${segmentStartMs}\ncontent=${JSON.stringify(content)}\nconsole=${JSON.stringify(logs)}`)
+  }
+  await expect.poll(
+    () => video.evaluate((element) => (element as HTMLVideoElement).currentTime),
+    { timeout: 100_000 },
+  ).toBeGreaterThan(0).catch(fail)
+  await expect.poll(
+    () => video.evaluate((element) => (element as HTMLVideoElement).duration),
+    { timeout: 30_000 },
+  ).toBeGreaterThan(80).catch(fail)
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement
+    player.currentTime = 75
+  })
+  await expect.poll(
+    async () => Number(await frame?.locator('html').getAttribute('data-segment-start-ms')),
+    { timeout: 60_000 },
+  ).toBeGreaterThanOrEqual(75_000).catch(fail)
+  await expect.poll(
+    () => video.evaluate((element) => (element as HTMLVideoElement).currentTime),
+    { timeout: 60_000 },
+  ).toBeGreaterThan(76).catch(fail)
+})
+
 test('boots the frame engine and loads YouTube search results', async ({ page }) => {
   const errors: string[] = []
   const logs: string[] = []
@@ -25,34 +73,4 @@ test('boots the frame engine and loads YouTube search results', async ({ page })
     throw new Error(`${error.message}\ncontent=${JSON.stringify(content)}\nrequest=${request}\nresponse=${response}\nframes=${JSON.stringify(state)}\nconsole=${JSON.stringify(logs)}`)
   })
   expect(errors.filter((error) => error.includes('yt-client'))).toEqual([])
-})
-
-test('plays a static YouTube video', async ({ page }) => {
-  test.setTimeout(150_000)
-  const logs: string[] = []
-  page.on('console', (message) => logs.push(message.text()))
-  await page.goto('/watch/dQw4w9WgXcQ')
-  await expect(page.locator('html')).toHaveAttribute('data-engine', 'ready', { timeout: 75_000 })
-  const video = page.locator('video')
-  await expect(video).toBeVisible()
-  await expect.poll(
-    () => video.evaluate((element) => (element as HTMLVideoElement).currentTime),
-    { timeout: 100_000 },
-  ).toBeGreaterThan(0).catch(async (error) => {
-    const media = await video.evaluate((element) => {
-      const player = element as HTMLVideoElement
-      return {
-        currentTime: player.currentTime,
-        duration: player.duration,
-        networkState: player.networkState,
-        paused: player.paused,
-        readyState: player.readyState,
-        error: player.error?.message,
-      }
-    })
-    const frame = page.frames().find((candidate) => candidate.url().includes('/proxy/'))
-    const api = await frame?.locator('html').getAttribute('data-frame-api').catch(() => null)
-    const content = await page.locator('main').innerText()
-    throw new Error(`${error.message}\nmedia=${JSON.stringify(media)}\napi=${api}\ncontent=${JSON.stringify(content)}\nconsole=${JSON.stringify(logs)}`)
-  })
 })
