@@ -365,6 +365,24 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
   // since a format switch inside an init cancels the harvest media relies on.
   let serialTail: Promise<unknown> = Promise.resolve()
 
+  // The SabrStreamingAdapter tracks, per format, how far ahead we've buffered and
+  // reports it to the server so it knows how much readahead to push. It only
+  // resets that tracking on a *backward* seek (getPlayerTime() < lastPlayerTimeSecs);
+  // a forward jump leaves ranges anchored at t=0 with the pre-seek duration. Then a
+  // post-seek request claims a tiny buffered window far behind the requested
+  // position, and the server withholds media entirely (streamProtectionStatus 2 +
+  // PLAYBACK_START_POLICY, no MEDIA parts) for any seek past its readahead window —
+  // which our loop then mistakes for a fatal error and refresh-loops on. Clearing
+  // the tracking on any seek makes the next request look like a fresh start, which
+  // the server serves at the requested position (exactly how initial load works).
+  // (The playback cookie is intentionally NOT reset here — it carries session/format
+  // state and a seek only changes playerTimeMs, not the session.)
+  let seekGeneration = 0
+  const resetBufferTracking = () => {
+    const internals = adapter as unknown as { initializedFormats?: { clear?: () => void } }
+    internals.initializedFormats?.clear?.()
+  }
+
   const selectFormat = (track: 'audio' | 'video', key: string) => {
     const formats = track === 'video' ? videoFormats : audioFormats
     const next = formats.find((format) => format.key === key)
@@ -632,6 +650,13 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     progress: (phase: string) => void = () => {},
     signal?: AbortSignal,
   ) => {
+    // A generation bump means the player seeked. Reset the adapter's buffered-range
+    // tracking so the post-seek request reports a clean (empty) buffer at the new
+    // position instead of a stale one anchored at t=0.
+    if (request.generation > seekGeneration) {
+      seekGeneration = request.generation
+      resetBufferTracking()
+    }
     // Init and index requests are plain byte-range reads: they run concurrently
     // across tracks, while media requests keep the strict session ordering and
     // wait for every launched init fetch.

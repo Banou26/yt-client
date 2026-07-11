@@ -292,9 +292,6 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
     if (!format.has_audio || format.has_video) return true
     return !format.xtags && !format.is_drc && !format.is_dubbed && !format.is_auto_dubbed && !format.is_descriptive
   }) as unknown as YoutubeFormat[]
-  const datasyncId = (raw as {
-    responseContext?: { mainAppWebResponseContext?: { datasyncId?: string } }
-  }).responseContext?.mainAppWebResponseContext?.datasyncId?.split('||')[0]
   const allowedFormats = new Set(rawFormats.map((format) => format.itag))
   const [manifest, decipheredUrl] = await Promise.all([
     info.toDash({
@@ -308,11 +305,16 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
   url.searchParams.set('cpn', nonce)
   const ustreamerConfig = info.player_config?.media_common_config?.media_ustreamer_request_config?.video_playback_ustreamer_config
   if (!ustreamerConfig) throw new Error('youtube: ustreamer configuration is missing')
-  // Session-bound tokens attach to the datasync id (signed in) or the visitor
-  // id, never the video id, so they stay reusable across videos and reloads.
-  const mintIdentifier = datasyncId ?? context.client.visitorData
-  // The boot-time warmup keyed on visitor data; re-check under the identifier
-  // playback will actually mint with (differs when signed in).
+  // The WEB GVS/streaming poToken is bound to the VIDEO ID, not the visitor or
+  // datasync id: YouTube moved web playback to video-id-bound tokens, and a
+  // session/visitor-bound token now only earns the ~60s StreamProtectionStatus=2
+  // preview before media is withheld. (Ref: LuanRT/kira mintAsWebsafeString(videoId),
+  // FreeTube #8137, yt-dlp PO Token Guide.) The botguard session itself stays
+  // visitor/attestation-bound; only the mint's content binding is the video id.
+  const mintIdentifier = videoId
+  // The boot-time warmup builds the shared botguard session (keyed on visitor
+  // data); this re-check is a no-op once that session is live, and otherwise
+  // kicks it off so the per-video mint below has a real minter to use.
   warmPoTokenSession(context, mintIdentifier)
   return {
     videoId,

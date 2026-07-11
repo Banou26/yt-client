@@ -2,6 +2,23 @@ import type { IntegrityTokenData, WebPoSignalOutput } from 'bgutils-js'
 
 import { BG, buildURL, GOOG_API_KEY } from 'bgutils-js'
 
+import { egressFetch } from './egress'
+
+// BotGuard attestation (att/get, the interpreter script, GenerateIT) runs against
+// Google's anti-bot backends, which reject the server-side FKN proxy fingerprint
+// the scramjet-trapped global fetch routes through (the request aborts) — the same
+// wall the sign-in flow hit. Route these over the libcurl/webvpn egress instead:
+// in-browser Chrome-impersonated TLS that Google accepts, with no CORS. Without a
+// live attestation the mint falls back to a cold-start token, which only earns the
+// ~60s StreamProtectionStatus=2 preview before media is withheld.
+const attestFetch = (url: string, init?: { method?: string, headers?: Record<string, string>, body?: string }) =>
+  egressFetch(url, {
+    method: init?.method ?? 'GET',
+    headers: init?.headers,
+    body: init?.body ? (new TextEncoder().encode(init.body).buffer as ArrayBuffer) : null,
+    redirect: 'follow',
+  })
+
 const REQUEST_KEY = 'O43z0dpjhgX20SCx4KAo'
 const ATT_GET_URL = 'https://www.youtube.com/youtubei/v1/att/get?prettyPrint=false&alt=json'
 const TOKEN_STORE_KEY = 'yt-client:po-tokens'
@@ -83,7 +100,7 @@ const sidAuthorization = async () => {
 
 const fetchChallenge = async (context: BotguardContext) => {
   const authorization = await sidAuthorization()
-  const response = await fetch(ATT_GET_URL, {
+  const response = await attestFetch(ATT_GET_URL, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -109,7 +126,7 @@ const fetchChallenge = async (context: BotguardContext) => {
   let interpreterUrl = challenge.interpreterUrl?.privateDoNotAccessOrElseTrustedResourceUrlWrappedValue
   if (!interpreterUrl) throw new Error('botguard: interpreter URL is missing')
   if (interpreterUrl.startsWith('//')) interpreterUrl = `https:${interpreterUrl}`
-  const interpreter = await fetch(interpreterUrl).then((result) => result.text())
+  const interpreter = await attestFetch(interpreterUrl).then((result) => result.text())
   return { ...challenge, interpreter }
 }
 
@@ -125,7 +142,7 @@ const createSession = async (context: BotguardContext): Promise<MinterSession> =
   })
   const webPoSignalOutput: WebPoSignalOutput = []
   const botguardResponse = await client.snapshot({ webPoSignalOutput })
-  const integrity = await fetch(buildURL('GenerateIT', true), {
+  const integrity = await attestFetch(buildURL('GenerateIT', true), {
     method: 'POST',
     headers: {
       'content-type': 'application/json+protobuf',
