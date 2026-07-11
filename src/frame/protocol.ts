@@ -71,6 +71,7 @@ export type FrameApi = SourceApi & {
   cancelSegment(sessionId: string, requestId: string): Promise<void>
   selectVideoFormat(sessionId: string, formatKey: string): Promise<void>
   closePlayback(sessionId: string): Promise<void>
+  resetIdentity(): Promise<void>
 }
 
 export type FrameRequest = {

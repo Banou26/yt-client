@@ -53,13 +53,36 @@ const readStoredToken = (identifier: string) => {
   return stored && stored.expiresAt > Date.now() ? stored.token : undefined
 }
 
-const clearStoredTokens = () => {
+export const clearStoredTokens = () => {
   try {
     localStorage.removeItem(TOKEN_STORE_KEY)
   } catch {}
 }
 
+const readSapisid = () => {
+  try {
+    return document.cookie.match(/(?:^|;\s*)SAPISID=([^;\s]+)/)?.[1]
+  } catch {
+    return undefined
+  }
+}
+
+// Signed-in header parity for the challenge fetch (the real client sends it):
+// SAPISIDHASH is the hex sha1 of '<ts> <SAPISID> <origin>' as '<ts>_<hash>'.
+const sidAuthorization = async () => {
+  const sapisid = readSapisid()
+  if (!sapisid) return undefined
+  const timestamp = Math.floor(Date.now() / 1_000)
+  const digest = await crypto.subtle.digest(
+    'SHA-1',
+    new TextEncoder().encode(`${timestamp} ${sapisid} https://www.youtube.com`),
+  )
+  const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  return `SAPISIDHASH ${timestamp}_${hash}`
+}
+
 const fetchChallenge = async (context: BotguardContext) => {
+  const authorization = await sidAuthorization()
   const response = await fetch(ATT_GET_URL, {
     method: 'POST',
     headers: {
@@ -67,6 +90,7 @@ const fetchChallenge = async (context: BotguardContext) => {
       'x-goog-visitor-id': context.client.visitorData,
       'x-youtube-client-name': '1',
       'x-youtube-client-version': context.client.clientVersion,
+      ...(authorization && { authorization }),
     },
     body: JSON.stringify({ engagementType: 'ENGAGEMENT_TYPE_UNBOUND', context }),
   })

@@ -61,6 +61,13 @@ type CommentPage {
   disabled: Boolean
 }
 
+type Session {
+  signedIn: Boolean!
+  name: String
+  avatar: String
+  handle: String
+}
+
 type Query {
   home(cursor: String): VideoPage!
   search(query: String!, cursor: String): VideoPage!
@@ -68,4 +75,5 @@ type Query {
   channel(id: ID!, cursor: String): ChannelPage!
   watch(id: ID!): WatchMeta
   comments(videoId: ID!, cursor: String): CommentPage!
+  session: Session!
 }

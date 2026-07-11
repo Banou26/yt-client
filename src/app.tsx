@@ -7,6 +7,7 @@ import Header from './components/header'
 import ChannelPage from './routes/channel'
 import HomePage from './routes/home'
 import SearchPage from './routes/search'
+import SignInPage from './routes/signin'
 import WatchPage from './routes/watch'
 
 const style = css`
@@ -64,15 +65,16 @@ export const App = () => {
   const tiny = useMediaQuery('(max-width: 792px)')
 
   const isWatch = location.startsWith('/watch')
-  const overlayOnly = isWatch || tiny
+  const isSignIn = location.startsWith('/signin')
+  const overlayOnly = isWatch || isSignIn || tiny
   const guideVariant = overlayOnly ? undefined : collapsed || narrow ? 'mini' as const : 'expanded' as const
 
   useEffect(() => setDrawerOpen(false), [location])
 
   const onMenu = useCallback(() => {
-    // watch has no in-flow guide, and narrow widths force the mini rail —
-    // in both cases the hamburger opens the overlay drawer instead.
-    if (isWatch || tiny || narrow) {
+    // overlay-only routes (watch, signin) have no in-flow guide, and narrow
+    // widths force the mini rail — all open the overlay drawer instead.
+    if (overlayOnly || narrow) {
       setDrawerOpen(open => !open)
       return
     }
@@ -85,7 +87,7 @@ export const App = () => {
       }
       return next
     })
-  }, [isWatch, tiny, narrow])
+  }, [overlayOnly, narrow])
 
   return (
     <div css={style}>
@@ -98,6 +100,7 @@ export const App = () => {
             <Route path='/search/:query' component={SearchPage} />
             <Route path='/watch/:videoId' component={WatchPage} />
             <Route path='/channel/:channelId' component={ChannelPage} />
+            <Route path='/signin' component={SignInPage} />
             <Route>
               <p className='not-found'>Not found</p>
             </Route>

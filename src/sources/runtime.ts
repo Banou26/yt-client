@@ -38,4 +38,5 @@ export const sourceApi = {
   channel: async (id: string, cursor?: string) => callSource((api) => api.channel(id, cursor), cursor === undefined),
   watch: async (id: string) => callSource((api) => api.watch(id)),
   comments: async (videoId: string, cursor?: string) => callSource((api) => api.comments(videoId, cursor), cursor === undefined),
+  session: async () => callSource((api) => api.session()),
 } satisfies SourceApi

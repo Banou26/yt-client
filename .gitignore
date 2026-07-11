@@ -5,3 +5,4 @@ playwright-report/
 public/__yt_scramjet__/youtube-frame.js
 test-results/
 src/generated/
+.playwright-mcp/

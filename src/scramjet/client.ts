@@ -1,6 +1,7 @@
 import type { FrameApi, FrameProgress, FrameRequest, FrameResponse } from '../frame/protocol'
+import type { HostControlEvent, HostControlRequest } from './protocol'
 
-import { ENGINE_READY } from './protocol'
+import { CLEAR_COOKIES, CLOSE_SIGNIN, COOKIES_CLEARED, ENGINE_READY, OPEN_SIGNIN, SIGNIN_STATUS } from './protocol'
 
 let engine: Promise<FrameApi> | undefined
 let engineFrame: HTMLIFrameElement | undefined
@@ -8,6 +9,14 @@ let engineConnection: ReturnType<typeof createFrameApi> | undefined
 let engineCleanup: (() => void) | undefined
 let engineReject: ((error: Error) => void) | undefined
 let engineGeneration = 0
+let engineControl: MessagePort | undefined
+let signInPending: { resolve: () => void, reject: (error: Error) => void, onStatus?: (signedIn: boolean) => void } | undefined
+// bumped by closeSignIn so an openSignIn parked on startEngine() bails instead
+// of raising an orphaned overlay after the user has navigated away.
+let signInGeneration = 0
+let controlRequestId = 0
+const CONTROL_TIMEOUT_MS = 15_000
+const clearPending = new Map<number, { resolve: () => void, reject: (error: Error) => void }>()
 
 const createFrameApi = (port: MessagePort, onFatal: (error: Error) => void) => {
   let requestId = 0
@@ -103,9 +112,50 @@ const createFrameApi = (port: MessagePort, onFatal: (error: Error) => void) => {
       cancelSegment: (sessionId, requestId) => call('cancelSegment', sessionId, requestId),
       selectVideoFormat: (sessionId, formatKey) => call('selectVideoFormat', sessionId, formatKey),
       closePlayback: (sessionId) => call('closePlayback', sessionId),
+      session: () => call('session'),
+      resetIdentity: () => call('resetIdentity'),
     } satisfies FrameApi,
     close,
   }
+}
+
+const showHostFrame = () => {
+  if (!engineFrame) return
+  engineFrame.hidden = false
+  // An iframe is a replaced element: inset offsets don't stretch it (it falls
+  // back to the intrinsic 300x150), so size it explicitly. 5.6rem tracks the
+  // header height under font scaling.
+  engineFrame.style.cssText = 'position: fixed; top: 5.6rem; left: 0; width: 100vw; height: calc(100vh - 5.6rem); border: 0; z-index: 1500; background: #0f0f0f;'
+}
+
+const hideHostFrame = () => {
+  if (!engineFrame) return
+  engineFrame.hidden = true
+  engineFrame.removeAttribute('style')
+}
+
+const connectControl = (port: MessagePort) => {
+  engineControl = port
+  port.addEventListener('message', (event) => {
+    const message = event.data as HostControlEvent
+    if (message.type === SIGNIN_STATUS) {
+      const pending = signInPending
+      pending?.onStatus?.(message.signedIn)
+      if (!message.signedIn || !pending) return
+      signInPending = undefined
+      hideHostFrame()
+      pending.resolve()
+      return
+    }
+    if (message.type === COOKIES_CLEARED) {
+      const pending = clearPending.get(message.id)
+      clearPending.delete(message.id)
+      if (!pending) return
+      if (message.error) pending.reject(new Error(`yt-client: clearing session cookies failed: ${message.error}`))
+      else pending.resolve()
+    }
+  })
+  port.start()
 }
 
 const invalidateEngine = (generation: number, error: Error) => {
@@ -117,6 +167,12 @@ const invalidateEngine = (generation: number, error: Error) => {
   connection?.close(error)
   engineReject?.(error)
   engineReject = undefined
+  engineControl?.close()
+  engineControl = undefined
+  signInPending?.reject(error)
+  signInPending = undefined
+  for (const pending of clearPending.values()) pending.reject(error)
+  clearPending.clear()
   engineFrame?.remove()
   engineFrame = undefined
   engine = undefined
@@ -146,9 +202,12 @@ export const startEngine = () => {
       }
       if (generation !== engineGeneration) {
         port.close()
+        event.ports[1]?.close()
         return
       }
       engineReject = undefined
+      const control = event.ports[1]
+      if (control) connectControl(control)
       engineConnection = createFrameApi(port, (error) => invalidateEngine(generation, error))
       resolve(engineConnection.api)
     }
@@ -160,3 +219,53 @@ export const startEngine = () => {
 }
 
 export const resetEngine = () => invalidateEngine(engineGeneration, new Error('yt-client: engine reset'))
+
+export const openSignIn = async (onStatus?: (signedIn: boolean) => void) => {
+  // capture the generation BEFORE the engine await: a closeSignIn issued while
+  // the engine is still booting must cancel this open instead of letting it
+  // raise the overlay over whatever route the user navigated to.
+  const generation = ++signInGeneration
+  await startEngine()
+  if (generation !== signInGeneration) throw new Error('yt-client: sign-in closed')
+  if (!engineControl) throw new Error('yt-client: engine host control is missing')
+  signInPending?.reject(new Error('yt-client: sign-in restarted'))
+  showHostFrame()
+  engineControl.postMessage({ type: OPEN_SIGNIN } satisfies HostControlRequest)
+  await new Promise<void>((resolve, reject) => {
+    signInPending = { resolve, reject, onStatus }
+  })
+}
+
+export const closeSignIn = () => {
+  signInGeneration++
+  engineControl?.postMessage({ type: CLOSE_SIGNIN } satisfies HostControlRequest)
+  hideHostFrame()
+  signInPending?.reject(new Error('yt-client: sign-in closed'))
+  signInPending = undefined
+}
+
+export const clearSessionCookies = async () => {
+  await startEngine()
+  const control = engineControl
+  if (!control) throw new Error('yt-client: engine host control is missing')
+  const id = ++controlRequestId
+  await new Promise<void>((resolve, reject) => {
+    // the ack carries no payload, so a dead host must surface as an error
+    // rather than an eternal await — sign-out treats failure as fatal.
+    const timeout = setTimeout(() => {
+      clearPending.delete(id)
+      reject(new Error('yt-client: clearing session cookies timed out'))
+    }, CONTROL_TIMEOUT_MS)
+    clearPending.set(id, {
+      resolve: () => {
+        clearTimeout(timeout)
+        resolve()
+      },
+      reject: (error) => {
+        clearTimeout(timeout)
+        reject(error)
+      },
+    })
+    control.postMessage({ type: CLEAR_COOKIES, id } satisfies HostControlRequest)
+  })
+}

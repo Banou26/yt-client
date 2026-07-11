@@ -32,6 +32,15 @@ const createFakeClient = () => ({
   getBasicInfo: async () => ({ basic_info: undefined }),
   getChannel: async () => ({ ...feed('channel'), metadata: { external_id: 'c', title: 'Channel' } }),
   getComments: async () => comments('top', async () => comments('next')),
+  account: {
+    getInfo: async (): Promise<unknown> => ({
+      contents: {
+        account_name: { text: 'Banou' },
+        account_photo: [{ url: 'avatar' }],
+        channel_handle: { text: '@banou' },
+      },
+    }),
+  },
   actions: {
     execute: async () => ({
       contents_memo: new Map<string, unknown[]>([
@@ -79,5 +88,47 @@ describe('youtube source', () => {
     expect(second.items[0]?.id).toBe('next')
     expect(second.cursor).toBeUndefined()
     await expect(source.comments('abc', first.cursor)).rejects.toThrow('unknown continuation')
+  })
+
+  it('reports a signed-out session without hitting the account API', async () => {
+    const client = createFakeClient()
+    let called = false
+    client.account.getInfo = async () => {
+      called = true
+      return { contents: {} }
+    }
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => client,
+    })
+    await expect(source.session()).resolves.toEqual({ signedIn: false })
+    expect(called).toBe(false)
+  })
+
+  it('decorates a signed-in session with account info', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+      signedIn: () => true,
+    })
+    await expect(source.session()).resolves.toEqual({
+      signedIn: true,
+      name: 'Banou',
+      avatar: 'avatar',
+      handle: '@banou',
+    })
+  })
+
+  it('stays signed in when the account lookup fails', async () => {
+    const client = createFakeClient()
+    client.account.getInfo = async () => {
+      throw new Error('account fetch failed')
+    }
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => client,
+      signedIn: () => true,
+    })
+    await expect(source.session()).resolves.toEqual({ signedIn: true })
   })
 })

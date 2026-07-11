@@ -33,4 +33,12 @@ describe('root queries', () => {
       .resolves.toEqual({ items: [] })
     expect(calls).toEqual([['abc', undefined]])
   })
+
+  it('delegates session to the active source', async () => {
+    const session = { signedIn: true, name: 'Banou', avatar: 'avatar', handle: '@banou' }
+    const source = {
+      session: async () => session,
+    } as unknown as SourceApi
+    await expect(resolvers.Query.session({}, {}, { source } as never)).resolves.toBe(session)
+  })
 })

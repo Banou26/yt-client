@@ -2,7 +2,7 @@ import type { Source, SourceChannel, SourceCommentPage, SourceVideoPage } from '
 
 import { Innertube } from 'youtubei.js/web'
 
-import { normalizeChannel, normalizeCommentThread, normalizeFeedVideo, normalizeLockupVideo, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
+import { normalizeChannel, normalizeCommentThread, normalizeFeedVideo, normalizeLockupVideo, normalizeSession, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
 
 type Feed = {
   videos: Iterable<unknown>
@@ -29,6 +29,9 @@ type YoutubeClient = {
   getBasicInfo(id: string): Promise<{ basic_info?: unknown }>
   getChannel(id: string): Promise<ChannelFeed>
   getComments(videoId: string): Promise<CommentsFeed>
+  account: {
+    getInfo(): Promise<unknown>
+  }
   actions: {
     execute(endpoint: '/next', args: { videoId: string, racyCheckOk: boolean, contentCheckOk: boolean, parse: true }): Promise<unknown>
   }
@@ -37,6 +40,7 @@ type YoutubeClient = {
 export type YoutubeSourceOptions = {
   fetch: typeof globalThis.fetch
   createClient?: () => Promise<YoutubeClient>
+  signedIn?: () => boolean
 }
 
 const pageItems = (feed: Feed) => {
@@ -48,7 +52,7 @@ const pageItems = (feed: Feed) => {
   return [...lockups].map(normalizeLockupVideo).filter((video) => video !== undefined)
 }
 
-export const createYoutubeSource = ({ fetch, createClient }: YoutubeSourceOptions): Source => {
+export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSourceOptions): Source => {
   const client = createClient?.() ?? Innertube.create({ fetch, retrieve_player: false }) as Promise<YoutubeClient>
   const continuations = new Map<string, () => Promise<SourceVideoPage>>()
   const commentContinuations = new Map<string, () => Promise<SourceCommentPage>>()
@@ -132,6 +136,16 @@ export const createYoutubeSource = ({ fetch, createClient }: YoutubeSourceOption
           return { items: [], disabled: true }
         }
         throw error
+      }
+    },
+    // Signed-in state comes from the cookie jar probe; the accounts_list call
+    // only decorates it, so its failure must not read back as signed out.
+    session: async () => {
+      if (!signedIn?.()) return { signedIn: false }
+      try {
+        return normalizeSession(await (await client).account.getInfo())
+      } catch {
+        return { signedIn: true }
       }
     },
   }

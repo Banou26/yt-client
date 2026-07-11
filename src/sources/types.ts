@@ -61,6 +61,13 @@ export type SourceCommentPage = {
   disabled?: boolean
 }
 
+export type SourceSession = {
+  signedIn: boolean
+  name?: string
+  avatar?: string
+  handle?: string
+}
+
 export type Source = {
   id: string
   home(cursor?: string): Promise<SourceVideoPage>
@@ -69,6 +76,7 @@ export type Source = {
   channel(id: string, cursor?: string): Promise<SourceChannelPage>
   watch(id: string): Promise<SourceWatchMeta | undefined>
   comments(videoId: string, cursor?: string): Promise<SourceCommentPage>
+  session(): Promise<SourceSession>
 }
 
 export type SourceApi = Omit<Source, 'id'>

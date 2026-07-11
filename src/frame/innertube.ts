@@ -7,6 +7,9 @@ import type { PlaybackFormat } from './protocol'
 
 import { mintPoToken, recoverPoTokenSession, warmPoTokenSession } from './botguard'
 import { egressFetch } from './egress'
+import { GVS_ORIGIN_KEY, VISITOR_DATA_KEY } from './identity'
+
+export { GVS_ORIGIN_KEY }
 
 type YoutubeFormat = {
   itag: number
@@ -41,8 +44,6 @@ type InnertubeContext = {
 }
 
 const FALLBACK_CLIENT_VERSION = '2.20260618.05.00'
-const VISITOR_DATA_KEY = 'yt-client:visitor-data'
-export const GVS_ORIGIN_KEY = 'yt-client:gvs-origin'
 
 ;(Constants as unknown as { CLIENTS: { WEB: { VERSION: string } } }).CLIENTS.WEB.VERSION = FALLBACK_CLIENT_VERSION
 
@@ -67,6 +68,23 @@ const storeVisitorData = (visitorData: string) => {
   } catch {}
 }
 
+// document.cookie is scramjet-trapped to the shared jar; SAPISID is not
+// httpOnly, so its presence is the signed-in probe and the string itself is
+// what youtubei.js needs to compute SAPISIDHASH.
+const readAuthCookie = () => {
+  try {
+    return document.cookie.includes('SAPISID=') ? document.cookie : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export const hasSessionCookie = () => readAuthCookie() !== undefined
+
+// Frozen at boot: the cookie is baked into the Innertube clients below, and
+// any auth change rebuilds the whole engine frame anyway.
+const authCookie = readAuthCookie()
+
 export const catalogInnertube = Innertube.create({
   fetch: globalThis.fetch.bind(globalThis),
   generate_session_locally: true,
@@ -74,6 +92,10 @@ export const catalogInnertube = Innertube.create({
   retrieve_player: false,
   // Reusing the visitor id keeps persisted PoTokens valid across page loads.
   visitor_data: readVisitorData(),
+  // A SAPISID-bearing jar means the user is signed in: passing the cookie
+  // flips youtubei.js into SAPISIDHASH + X-Goog-Authuser mode — identity
+  // cookies arriving without a matching Authorization header get 401s.
+  ...(authCookie && { cookie: authCookie }),
 }).then((client) => {
   const context = client.session.context as unknown as InnertubeContext
   storeVisitorData(context.client.visitorData)
@@ -92,6 +114,7 @@ const innertube = catalogInnertube.then((client) => {
     cache: new UniversalCache(true),
     visitor_data: context.client.visitorData,
     user_agent: context.client.userAgent,
+    ...(authCookie && { cookie: authCookie }),
   })
 })
 

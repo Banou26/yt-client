@@ -2,10 +2,24 @@ import type { TargetedSubmitEvent } from 'preact'
 
 import { css } from '@emotion/react'
 import { CircleUserRound, EllipsisVertical, Menu, Mic, Search } from 'lucide-react'
-import { useEffect, useRef } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
+import { useQuery } from 'urql'
 import { Link, useLocation, useRoute } from 'wouter'
 
+import { gql } from '../generated'
+import { AccountMenu } from './account-menu'
 import { safeDecode } from './format'
+
+const HEADER_SESSION_QUERY = gql(`
+  query HeaderSession {
+    session {
+      signedIn
+      name
+      avatar
+      handle
+    }
+  }
+`)
 
 const logoStyle = css`
   display: flex;
@@ -205,6 +219,24 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
   const [, navigate] = useLocation()
   const [matchesSearch, searchParams] = useRoute('/search/:query')
   const inputRef = useRef<HTMLInputElement>(null)
+  // Defer the session probe until the engine is ready so its accounts_list call
+  // never competes with the latency-critical watch/player boot.
+  const [engineReady, setEngineReady] = useState(() => document.documentElement.dataset.engine === 'ready')
+  const [{ data: sessionData }] = useQuery({ query: HEADER_SESSION_QUERY, pause: !engineReady })
+  const session = sessionData?.session
+
+  useEffect(() => {
+    if (engineReady) return
+    const check = () => {
+      if (document.documentElement.dataset.engine !== 'ready') return
+      setEngineReady(true)
+      observer.disconnect()
+    }
+    const observer = new MutationObserver(check)
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-engine'] })
+    check()
+    return () => observer.disconnect()
+  }, [engineReady])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -258,10 +290,14 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
         <button type='button' className='icon-button' aria-label='Settings'>
           <EllipsisVertical size={24} strokeWidth={1.5} />
         </button>
-        <button type='button' className='sign-in'>
-          <CircleUserRound size={24} strokeWidth={1.5} />
-          Sign in
-        </button>
+        {session?.signedIn
+          ? <AccountMenu name={session.name ?? undefined} avatar={session.avatar ?? undefined} handle={session.handle ?? undefined} />
+          : (
+            <button type='button' className='sign-in' onClick={() => navigate('/signin')}>
+              <CircleUserRound size={24} strokeWidth={1.5} />
+              Sign in
+            </button>
+          )}
       </div>
     </header>
   )

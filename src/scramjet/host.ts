@@ -1,4 +1,4 @@
-import type { EgressApi } from './protocol'
+import type { EgressApi, HostControlEvent, HostControlRequest } from './protocol'
 import type { FrameEgressRequest, FrameEgressResponse } from '../frame/protocol'
 
 import { defaultConfigDev } from '@mercuryworkshop/scramjet'
@@ -6,9 +6,11 @@ import { Tap } from '@mercuryworkshop/scramjet'
 import { Controller } from '@mercuryworkshop/scramjet-controller'
 import { expose } from 'osra'
 
-import { EGRESS_KEY, ENGINE_READY } from './protocol'
+import { CLEAR_COOKIES, CLOSE_SIGNIN, COOKIES_CLEARED, EGRESS_KEY, ENGINE_READY, OPEN_SIGNIN, SIGNIN_STATUS } from './protocol'
 import { FRAME_CONNECT, FRAME_EGRESS_CONNECT } from '../frame/protocol'
 import { createFknTransport, FRAME_BOOTSTRAP_URL } from './fkn-transport'
+
+const SIGN_IN_URL = 'https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F&hl=en'
 
 type FrameWindow = Window & {
   [FRAME_CONNECT]?: (port: MessagePort) => void
@@ -34,6 +36,7 @@ const stage = (value: string) => {
 
 const loadBroker = async () => {
   const frame = document.createElement('iframe')
+  frame.hidden = true
   frame.src = 'https://fkn.app/api'
   const loaded = new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('yt-client: FKN broker load timed out')), 15_000)
@@ -95,6 +98,89 @@ const boot = async () => {
   await controller.wait()
   stage('frame')
 
+  let signInElement: HTMLIFrameElement | undefined
+  let signInPoll: ReturnType<typeof setInterval> | undefined
+
+  const signInComplete = (element: HTMLIFrameElement, prefix: string) => {
+    // The proxied frame is same-origin: its path is the frame prefix plus the
+    // codec-encoded target URL, so decode it to see whether the login flow has
+    // navigated back to youtube.com.
+    try {
+      const path = element.contentWindow?.location.pathname ?? ''
+      if (!path.startsWith(prefix)) return false
+      if (!controller.config.codec.decode(path.slice(prefix.length)).startsWith('https://www.youtube.com/')) return false
+    } catch {
+      return false
+    }
+    const cookies = controller.cookieJar.getCookies(new URL('https://www.youtube.com/'), false) as string
+    return /(?:^|;\s*)SAPISID=/.test(cookies)
+  }
+
+  const destroySignIn = () => {
+    clearInterval(signInPoll)
+    signInPoll = undefined
+    const element = signInElement
+    signInElement = undefined
+    if (!element) return
+    // The controller has no frame disposal API — drop it from the routing list
+    // and remove the element.
+    const index = controller.frames.findIndex((proxied) => proxied.element === element)
+    if (index !== -1) controller.frames.splice(index, 1)
+    element.remove()
+  }
+
+  const openSignIn = (port: MessagePort) => {
+    if (signInElement) return
+    // Least privilege: the login flow needs no permissions, and this frame is
+    // the first place arbitrary rewritten Google JS runs on the app origin.
+    const element = document.createElement('iframe')
+    element.style.cssText = 'position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: #0f0f0f; z-index: 10;'
+    document.body.appendChild(element)
+    // Untapped frame — no youtube-frame.js injection, the real rewritten login
+    // pages run against the shared cookie jar.
+    const proxied = controller.createFrame(element)
+    signInElement = element
+    const check = () => {
+      if (signInElement !== element || !signInComplete(element, proxied.prefix)) return
+      port.postMessage({ type: SIGNIN_STATUS, signedIn: true } satisfies HostControlEvent)
+      destroySignIn()
+    }
+    element.addEventListener('load', check)
+    signInPoll = setInterval(check, 1_000)
+    proxied.go(SIGN_IN_URL)
+  }
+
+  const clearCookies = async (id: number, port: MessagePort) => {
+    // A reply must ALWAYS go back: sign-out treats a missing/failed clear as
+    // fatal (the persisted jar still holds the identity), never as success.
+    try {
+      controller.cookieJar.clear()
+      await controller.persistCookies()
+      await controller.propagateCookieSync([], { clear: true }).catch(() => {})
+      port.postMessage({ type: COOKIES_CLEARED, id } satisfies HostControlEvent)
+    } catch (error) {
+      port.postMessage({
+        type: COOKIES_CLEARED,
+        id,
+        error: String((error as Error)?.message ?? error),
+      } satisfies HostControlEvent)
+    }
+  }
+
+  let controlPort: MessagePort | undefined
+  const connectControl = () => {
+    const channel = new MessageChannel()
+    controlPort = channel.port1
+    channel.port1.addEventListener('message', (event) => {
+      const message = event.data as HostControlRequest
+      if (message.type === OPEN_SIGNIN) openSignIn(channel.port1)
+      else if (message.type === CLOSE_SIGNIN) destroySignIn()
+      else if (message.type === CLEAR_COOKIES) void clearCookies(message.id, channel.port1)
+    })
+    channel.port1.start()
+    return channel
+  }
+
   const frame = document.createElement('iframe')
   frame.hidden = true
   frame.setAttribute('allow', 'autoplay; encrypted-media')
@@ -142,7 +228,8 @@ const boot = async () => {
     delete frameWindow[FRAME_CONNECT]
     connect(apiChannel.port1)
     stage('frame-connected')
-    window.parent.postMessage({ type: ENGINE_READY }, location.origin, [apiChannel.port2])
+    const controlChannel = connectControl()
+    window.parent.postMessage({ type: ENGINE_READY }, location.origin, [apiChannel.port2, controlChannel.port2])
     stage('frame-posted')
   })
   proxiedFrame.go(FRAME_BOOTSTRAP_URL)
@@ -150,6 +237,7 @@ const boot = async () => {
     relayAbort.abort()
     channel.port2.close()
     frameEgressPort?.close()
+    controlPort?.close()
     worker.terminate()
   }, { once: true })
 

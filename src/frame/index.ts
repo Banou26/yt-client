@@ -1,13 +1,15 @@
 import type { FrameApi, FrameProgress, FrameRequest, FrameResponse, SegmentEnvelope } from './protocol'
 
 import { createYoutubeSource } from '../sources/youtube'
-import { catalogInnertube, getSabrSource } from './innertube'
+import { catalogInnertube, getSabrSource, hasSessionCookie } from './innertube'
 import { createSabrSession, isSabrSessionRefreshError } from './sabr'
+import { resetIdentity } from './identity'
 import { FRAME_CONNECT } from './protocol'
 
 const source = createYoutubeSource({
   fetch: globalThis.fetch.bind(globalThis),
   createClient: () => catalogInnertube,
+  signedIn: hasSessionCookie,
 })
 
 type PlaybackEntry = {
@@ -54,6 +56,8 @@ const api = {
   channel: source.channel,
   watch: source.watch,
   comments: source.comments,
+  session: source.session,
+  resetIdentity,
   openPlayback: async (videoId, maxHeight) => {
     const id = `playback:${++sessionId}`
     const player = createSabrSession(await getSabrSource(videoId), maxHeight)
@@ -159,6 +163,8 @@ const dispatch = (request: FrameRequest) => {
     case 'channel': return api.channel(...request.args)
     case 'watch': return api.watch(...request.args)
     case 'comments': return api.comments(...request.args)
+    case 'session': return api.session(...request.args)
+    case 'resetIdentity': return api.resetIdentity(...request.args)
     case 'openPlayback': return api.openPlayback(...request.args)
     case 'requestSegment': return api.requestSegment(...request.args)
     case 'cancelSegment': return api.cancelSegment(...request.args)

@@ -1,4 +1,4 @@
-import type { SourceChannel, SourceComment, SourceVideo, SourceWatchMeta } from '../types'
+import type { SourceChannel, SourceComment, SourceSession, SourceVideo, SourceWatchMeta } from '../types'
 
 type Thumbnail = {
   url?: string
@@ -107,6 +107,14 @@ type LockupVideo = {
   }
 }
 
+type AccountInfo = {
+  contents?: {
+    account_name?: Text
+    account_photo?: Thumbnail[]
+    channel_handle?: Text
+  }
+}
+
 type CommentThread = {
   comment?: {
     comment_id?: string
@@ -124,6 +132,12 @@ const text = (value: string | Text | undefined) => {
   if (typeof value === 'string') return value
   if (value?.text) return value.text
   return value?.toString?.()
+}
+
+// youtubei.js Text instances stringify empty values as 'N/A': treat that as absent.
+const presentText = (value: string | Text | undefined) => {
+  const result = text(value)
+  return result === 'N/A' ? undefined : result
 }
 
 const thumbnail = (items: Thumbnail[] | undefined) =>
@@ -315,6 +329,16 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
         }
       : undefined,
     related,
+  }
+}
+
+export const normalizeSession = (input: unknown): SourceSession => {
+  const account = (input as AccountInfo).contents
+  return {
+    signedIn: true,
+    name: presentText(account?.account_name),
+    avatar: thumbnail(account?.account_photo),
+    handle: presentText(account?.channel_handle),
   }
 }
 

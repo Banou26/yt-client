@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { normalizeChannel, normalizeCommentThread, normalizeFeedVideo, normalizeLockupVideo, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
+import { normalizeChannel, normalizeCommentThread, normalizeFeedVideo, normalizeLockupVideo, normalizeSession, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
 
 describe('youtube normalization', () => {
   it('normalizes feed videos', () => {
@@ -246,6 +246,33 @@ describe('youtube normalization', () => {
       isPinned: true,
       isHearted: true,
     })
+  })
+
+  it('normalizes account info into a session', () => {
+    expect(normalizeSession({
+      contents: {
+        account_name: { text: 'Banou' },
+        account_photo: [
+          { url: 'small', width: 32 },
+          { url: 'large', width: 88 },
+        ],
+        channel_handle: { text: '@banou' },
+      },
+    })).toEqual({
+      signedIn: true,
+      name: 'Banou',
+      avatar: 'large',
+      handle: '@banou',
+    })
+  })
+
+  it("treats youtubei.js's 'N/A' account texts as absent", () => {
+    expect(normalizeSession({
+      contents: {
+        account_name: { text: 'Banou' },
+        channel_handle: { text: undefined, toString: () => 'N/A' },
+      },
+    })).toEqual({ signedIn: true, name: 'Banou' })
   })
 
   it('drops comments without an id and approximates shortened reply counts', () => {
