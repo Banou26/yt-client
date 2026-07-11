@@ -5,7 +5,7 @@ import type {
   WebSocketDataType,
 } from '@mercuryworkshop/proxy-transports'
 
-import type { EgressApi } from './protocol'
+import type { EgressApi, TransportRequest, TransportResponse } from './protocol'
 
 export const FRAME_BOOTSTRAP_URL = 'https://www.youtube.com/__yt_client__/frame'
 
@@ -15,11 +15,18 @@ const frameBootstrapHtml = '<!doctype html><html><head><meta charset="utf-8"></h
 // Google's sign-in flow spans these hosts; they emit soft redirects (200 + Location).
 const AUTH_HOST = /(^|\.)(accounts|myaccount)\.google\.com$/
 
-export const createFknTransport = (remote: Promise<Pick<EgressApi, 'fknFetch'>>): ProxyTransport => {
+// The egress strategy differs per transport: the engine uses the FKN broker proxy
+// (fknFetch); the sign-in frame uses libcurl over the webvpn relay (in-browser
+// Chrome-impersonated TLS Google's login backend accepts). The request-shaping —
+// bootstrap short-circuit, header/body marshalling, and the auth soft-redirect
+// promotion — is identical, so both share this builder.
+type EgressFetch = (url: string, options: TransportRequest, signal: AbortSignal | undefined) => Promise<TransportResponse>
+
+const createTransport = (ready: () => Promise<void>, egressFetch: EgressFetch): ProxyTransport => {
   const transport: ProxyTransport = {
     ready: false,
     async init() {
-      await remote
+      await ready()
       transport.ready = true
     },
     async request(
@@ -41,24 +48,14 @@ export const createFknTransport = (remote: Promise<Pick<EgressApi, 'fknFetch'>>)
           body: frameBootstrapHtml,
         }
       }
-      const api = await remote
       const requestHeaders = Object.fromEntries(headers)
       const bytes = body === null ? undefined : await new Response(body).arrayBuffer()
-      const response = await api.fknFetch(url.href, {
-        method,
-        headers: requestHeaders,
-        body: bytes,
-        redirect: 'manual',
-      })
-      // Google's auth endpoints answer some hops with 200 + content-type
-      // application/binary and a Location header — a "soft redirect" meant for
-      // programmatic following. Scramjet only rewrites Location on a real 3xx, so
-      // as a 200 the browser downloads the opaque blob and the frame never
-      // advances. Promote that soft redirect to a hard 302 so scramjet rewrites
-      // it and the login flow proceeds. Scoped to Google auth hosts so the
-      // latency-tuned youtube playback/metadata path is untouched.
-      // Only navigations get the soft-redirect promotion; XHR/fetch (the login
-      // flow's batchexecute calls) must pass through untouched.
+      const response = await egressFetch(url.href, { method, headers: requestHeaders, body: bytes, redirect: 'manual' }, signal)
+      // Google's auth endpoints answer some navigation hops with 200 + a Location
+      // header (a "soft redirect" scramjet won't rewrite as a 200, so the browser
+      // downloads the opaque blob and the frame never advances). Promote those to a
+      // hard 302. Scoped to document navigations on auth hosts so nothing else is
+      // affected; the login flow's XHRs pass through untouched.
       const isNavigation = (requestHeaders['sec-fetch-dest'] ?? requestHeaders['Sec-Fetch-Dest']) === 'document'
       if (isNavigation && AUTH_HOST.test(url.hostname) && response.status >= 200 && response.status < 300) {
         const location = response.headers.find(([key]) => key.toLowerCase() === 'location')?.[1]
@@ -85,4 +82,27 @@ export const createFknTransport = (remote: Promise<Pick<EgressApi, 'fknFetch'>>)
     },
   }
   return transport
+}
+
+// The engine transport: all metadata/token traffic over the latency-tuned FKN proxy.
+export const createFknTransport = (remote: Promise<Pick<EgressApi, 'fknFetch'>>): ProxyTransport =>
+  createTransport(
+    async () => { await remote },
+    async (url, options) => (await remote).fknFetch(url, options),
+  )
+
+// The sign-in transport: the WHOLE login flow (youtube.com + accounts.google.com)
+// over one libcurl/webvpn connection, so Google sees a single in-browser-TLS,
+// single-IP session — which its login backend accepts (the FKN proxy is rejected).
+export const createWebvpnTransport = (remote: Promise<Pick<EgressApi, 'libcurlFetch' | 'cancelLibcurlFetch'>>): ProxyTransport => {
+  let requestCounter = 0
+  return createTransport(
+    async () => { await remote },
+    async (url, options, signal) => {
+      const api = await remote
+      const requestId = `signin:${++requestCounter}`
+      signal?.addEventListener('abort', () => { void api.cancelLibcurlFetch(requestId) }, { once: true })
+      return api.libcurlFetch(requestId, url, options)
+    },
+  )
 }

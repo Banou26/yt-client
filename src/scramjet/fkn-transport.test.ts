@@ -2,7 +2,49 @@ import { describe, expect, it } from 'vitest'
 
 import type { TransportRequest } from './protocol'
 
-import { createFknTransport, FRAME_BOOTSTRAP_URL } from './fkn-transport'
+import { createFknTransport, createWebvpnTransport, FRAME_BOOTSTRAP_URL } from './fkn-transport'
+
+describe('webvpn transport', () => {
+  it('routes requests through libcurl with a request id, cancels on abort, and promotes auth soft-redirects', async () => {
+    let libcurl: { requestId: string, url: string, options: TransportRequest } | undefined
+    let cancelled: string | undefined
+    const remote = Promise.resolve({
+      libcurlFetch: async (requestId: string, url: string, options: TransportRequest) => {
+        libcurl = { requestId, url, options }
+        // simulate Google's soft redirect: 200 + Location on a navigation
+        return {
+          status: 200,
+          statusText: 'OK',
+          headers: [['content-type', 'application/binary'], ['location', 'https://accounts.google.com/v3/signin/identifier']] as [string, string][],
+          body: null,
+        }
+      },
+      cancelLibcurlFetch: async (requestId: string) => { cancelled = requestId },
+    })
+    const transport = createWebvpnTransport(remote)
+    await transport.init()
+    expect(transport.ready).toBe(true)
+
+    const controller = new AbortController()
+    const result = await transport.request(
+      new URL('https://accounts.google.com/ServiceLogin?service=youtube'),
+      'GET',
+      null,
+      [['sec-fetch-dest', 'document']],
+      controller.signal,
+    )
+
+    expect(libcurl?.url).toBe('https://accounts.google.com/ServiceLogin?service=youtube')
+    expect(libcurl?.requestId).toMatch(/^signin:\d+$/)
+    expect(libcurl?.options).toMatchObject({ method: 'GET', redirect: 'manual' })
+    // the 200 + Location navigation was promoted to a hard 302
+    expect(result.status).toBe(302)
+    expect(result.headers).toEqual([['location', 'https://accounts.google.com/v3/signin/identifier']])
+
+    controller.abort()
+    expect(cancelled).toBe(libcurl?.requestId)
+  })
+})
 
 describe('FKN transport', () => {
   it('routes requests through the FKN fetch worker method', async () => {

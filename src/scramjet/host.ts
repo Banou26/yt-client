@@ -8,7 +8,7 @@ import { expose } from 'osra'
 
 import { CLEAR_COOKIES, CLOSE_SIGNIN, COOKIES_CLEARED, EGRESS_KEY, ENGINE_READY, OPEN_SIGNIN, SIGNIN_LOADED, SIGNIN_STATUS } from './protocol'
 import { FRAME_CONNECT, FRAME_EGRESS_CONNECT } from '../frame/protocol'
-import { createFknTransport, FRAME_BOOTSTRAP_URL } from './fkn-transport'
+import { createFknTransport, createWebvpnTransport, FRAME_BOOTSTRAP_URL } from './fkn-transport'
 
 // Start on youtube.com and let ITS Sign in button carry the flow to Google.
 // Going straight to accounts.google.com leaves the login underconfigured (the
@@ -103,6 +103,29 @@ const boot = async () => {
   await controller.wait()
   stage('frame')
 
+  // A SECOND Controller drives ONLY the sign-in frame, over the webvpn/libcurl
+  // transport (in-browser Chrome-impersonated TLS Google's login backend accepts;
+  // the FKN proxy is rejected with "Something went wrong"). It shares the same SW
+  // registration + config as the engine (the SW multiplexes controllers by their
+  // random-id prefix) and its cookie jar syncs to the engine's via the shared
+  // __scramjet_controller IndexedDB + BroadcastChannel, so a completed login
+  // still propagates. The engine keeps the latency-tuned FKN proxy — untouched.
+  const webvpnTransport = createWebvpnTransport(remote)
+  await webvpnTransport.init()
+  const webvpnController = new Controller({
+    serviceworker,
+    transport: webvpnTransport,
+    config: {
+      prefix: '/__yt_scramjet__/proxy/',
+      scramjetPath: '/__yt_scramjet__/scramjet/scramjet.js',
+      injectPath: '/__yt_scramjet__/controller/controller.inject.js',
+      wasmPath: '/__yt_scramjet__/scramjet/scramjet.wasm',
+      virtualWasmPath: 'scramjet.wasm.js',
+    },
+    scramjetConfig: defaultConfigDev,
+  })
+  await webvpnController.wait()
+
   let signInElement: HTMLIFrameElement | undefined
   let signInPoll: ReturnType<typeof setInterval> | undefined
 
@@ -124,7 +147,7 @@ const boot = async () => {
     try {
       const path = element.contentWindow?.location.pathname ?? ''
       if (!path.startsWith(prefix)) return ''
-      return controller.config.codec.decode(path.slice(prefix.length))
+      return webvpnController.config.codec.decode(path.slice(prefix.length))
     } catch {
       return ''
     }
@@ -136,7 +159,9 @@ const boot = async () => {
     // youtube.com. Gate on it, and only hold off if the frame is still visibly
     // on an accounts.google.com page (mid-flow); if the location is unreadable,
     // trust the cookie.
-    const cookies = controller.cookieJar.getCookies(new URL('https://www.youtube.com/'), false) as string
+    // Read the webvpn controller's jar — the sign-in frame's cookies land there
+    // first (it syncs to the engine jar for the authenticated reboot).
+    const cookies = webvpnController.cookieJar.getCookies(new URL('https://www.youtube.com/'), false) as string
     if (!/(?:^|;\s*)SAPISID=/.test(cookies)) return false
     return !signInTarget(element, prefix).startsWith('https://accounts.google.com/')
   }
@@ -147,10 +172,11 @@ const boot = async () => {
     const element = signInElement
     signInElement = undefined
     if (!element) return
-    // The controller has no frame disposal API — drop it from the routing list
-    // and remove the element.
-    const index = controller.frames.findIndex((proxied) => proxied.element === element)
-    if (index !== -1) controller.frames.splice(index, 1)
+    // The controller has no frame disposal API — drop it from the webvpn
+    // controller's routing list (that's where the sign-in frame lives) and
+    // remove the element.
+    const index = webvpnController.frames.findIndex((proxied) => proxied.element === element)
+    if (index !== -1) webvpnController.frames.splice(index, 1)
     element.remove()
   }
 
@@ -161,9 +187,9 @@ const boot = async () => {
     const element = document.createElement('iframe')
     element.style.cssText = 'position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: #0f0f0f; z-index: 10;'
     document.body.appendChild(element)
-    // Untapped frame — no youtube-frame.js injection, the real rewritten login
-    // pages run against the shared cookie jar.
-    const proxied = controller.createFrame(element)
+    // Untapped frame on the WEBVPN controller — no youtube-frame.js injection,
+    // the real rewritten login pages run over libcurl against the shared jar.
+    const proxied = webvpnController.createFrame(element)
     signInElement = element
     let announcedLoad = false
     let advanced = false
@@ -194,7 +220,18 @@ const boot = async () => {
     }
     element.addEventListener('load', check)
     signInPoll = setInterval(check, 500)
-    proxied.go(SIGN_IN_URL)
+    // Prewarm the webvpn relay to both login hosts (a dial+close that warms the
+    // relay session) BEFORE the first navigation — a cold libcurl dial to a
+    // never-warmed host hangs, so pay that cost up front, then navigate. Capped
+    // so a slow/failed warm never strands the frame (the app also has a reveal
+    // fallback); the navigation itself re-warms if needed.
+    void remote
+      .then((api) => Promise.race([
+        Promise.allSettled([api.prewarm('www.youtube.com'), api.prewarm('accounts.google.com')]),
+        new Promise((resolve) => setTimeout(resolve, 8000)),
+      ]))
+      .catch(() => {})
+      .finally(() => { if (signInElement === element) proxied.go(SIGN_IN_URL) })
   }
 
   const clearCookies = async (id: number, port: MessagePort) => {
