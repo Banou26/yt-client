@@ -15,9 +15,11 @@ type PlaybackEntry = {
   maxHeight?: number
   player: ReturnType<typeof createSabrSession>
   chain: Promise<unknown>
+  serial: Promise<unknown>
   requests: Map<string, AbortController>
   generation: number
   closed: boolean
+  refreshing?: Promise<void>
 }
 
 const sessions = new Map<string, PlaybackEntry>()
@@ -58,6 +60,7 @@ const api = {
       maxHeight,
       player,
       chain: Promise.resolve(),
+      serial: Promise.resolve(),
       requests: new Map(),
       generation: 0,
       closed: false,
@@ -85,10 +88,15 @@ const api = {
       }
       if (entry.closed) throw new Error(`youtube: unknown playback session ${request.sessionId}`)
     }
-    const run = entry.chain.then(async () => {
+    // Init requests run concurrently (the SABR session parallelizes them per
+    // track) but never overtake pending media work; media requests keep the
+    // strict ordering behind everything else.
+    const base = request.kind === 'init' ? entry.serial : entry.chain
+    const run = base.then(async () => {
       assertActive()
+      const player = entry.player
       try {
-        const segment = await entry.player.requestSegment(request, progress, controller.signal)
+        const segment = await player.requestSegment(request, progress, controller.signal)
         assertActive()
         return segment
       } catch (error) {
@@ -96,12 +104,24 @@ const api = {
         if (!isSabrSessionRefreshError(error)) throw error
         document.documentElement.dataset.segmentRecovery = error.message
         progress('session-refresh')
-        await refreshSession(entry)
+        // Refresh only if the player that failed is still current: a stale
+        // failure from a concurrent request must not dispose the fresh session
+        // another request is already streaming from.
+        if (entry.player === player) {
+          await (entry.refreshing ??= refreshSession(entry).finally(() => {
+            entry.refreshing = undefined
+          }))
+        }
         assertActive()
         return entry.player.requestSegment(request, progress, controller.signal)
       }
     }).finally(() => entry.requests.delete(request.requestId))
-    entry.chain = run.catch(() => {})
+    if (request.kind === 'init') {
+      entry.chain = Promise.allSettled([entry.chain, run]).then(() => {})
+    } else {
+      entry.chain = run.catch(() => {})
+      entry.serial = entry.chain
+    }
     return run
   },
   cancelSegment: async (id, requestId) => {
@@ -115,6 +135,7 @@ const api = {
       entry.player.selectVideoFormat(key)
     })
     entry.chain = run.catch(() => {})
+    entry.serial = entry.chain
     await run
   },
   closePlayback: async (id) => {

@@ -12,6 +12,7 @@ export type PlaybackFormat = {
   audioTrackId?: string
   language?: string
   initRange: { start: number, end: number }
+  indexRange?: { start: number, end: number }
 }
 
 export type PlaybackSnapshot = {

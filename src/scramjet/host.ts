@@ -51,29 +51,33 @@ const loadBroker = async () => {
 }
 
 const boot = async () => {
+  // Every boot stage that depends on nothing starts immediately; awaits happen
+  // only where a stage's result is consumed.
   stage('service-worker')
-  const registration = await navigator.serviceWorker.register('/__yt_scramjet__/sw.js', {
+  const workerReady = navigator.serviceWorker.register('/__yt_scramjet__/sw.js', {
     scope: '/__yt_scramjet__/',
     type: 'classic',
     updateViaCache: 'none',
-  })
-  const serviceworker = await waitForWorker(registration)
-  stage('egress-worker')
+  }).then(waitForWorker)
   const worker = new Worker(new URL('./egress.worker.ts', import.meta.url), { type: 'module' })
   const relayAbort = new AbortController()
-  await loadBroker()
-  const { relayWorker } = await import('@fkn/lib')
-  relayWorker(worker, { unregisterSignal: relayAbort.signal })
-
-  const channel = new MessageChannel()
-  worker.postMessage({ type: EGRESS_KEY, port: channel.port1 }, [channel.port1])
-  channel.port2.start()
-  const remote = expose<EgressApi>({}, {
-    key: EGRESS_KEY,
-    transport: { receive: channel.port2, emit: channel.port2 },
+  const frameCodePromise = fetch('/__yt_scramjet__/youtube-frame.js').then((response) => response.text())
+  const fknLib = import('@fkn/lib')
+  stage('egress-worker')
+  const transportReady = Promise.all([loadBroker(), fknLib]).then(async ([, { relayWorker }]) => {
+    relayWorker(worker, { unregisterSignal: relayAbort.signal })
+    const channel = new MessageChannel()
+    worker.postMessage({ type: EGRESS_KEY, port: channel.port1 }, [channel.port1])
+    channel.port2.start()
+    const remote = expose<EgressApi>({}, {
+      key: EGRESS_KEY,
+      transport: { receive: channel.port2, emit: channel.port2 },
+    })
+    const transport = createFknTransport(remote)
+    await transport.init()
+    return { channel, remote, transport }
   })
-  const transport = createFknTransport(remote)
-  await transport.init()
+  const [serviceworker, { channel, remote, transport }] = await Promise.all([workerReady, transportReady])
 
   stage('controller')
   const controller = new Controller({
@@ -97,7 +101,7 @@ const boot = async () => {
   document.body.appendChild(frame)
   const proxiedFrame = controller.createFrame(frame)
   let frameEgressPort: MessagePort | undefined
-  const frameCode = await fetch('/__yt_scramjet__/youtube-frame.js').then((response) => response.text())
+  const frameCode = await frameCodePromise
   Tap.tap(proxiedFrame.hooks.init.post, (context) => {
     if (!context.isTopLevel) return
     const run = context.client.natives.call('Function', null, frameCode)

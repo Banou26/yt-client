@@ -4,6 +4,7 @@ import { BG, buildURL, GOOG_API_KEY } from 'bgutils-js'
 
 const REQUEST_KEY = 'O43z0dpjhgX20SCx4KAo'
 const ATT_GET_URL = 'https://www.youtube.com/youtubei/v1/att/get?prettyPrint=false&alt=json'
+const TOKEN_STORE_KEY = 'yt-client:po-tokens'
 
 type BotguardContext = {
   client: {
@@ -19,8 +20,44 @@ type MinterSession = {
   expiresAt: number
 }
 
+type StoredToken = {
+  token: string
+  expiresAt: number
+}
+
 let session: MinterSession | undefined
 let pending: Promise<MinterSession> | undefined
+
+const readStoredTokens = (): Record<string, StoredToken> => {
+  try {
+    const raw = localStorage.getItem(TOKEN_STORE_KEY)
+    return raw ? JSON.parse(raw) as Record<string, StoredToken> : {}
+  } catch {
+    return {}
+  }
+}
+
+const storeToken = (identifier: string, token: string, expiresAt: number) => {
+  try {
+    const tokens = readStoredTokens()
+    for (const [key, value] of Object.entries(tokens)) {
+      if (value.expiresAt <= Date.now()) delete tokens[key]
+    }
+    tokens[identifier] = { token, expiresAt }
+    localStorage.setItem(TOKEN_STORE_KEY, JSON.stringify(tokens))
+  } catch {}
+}
+
+const readStoredToken = (identifier: string) => {
+  const stored = readStoredTokens()[identifier]
+  return stored && stored.expiresAt > Date.now() ? stored.token : undefined
+}
+
+const clearStoredTokens = () => {
+  try {
+    localStorage.removeItem(TOKEN_STORE_KEY)
+  } catch {}
+}
 
 const fetchChallenge = async (context: BotguardContext) => {
   const response = await fetch(ATT_GET_URL, {
@@ -104,8 +141,56 @@ const getSession = (context: BotguardContext) => {
   return pending
 }
 
-export const mintPoToken = async (identifier: string, context: BotguardContext) =>
-  (await getSession(context)).minter.mintAsWebsafeString(identifier)
+// Persisted tokens live as long as their integrity token, capped as insurance
+// against a server-side invalidation we cannot observe.
+const PERSISTED_TOKEN_MAX_MS = 6 * 3_600_000
+
+const mintSessionToken = async (target: MinterSession, identifier: string) => {
+  const token = await target.minter.mintAsWebsafeString(identifier)
+  const remaining = Math.max(0, target.expiresAt - performance.now())
+  storeToken(identifier, token, Date.now() + Math.min(remaining, PERSISTED_TOKEN_MAX_MS))
+  return token
+}
+
+const REFRESH_MARGIN_MS = 30 * 60_000
+
+// Builds the minter session in the background unless a persisted token makes
+// it unnecessary: the botguard chain is three serial round trips that would
+// otherwise compete with startup traffic on the egress tunnel.
+export const warmPoTokenSession = (context: BotguardContext, identifier: string) => {
+  if (session && performance.now() < session.expiresAt) return
+  const stored = readStoredTokens()[identifier]
+  if (stored && stored.expiresAt - Date.now() > REFRESH_MARGIN_MS) return
+  void getSession(context).catch(() => {})
+}
+
+export const mintPoToken = async (identifier: string, context: BotguardContext) => {
+  if (session && performance.now() < session.expiresAt) return mintSessionToken(session, identifier)
+  const stored = readStoredToken(identifier)
+  if (stored) {
+    warmPoTokenSession(context, identifier)
+    return stored
+  }
+  // The session-bound minter is not ready yet: start playback on a cold-start
+  // token, which SABR accepts while StreamProtectionStatus is 2. Later requests
+  // mint through the session once it lands.
+  void getSession(context).catch(() => {})
+  return BG.PoToken.generateColdStartToken(identifier)
+}
+
+// Called after the server rejected a token: makes sure the next mint comes from
+// a live minter session instead of a cold-start or persisted token. Failures
+// propagate so a dead botguard endpoint surfaces its own error instead of an
+// opaque 403 retry loop.
+export const recoverPoTokenSession = async (context: BotguardContext) => {
+  clearStoredTokens()
+  if (pending) {
+    await pending.catch(() => {})
+    return
+  }
+  await resetPoTokenSession()
+  await getSession(context)
+}
 
 export const preparePoToken = async (context: BotguardContext) => {
   await getSession(context)

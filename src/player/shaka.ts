@@ -147,10 +147,11 @@ export const startShakaPlayback = async ({
   installScheme()
 
   const maxHeight = Math.max(360, Math.ceil(video.getBoundingClientRect().height * devicePixelRatio))
-  const session = await api.openPlayback(videoId, maxHeight)
-  if (signal.aborted) {
-    await api.closePlayback(session.id).catch(() => {})
-    throw signal.reason
+  // The frame builds its session while the Shaka player constructs and attaches.
+  const sessionPromise = api.openPlayback(videoId, maxHeight)
+  void sessionPromise.catch(() => {})
+  const closeSession = () => {
+    void sessionPromise.then((session) => api.closePlayback(session.id)).catch(() => {})
   }
 
   const bridgeId = crypto.randomUUID()
@@ -180,7 +181,7 @@ export const startShakaPlayback = async ({
     }
     if (manifestUrl) URL.revokeObjectURL(manifestUrl)
     await player?.destroy().catch(() => {})
-    await api.closePlayback(session.id).catch(() => {})
+    closeSession()
   }
   abortListener = () => void destroy()
   signal.addEventListener('abort', abortListener, { once: true })
@@ -190,23 +191,6 @@ export const startShakaPlayback = async ({
     player = activePlayer
     networking = activePlayer.getNetworkingEngine() ?? undefined
     if (!networking) throw new Error('shaka: networking engine is missing')
-    manifestUrl = URL.createObjectURL(new Blob([session.manifest], { type: 'application/dash+xml' }))
-    const bridge = { api, generation: 0, player: activePlayer, requestNumber: 0, session, video }
-    bridges.set(bridgeId, bridge)
-    requestFilter = (type, request, context) => {
-      if (type !== shaka.net.NetworkingEngine.RequestType.SEGMENT) return
-      request.uris = request.uris.map((uri) => {
-        if (!uri.startsWith('sabr:')) return uri
-        const url = new URL(uri)
-        url.searchParams.set('session', bridgeId)
-        url.searchParams.set('generation', String(bridge.generation))
-        // SegmentBase index requests have no SegmentReference and reuse the init response cache.
-        url.searchParams.set('kind', context?.segment ? 'media' : 'init')
-        url.searchParams.set('start', String((context?.segment?.getStartTime() ?? video.currentTime) * 1_000))
-        return url.toString()
-      })
-    }
-    networking.registerRequestFilter(requestFilter)
     playerError = (event: Event) => {
       const detail = (event as Event & { detail?: shaka.util.Error }).detail
       if (!destroyed && detail?.severity === shaka.util.Error.Severity.CRITICAL) {
@@ -219,12 +203,8 @@ export const startShakaPlayback = async ({
       const active = Boolean((event as Event & { buffering?: boolean }).buffering)
       document.documentElement.dataset.playbackBuffering = String(active)
     }
-    seeking = () => {
-      bridge.generation += 1
-    }
     activePlayer.addEventListener('error', playerError)
     activePlayer.addEventListener('buffering', buffering)
-    video.addEventListener('seeking', seeking)
     activePlayer.configure({
       preferredAudioCodecs: ['opus', 'mp4a.40.2', 'mp4a.40.5'],
       abr: { restrictToElementSize: true },
@@ -247,6 +227,30 @@ export const startShakaPlayback = async ({
 
     await activePlayer.attach(video)
     if (signal.aborted) throw signal.reason
+
+    const session = await sessionPromise
+    if (signal.aborted) throw signal.reason
+    manifestUrl = URL.createObjectURL(new Blob([session.manifest], { type: 'application/dash+xml' }))
+    const bridge = { api, generation: 0, player: activePlayer, requestNumber: 0, session, video }
+    bridges.set(bridgeId, bridge)
+    requestFilter = (type, request, context) => {
+      if (type !== shaka.net.NetworkingEngine.RequestType.SEGMENT) return
+      request.uris = request.uris.map((uri) => {
+        if (!uri.startsWith('sabr:')) return uri
+        const url = new URL(uri)
+        url.searchParams.set('session', bridgeId)
+        url.searchParams.set('generation', String(bridge.generation))
+        // SegmentBase index requests have no SegmentReference and reuse the init response cache.
+        url.searchParams.set('kind', context?.segment ? 'media' : 'init')
+        url.searchParams.set('start', String((context?.segment?.getStartTime() ?? video.currentTime) * 1_000))
+        return url.toString()
+      })
+    }
+    networking.registerRequestFilter(requestFilter)
+    seeking = () => {
+      bridge.generation += 1
+    }
+    video.addEventListener('seeking', seeking)
     await activePlayer.load(manifestUrl, startTime || undefined, 'application/dash+xml')
     if (signal.aborted) throw signal.reason
     diagnosticBridgeId = bridgeId
