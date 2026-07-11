@@ -54,12 +54,15 @@ const VideoPlayer = ({ videoId }: { videoId: string }) => {
         console.error(error)
         return
       }
+      const engineFailure = error instanceof Error && error.message.startsWith('youtube:')
       retryTimer = setTimeout(() => {
         if (!abort.signal.aborted) {
-          if (error instanceof Error && error.message.startsWith('youtube:')) resetEngine()
+          if (engineFailure) resetEngine()
           setAttempt((value) => value + 1)
         }
-      }, 1_000)
+        // A fast first retry only when the engine is kept: engine rebuilds are
+        // heavy and deserve the old backoff.
+      }, attempt === 0 && !engineFailure ? 100 : 1_000)
     }
     setStatus('Loading Shaka player')
     void (async () => {

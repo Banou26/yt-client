@@ -1,11 +1,12 @@
 import type { SabrFormat } from 'googlevideo/shared-types'
 
 import { buildSabrFormat, FormatKeyUtils } from 'googlevideo/utils'
-import { Constants, Innertube, Platform, Types, Utils, YT } from 'youtubei.js/web'
+import { Constants, Innertube, Platform, Types, UniversalCache, Utils, YT } from 'youtubei.js/web'
 
 import type { PlaybackFormat } from './protocol'
 
-import { mintPoToken, preparePoToken } from './botguard'
+import { mintPoToken, recoverPoTokenSession, warmPoTokenSession } from './botguard'
+import { egressFetch } from './egress'
 
 type YoutubeFormat = {
   itag: number
@@ -25,6 +26,7 @@ type YoutubeFormat = {
   language?: string | null
   audio_track?: { id: string }
   init_range?: { start: number, end: number }
+  index_range?: { start: number, end: number }
 }
 
 type InnertubeContext = {
@@ -39,6 +41,8 @@ type InnertubeContext = {
 }
 
 const FALLBACK_CLIENT_VERSION = '2.20260618.05.00'
+const VISITOR_DATA_KEY = 'yt-client:visitor-data'
+export const GVS_ORIGIN_KEY = 'yt-client:gvs-origin'
 
 ;(Constants as unknown as { CLIENTS: { WEB: { VERSION: string } } }).CLIENTS.WEB.VERSION = FALLBACK_CLIENT_VERSION
 
@@ -49,11 +53,31 @@ Platform.shim.eval = async (data: Types.BuildScriptResult, env: Record<string, T
   return new Function(`${data.output}\nreturn { ${properties.join(', ')} }`)()
 }
 
+const readVisitorData = () => {
+  try {
+    return localStorage.getItem(VISITOR_DATA_KEY) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+const storeVisitorData = (visitorData: string) => {
+  try {
+    localStorage.setItem(VISITOR_DATA_KEY, visitorData)
+  } catch {}
+}
+
 export const catalogInnertube = Innertube.create({
   fetch: globalThis.fetch.bind(globalThis),
   generate_session_locally: true,
   retrieve_innertube_config: false,
   retrieve_player: false,
+  // Reusing the visitor id keeps persisted PoTokens valid across page loads.
+  visitor_data: readVisitorData(),
+}).then((client) => {
+  const context = client.session.context as unknown as InnertubeContext
+  storeVisitorData(context.client.visitorData)
+  return client
 })
 
 const innertube = catalogInnertube.then((client) => {
@@ -63,15 +87,41 @@ const innertube = catalogInnertube.then((client) => {
     generate_session_locally: true,
     retrieve_innertube_config: false,
     retrieve_player: true,
+    // Persists the analyzed player script so later loads skip the base.js
+    // download and extraction entirely.
+    cache: new UniversalCache(true),
     visitor_data: context.client.visitorData,
     user_agent: context.client.userAgent,
   })
 })
 
-const extractInitialPlayerResponse = (html: string) => {
+// Warm the botguard/PoToken session as soon as the frame boots (unless a
+// persisted token already covers it) so it overlaps the player download and,
+// on browse-first navigation, finishes before the first video is even opened.
+void catalogInnertube
+  .then((client) => {
+    const context = client.session.context as unknown as InnertubeContext
+    warmPoTokenSession(context, context.client.visitorData)
+  })
+  .catch(() => {})
+
+// The googlevideo edge host that streams end up redirected to is stable across
+// videos, so dial it at frame boot: the first segment request then reuses a
+// live connection instead of paying redirect + TLS setup.
+try {
+  const gvsOrigin = localStorage.getItem(GVS_ORIGIN_KEY)
+  if (gvsOrigin) {
+    void egressFetch(`${gvsOrigin}/generate_204`, { method: 'GET' })
+      .then((response) => response.body?.cancel())
+      .catch(() => {})
+  }
+} catch {}
+
+const scanInitialPlayerResponse = (html: string): Record<string, unknown> | undefined => {
   const marker = html.indexOf('ytInitialPlayerResponse')
-  if (marker < 0) throw new Error('youtube: player response is missing')
+  if (marker < 0) return undefined
   const start = html.indexOf('{', marker)
+  if (start < 0) return undefined
   let depth = 0
   let quoted = false
   let escaped = false
@@ -85,10 +135,41 @@ const extractInitialPlayerResponse = (html: string) => {
     else if (character === '{') depth += 1
     else if (character === '}' && --depth === 0) return JSON.parse(html.slice(start, index + 1)) as Record<string, unknown>
   }
-  throw new Error('youtube: player response is incomplete')
+  return undefined
 }
 
-const registerPlayback = async (raw: Record<string, unknown>, nonce: string, formats: YoutubeFormat[]) => {
+const extractInitialPlayerResponse = (html: string) => {
+  const parsed = scanInitialPlayerResponse(html)
+  if (!parsed) throw new Error('youtube: player response is missing')
+  return parsed
+}
+
+// The player response sits early in the watch page, well before the bulk of
+// the document (ytInitialData, UI payload): parse it incrementally off the
+// stream and drop the rest of the transfer as soon as it closes.
+const fetchInitialPlayerResponse = async (videoId: string) => {
+  const response = await fetch(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`)
+  const reader = response.body?.getReader()
+  if (!reader) return extractInitialPlayerResponse(await response.text())
+  const decoder = new TextDecoder()
+  let html = ''
+  for (;;) {
+    const chunk = await reader.read()
+    if (chunk.done) break
+    html += decoder.decode(chunk.value, { stream: true })
+    const parsed = scanInitialPlayerResponse(html)
+    if (parsed) {
+      void reader.cancel().catch(() => {})
+      return parsed
+    }
+  }
+  html += decoder.decode()
+  return extractInitialPlayerResponse(html)
+}
+
+type BeaconFormat = Pick<YoutubeFormat, 'itag' | 'has_audio' | 'has_video'>
+
+const registerPlayback = async (raw: Record<string, unknown>, nonce: string, formats: BeaconFormat[]) => {
   const base = (raw as {
     playbackTracking?: { videostatsPlaybackUrl?: { baseUrl?: string } }
   }).playbackTracking?.videostatsPlaybackUrl?.baseUrl
@@ -101,7 +182,21 @@ const registerPlayback = async (raw: Record<string, unknown>, nonce: string, for
   if (audio) url.searchParams.set('afmt', String(audio.itag))
   if (video) url.searchParams.set('fmt', String(video.itag))
   const response = await fetch(url, { method: 'POST' })
-  if (!response.ok) throw new Error(`youtube: playback registration returned ${response.status}`)
+  if (!response.ok) console.warn(`youtube: playback registration returned ${response.status}`)
+}
+
+const beaconFormats = (raw: Record<string, unknown>): BeaconFormat[] => {
+  const adaptive = (raw as {
+    streamingData?: { adaptiveFormats?: { itag?: number, mimeType?: string }[] }
+  }).streamingData?.adaptiveFormats ?? []
+  return adaptive.flatMap((format) => {
+    if (!format.itag || !format.mimeType) return []
+    return [{
+      itag: format.itag,
+      has_video: format.mimeType.startsWith('video'),
+      has_audio: format.mimeType.startsWith('audio'),
+    }]
+  })
 }
 
 const playbackFormat = (format: YoutubeFormat): PlaybackFormat | undefined => {
@@ -120,6 +215,7 @@ const playbackFormat = (format: YoutubeFormat): PlaybackFormat | undefined => {
     audioTrackId: format.audio_track?.id,
     language: format.language ?? undefined,
     initRange: format.init_range,
+    indexRange: format.index_range,
   }
 }
 
@@ -133,16 +229,36 @@ export type SabrSource = {
   playbackFormats: PlaybackFormat[]
   clientInfo: Record<string, unknown>
   mint(): Promise<string>
+  recoverMint(): Promise<void>
 }
 
 export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
+  // The watch page depends on nothing else: fetch it while the player client
+  // and botguard session come up. Only the page's /player API alternative is
+  // NOT an option: anonymous /player calls yield preview-tier (~60s) SABR
+  // sessions (see the "past one minute" browser test).
+  const rawPromise = fetchInitialPlayerResponse(videoId)
+  void rawPromise.catch(() => {})
+  // Warm the egress connection to the streaming host as soon as it is known so
+  // the first segment request skips the tunneled TCP+TLS dial.
+  void rawPromise.then((raw) => {
+    const streamingUrl = (raw as {
+      streamingData?: { serverAbrStreamingUrl?: string }
+    }).streamingData?.serverAbrStreamingUrl
+    if (!streamingUrl) return
+    return egressFetch(`${new URL(streamingUrl).origin}/generate_204`, { method: 'GET' })
+      .then((response) => response.body?.cancel())
+  }).catch(() => {})
   const catalogClient = await catalogInnertube
-  const preparedPoToken = preparePoToken(catalogClient.session.context as unknown as InnertubeContext)
-  void preparedPoToken.catch(() => {})
+  const catalogContext = catalogClient.session.context as unknown as InnertubeContext
+  warmPoTokenSession(catalogContext, catalogContext.client.visitorData)
+  const nonce = Utils.generateRandomString(16)
+  // The playback registration beacon is fire-and-forget: it must not gate the
+  // player, and a failed beacon is not worth failing playback over.
+  void rawPromise.then((raw) => registerPlayback(raw, nonce, beaconFormats(raw))).catch(() => {})
   const client = await innertube
   const context = client.session.context as unknown as InnertubeContext
-  const html = await fetch(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`).then((response) => response.text())
-  const raw = extractInitialPlayerResponse(html)
+  const raw = await rawPromise
   const info = new YT.VideoInfo([{ data: raw } as never], client.actions, Utils.generateRandomString(16))
   if (info.playability_status?.status !== 'OK') {
     throw new Error(`youtube: ${info.playability_status?.reason ?? info.playability_status?.status ?? 'not playable'}`)
@@ -157,21 +273,24 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
     responseContext?: { mainAppWebResponseContext?: { datasyncId?: string } }
   }).responseContext?.mainAppWebResponseContext?.datasyncId?.split('||')[0]
   const allowedFormats = new Set(rawFormats.map((format) => format.itag))
-  const nonce = Utils.generateRandomString(16)
   const [manifest, decipheredUrl] = await Promise.all([
     info.toDash({
       format_filter: (format: YoutubeFormat) => !allowedFormats.has(format.itag),
       manifest_options: { is_sabr: true, include_thumbnails: false },
     } as never),
     client.session.player!.decipher(streaming.server_abr_streaming_url),
-    registerPlayback(raw, nonce, rawFormats),
-    preparedPoToken,
   ])
   const url = new URL(decipheredUrl)
   url.searchParams.set('alr', 'yes')
   url.searchParams.set('cpn', nonce)
   const ustreamerConfig = info.player_config?.media_common_config?.media_ustreamer_request_config?.video_playback_ustreamer_config
   if (!ustreamerConfig) throw new Error('youtube: ustreamer configuration is missing')
+  // Session-bound tokens attach to the datasync id (signed in) or the visitor
+  // id, never the video id, so they stay reusable across videos and reloads.
+  const mintIdentifier = datasyncId ?? context.client.visitorData
+  // The boot-time warmup keyed on visitor data; re-check under the identifier
+  // playback will actually mint with (differs when signed in).
+  warmPoTokenSession(context, mintIdentifier)
   return {
     videoId,
     durationMs: Number(info.basic_info?.duration ?? 0) * 1_000,
@@ -186,6 +305,7 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
       osName: context.client.osName,
       osVersion: context.client.osVersion,
     },
-    mint: () => mintPoToken(datasyncId ?? videoId, context),
+    mint: () => mintPoToken(mintIdentifier, context),
+    recoverMint: () => recoverPoTokenSession(context),
   }
 }

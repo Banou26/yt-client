@@ -14,7 +14,7 @@ import type { SabrSource } from './innertube'
 import { SabrStreamingAdapter, SabrUmpProcessor } from 'googlevideo/sabr-streaming-adapter'
 import { MediaHeader, UMPPartId, VideoPlaybackAbrRequest } from 'googlevideo/protos'
 import { FormatKeyUtils } from 'googlevideo/utils'
-import { resetPoTokenSession } from './botguard'
+import { GVS_ORIGIN_KEY } from './innertube'
 import { egressFetch } from './egress'
 
 type AdapterState = {
@@ -296,10 +296,12 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     const sabrFormat = byKey.get(segment.formatKey)
     if (!sabrFormat) return
     if (segment.header.isInitSeg) {
-      state.cache?.setInitSegment(
-        FormatKeyUtils.createSegmentCacheKey(segment.header, sabrFormat),
-        segment.data,
-      )
+      const cacheKey = FormatKeyUtils.createSegmentCacheKey(segment.header, sabrFormat)
+      // A combined init+index blob may already be cached; never shrink it.
+      const existing = bytes(state.cache?.getInitSegment(cacheKey))
+      if (!existing || existing.byteLength < segment.data.byteLength) {
+        state.cache?.setInitSegment(cacheKey, segment.data)
+      }
       notifyCacheChange()
       return
     }
@@ -358,6 +360,10 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
   }
 
   let chain: Promise<unknown> = Promise.resolve()
+  // Where init requests fork from: the last serial (media/select) operation.
+  // Inits run parallel to each other but never overtake pending media work,
+  // since a format switch inside an init cancels the harvest media relies on.
+  let serialTail: Promise<unknown> = Promise.resolve()
 
   const selectFormat = (track: 'audio' | 'video', key: string) => {
     const formats = track === 'video' ? videoFormats : audioFormats
@@ -383,6 +389,7 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     progress: (phase: string) => void,
     signal?: AbortSignal,
     attempt = 0,
+    dualTrack = false,
   ): Promise<ExecutedResponse> => {
     if (signal?.aborted) throw signal.reason
     const request: PlayerHttpRequest = {
@@ -411,7 +418,7 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
       decoded.clientAbrState.clientViewportHeight = state.snapshot.viewportHeight
       decoded.clientAbrState.av1QualityThreshold = 1_080
       const cachedTracks = new Set(Array.from(mediaCache.values(), (segment) => segment.track))
-      if (init && state.audio && state.video && cachedTracks.size < 2) {
+      if (init && dualTrack && state.audio && state.video && cachedTracks.size < 2) {
         decoded.clientAbrState.enabledTrackTypesBitfield = 0
         decoded.clientAbrState.audioTrackId = state.audio.audioTrackId
         decoded.clientAbrState.drcEnabled = state.audio.isDrc ?? false
@@ -444,11 +451,11 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     if (response.status === 403 && attempt === 0) {
       await response.body?.cancel()
       progress('token-reset')
-      await resetPoTokenSession()
-      return execute(url, requestHeaders, startTimeMs, init, generation, progress, signal, attempt + 1)
+      await source.recoverMint()
+      return execute(url, requestHeaders, startTimeMs, init, generation, progress, signal, attempt + 1, dualTrack)
     }
     if (!response.ok) {
-      if (response.status === 403) await resetPoTokenSession()
+      if (response.status === 403) await source.recoverMint()
       throw refreshError(`youtube: segment returned ${response.status}`)
     }
     const processor = new SabrUmpProcessor(metadata, state.cache ?? undefined)
@@ -510,6 +517,8 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
         generation,
         progress,
         signal,
+        0,
+        dualTrack,
       ),
       metadata,
       elapsedMs: performance.now() - started,
@@ -554,12 +563,80 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     return output
   }
 
+  const initFetches = new Map<string, Promise<Uint8Array>>()
+  // Init blob fetches are shared between requesters, so they must not die with
+  // any single requester's signal, only with the session itself.
+  const closeController = new AbortController()
+
+  const initCacheKey = (formatKey: string) => {
+    const sabrFormat = byKey.get(formatKey)
+    return sabrFormat && FormatKeyUtils.createSegmentCacheKey({
+      itag: sabrFormat.itag,
+      xtags: sabrFormat.xtags,
+      isInitSeg: true,
+    } as never, sabrFormat)
+  }
+
+  // Fetches the whole init+index head of a format in one round trip and caches
+  // it, so Shaka's separate init and SegmentBase index requests share a single
+  // fetch instead of two serial ones.
+  const fetchInitBlob = async (
+    track: 'audio' | 'video',
+    format: PlaybackFormat,
+    startTimeMs: number,
+    generation: number,
+    progress: (phase: string) => void,
+    dualTrack: boolean,
+    attempt = 0,
+  ): Promise<Uint8Array> => {
+    const end = Math.max(format.initRange.end, format.indexRange?.end ?? 0)
+    const response = await execute(
+      `sabr://${track}?key=${encodeURIComponent(format.key)}`,
+      { Range: `bytes=0-${end}` },
+      startTimeMs,
+      true,
+      generation,
+      progress,
+      closeController.signal,
+      0,
+      dualTrack,
+    )
+    const data = bytes(response.data)
+    if (data?.byteLength) {
+      const cacheKey = initCacheKey(format.key)
+      if (cacheKey) {
+        const existing = bytes(state.cache?.getInitSegment(cacheKey))
+        if (!existing || existing.byteLength < data.byteLength) state.cache?.setInitSegment(cacheKey, data)
+        notifyCacheChange()
+      }
+      try {
+        // Remember the redirected edge host so the next load dials it at boot.
+        if (response.url.includes('googlevideo.com')) localStorage.setItem(GVS_ORIGIN_KEY, new URL(response.url).origin)
+      } catch {}
+      return data
+    }
+    if (response.metadata.streamInfo?.reloadPlaybackContext) throw refreshError(`youtube: ${describeNoMedia(response)}`)
+    if (attempt + 1 < MAX_SEGMENT_ATTEMPTS) {
+      const streamStatus = response.metadata.streamInfo?.streamProtectionStatus?.status
+      if (streamStatus === 3) await source.recoverMint()
+      const serverBackoff = response.metadata.streamInfo?.nextRequestPolicy?.backoffTimeMs ?? 0
+      progress('retry')
+      await wait(Math.min(2_000, Math.max(serverBackoff, 200 * 2 ** attempt)), closeController.signal)
+      return fetchInitBlob(track, format, startTimeMs, generation, progress, dualTrack, attempt + 1)
+    }
+    throw refreshError(`youtube: ${describeNoMedia(response)} after ${MAX_SEGMENT_ATTEMPTS} attempts`)
+  }
+
   const requestSegment = (
     request: SegmentRequest,
     progress: (phase: string) => void = () => {},
     signal?: AbortSignal,
   ) => {
-    const run = chain.then(async () => {
+    // Init and index requests are plain byte-range reads: they run concurrently
+    // across tracks, while media requests keep the strict session ordering and
+    // wait for every launched init fetch.
+    const base = request.kind === 'init' ? serialTail : chain
+    const run = base.then(async () => {
       if (signal?.aborted) throw signal.reason
       state.snapshot = request.snapshot
       const currentFormat = request.track === 'video' ? videoFormat : audioFormat
@@ -570,12 +647,7 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
       const range = requestedRange ? `bytes=${requestedRange.start}-${requestedRange.end}` : undefined
       const getCachedSegment = (): SegmentEnvelope | undefined => {
         if (request.kind === 'init' && requestedRange) {
-          const sabrFormat = byKey.get(format.key)
-          const cacheKey = sabrFormat && FormatKeyUtils.createSegmentCacheKey({
-            itag: sabrFormat.itag,
-            xtags: sabrFormat.xtags,
-            isInitSeg: true,
-          } as never, sabrFormat)
+          const cacheKey = initCacheKey(format.key)
           const cached = cacheKey ? bytes(state.cache?.getInitSegment(cacheKey)) : undefined
           if (!cached || requestedRange.end >= cached.byteLength) return
           return {
@@ -666,7 +738,7 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
           : describeNoMedia(response)
         if (response.metadata.streamInfo?.reloadPlaybackContext) throw refreshError(`youtube: ${reason}`)
         if (attempt + 1 < MAX_SEGMENT_ATTEMPTS) {
-          if (streamStatus === 3) await resetPoTokenSession()
+          if (streamStatus === 3) await source.recoverMint()
           const serverBackoff = response.metadata.streamInfo?.nextRequestPolicy?.backoffTimeMs ?? 0
           progress('retry')
           await wait(Math.min(2_000, Math.max(serverBackoff, 200 * 2 ** attempt)), signal)
@@ -674,9 +746,45 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
         }
         throw refreshError(`youtube: ${reason} after ${MAX_SEGMENT_ATTEMPTS} attempts`)
       }
+      if (request.kind === 'init' && requestedRange) {
+        const cached = getCachedSegment()
+        if (cached) return cached
+        let blobPromise = initFetches.get(format.key)
+        if (!blobPromise) {
+          // Only the first concurrent init fetch asks the server to push both
+          // tracks' opening segments; the others stay range-only.
+          const wantDual = initFetches.size === 0
+          blobPromise = fetchInitBlob(request.track, format, request.startTimeMs, request.generation, progress, wantDual)
+          initFetches.set(format.key, blobPromise)
+          void blobPromise.catch(() => {}).finally(() => {
+            if (initFetches.get(format.key) === blobPromise) initFetches.delete(format.key)
+          })
+        }
+        const blob = await withAbort(blobPromise, signal)
+        if (requestedRange.end < blob.byteLength) {
+          return {
+            generation: request.generation,
+            track: request.track,
+            kind: request.kind,
+            formatKey: format.key,
+            mimeType: format.mimeType,
+            elapsedMs: 0,
+            end: false as const,
+            data: blob.slice(requestedRange.start, requestedRange.end + 1).buffer as ArrayBuffer,
+          } satisfies SegmentEnvelope
+        }
+        // The blob came back shorter than the requested range: fall back to a
+        // direct ranged fetch rather than serving truncated bytes.
+        return fetchSegment()
+      }
       return fetchSegment()
     })
-    chain = run.catch(() => {})
+    if (request.kind === 'init') {
+      chain = Promise.allSettled([chain, run]).then(() => {})
+    } else {
+      chain = run.catch(() => {})
+      serialTail = chain
+    }
     return run
   }
 
@@ -691,6 +799,8 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     selectVideoFormat: (key: string) => selectFormat('video', key),
     selectAudioFormat: (key: string) => selectFormat('audio', key),
     close: () => {
+      closeController.abort(new Error('youtube: playback session closed'))
+      initFetches.clear()
       void cancelActiveHarvest()
       mediaCache.clear()
       mediaCacheBytes = 0
