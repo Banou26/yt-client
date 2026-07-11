@@ -2,16 +2,23 @@ type Channel {
   id: ID!
   name: String!
   avatar: String
+  handle: String
+  subscriberCountText: String
+  videoCountText: String
+  banner: String
+  description: String
 }
 
 type Video {
   id: ID!
   title: String!
   description: String
+  descriptionSnippet: String
   thumbnail: String
   durationSeconds: Int
   viewCount: String
   publishedText: String
+  isLive: Boolean
   channel: Channel
 }
 
@@ -25,9 +32,40 @@ type ChannelPage {
   videos: VideoPage!
 }
 
+type WatchMeta {
+  id: ID!
+  title: String
+  viewCountText: String
+  publishedDateText: String
+  likeCountText: String
+  commentCountText: String
+  description: String
+  channel: Channel
+  related: [Video!]!
+}
+
+type Comment {
+  id: ID!
+  author: Channel
+  text: String!
+  publishedText: String
+  likeCountText: String
+  replyCount: Int
+  isPinned: Boolean
+  isHearted: Boolean
+}
+
+type CommentPage {
+  items: [Comment!]!
+  cursor: String
+  disabled: Boolean
+}
+
 type Query {
   home(cursor: String): VideoPage!
   search(query: String!, cursor: String): VideoPage!
   video(id: ID!): Video
   channel(id: ID!, cursor: String): ChannelPage!
+  watch(id: ID!): WatchMeta
+  comments(videoId: ID!, cursor: String): CommentPage!
 }

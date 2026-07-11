@@ -52,6 +52,8 @@ const api = {
   search: source.search,
   video: source.video,
   channel: source.channel,
+  watch: source.watch,
+  comments: source.comments,
   openPlayback: async (videoId, maxHeight) => {
     const id = `playback:${++sessionId}`
     const player = createSabrSession(await getSabrSource(videoId), maxHeight)
@@ -155,6 +157,8 @@ const dispatch = (request: FrameRequest) => {
     case 'search': return api.search(...request.args)
     case 'video': return api.video(...request.args)
     case 'channel': return api.channel(...request.args)
+    case 'watch': return api.watch(...request.args)
+    case 'comments': return api.comments(...request.args)
     case 'openPlayback': return api.openPlayback(...request.args)
     case 'requestSegment': return api.requestSegment(...request.args)
     case 'cancelSegment': return api.cancelSegment(...request.args)

@@ -36,4 +36,6 @@ export const sourceApi = {
   search: async (query: string, cursor?: string) => callSource((api) => api.search(query, cursor), cursor === undefined),
   video: async (id: string) => callSource((api) => api.video(id)),
   channel: async (id: string, cursor?: string) => callSource((api) => api.channel(id, cursor), cursor === undefined),
+  watch: async (id: string) => callSource((api) => api.watch(id)),
+  comments: async (videoId: string, cursor?: string) => callSource((api) => api.comments(videoId, cursor), cursor === undefined),
 } satisfies SourceApi

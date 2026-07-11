@@ -8,29 +8,41 @@ import { startEngine } from './scramjet/client'
 import { setSource } from './sources/runtime'
 
 const globalStyles = css`
+  @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+
   :root {
     color-scheme: dark;
-    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-    background: #090a0c;
-    color: #f4f3ef;
+  }
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
   }
 
   * {
-    box-sizing: border-box;
+    scrollbar-width: thin;
+    scrollbar-color: #717171 transparent;
+  }
+
+  html {
+    font-size: 62.5%;
   }
 
   html,
   body,
   #app {
     min-height: 100%;
-    margin: 0;
   }
 
   body {
     min-width: 320px;
-    background:
-      radial-gradient(circle at 15% 0%, rgba(255, 78, 45, 0.12), transparent 35rem),
-      #090a0c;
+    font-family: 'Roboto', Arial, sans-serif;
+    font-size: 1.4rem;
+    background-color: #0f0f0f;
+    color: #f1f1f1;
   }
 
   button,
@@ -41,6 +53,10 @@ const globalStyles = css`
   a {
     color: inherit;
     text-decoration: none;
+  }
+
+  ul {
+    list-style: none;
   }
 `
 

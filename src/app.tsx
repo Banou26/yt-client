@@ -1,69 +1,112 @@
-import type { TargetedSubmitEvent } from 'preact'
-
 import { css } from '@emotion/react'
-import { Link, Route, Switch } from 'wouter'
+import { useCallback, useEffect, useState } from 'preact/hooks'
+import { Route, Switch, useLocation } from 'wouter'
 
+import Guide from './components/guide'
+import Header from './components/header'
 import ChannelPage from './routes/channel'
 import HomePage from './routes/home'
 import SearchPage from './routes/search'
 import WatchPage from './routes/watch'
 
-const shell = css`
-  width: min(1480px, 100%);
+const style = css`
   min-height: 100vh;
-  margin: 0 auto;
-  padding: 24px clamp(18px, 4vw, 58px) 64px;
-`
 
-const header = css`
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 42px;
-`
+  .content {
+    padding-top: 5.6rem;
+  }
 
-const logo = css`
-  font-size: 1.2rem;
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-`
+  .page {
+    min-width: 0;
+  }
 
-const search = css`
-  width: min(520px, 58vw);
-  padding: 11px 16px;
-  border: 1px solid #2a2d33;
-  border-radius: 999px;
-  outline: none;
-  background: rgba(16, 18, 22, 0.88);
-  color: inherit;
+  .page.guide-expanded {
+    margin-left: 24rem;
+  }
 
-  &:focus {
-    border-color: #ff6648;
+  .page.guide-mini {
+    margin-left: 7.2rem;
+  }
+
+  .not-found {
+    padding: 2.4rem 1.6rem;
+    color: #aaaaaa;
   }
 `
 
-const App = () => (
-  <div css={shell}>
-    <header css={header}>
-      <Link href="/" css={logo}>yt-client</Link>
-      <form action="/search" onSubmit={(event: TargetedSubmitEvent<HTMLFormElement>) => {
-        event.preventDefault()
-        const query = new FormData(event.currentTarget).get('q')
-        if (query) location.assign(`/search/${encodeURIComponent(String(query))}`)
-      }}>
-        <input css={search} name="q" type="search" placeholder="Search videos" aria-label="Search videos" />
-      </form>
-    </header>
-    <Switch>
-      <Route path="/" component={HomePage} />
-      <Route path="/search/:query" component={SearchPage} />
-      <Route path="/watch/:videoId" component={WatchPage} />
-      <Route path="/channel/:channelId" component={ChannelPage} />
-      <Route>Not found</Route>
-    </Switch>
-  </div>
-)
+const GUIDE_COLLAPSED_KEY = 'yt-client:guide-collapsed'
+
+const readGuideCollapsed = () => {
+  try {
+    return localStorage.getItem(GUIDE_COLLAPSED_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+const useMediaQuery = (query: string) => {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches)
+  useEffect(() => {
+    const media = window.matchMedia(query)
+    const onChange = () => setMatches(media.matches)
+    media.addEventListener('change', onChange)
+    setMatches(media.matches)
+    return () => media.removeEventListener('change', onChange)
+  }, [query])
+  return matches
+}
+
+export const App = () => {
+  const [location] = useLocation()
+  const [collapsed, setCollapsed] = useState(readGuideCollapsed)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const narrow = useMediaQuery('(max-width: 1312px)')
+  const tiny = useMediaQuery('(max-width: 792px)')
+
+  const isWatch = location.startsWith('/watch')
+  const overlayOnly = isWatch || tiny
+  const guideVariant = overlayOnly ? undefined : collapsed || narrow ? 'mini' as const : 'expanded' as const
+
+  useEffect(() => setDrawerOpen(false), [location])
+
+  const onMenu = useCallback(() => {
+    // watch has no in-flow guide, and narrow widths force the mini rail —
+    // in both cases the hamburger opens the overlay drawer instead.
+    if (isWatch || tiny || narrow) {
+      setDrawerOpen(open => !open)
+      return
+    }
+    setCollapsed(value => {
+      const next = !value
+      try {
+        localStorage.setItem(GUIDE_COLLAPSED_KEY, String(next))
+      } catch {
+        // storage unavailable — keep in-memory state only
+      }
+      return next
+    })
+  }, [isWatch, tiny, narrow])
+
+  return (
+    <div css={style}>
+      <Header onMenu={onMenu} />
+      <div className='content'>
+        {guideVariant ? <Guide variant={guideVariant} /> : undefined}
+        <div className={guideVariant ? `page guide-${guideVariant}` : 'page'}>
+          <Switch>
+            <Route path='/' component={HomePage} />
+            <Route path='/search/:query' component={SearchPage} />
+            <Route path='/watch/:videoId' component={WatchPage} />
+            <Route path='/channel/:channelId' component={ChannelPage} />
+            <Route>
+              <p className='not-found'>Not found</p>
+            </Route>
+          </Switch>
+        </div>
+      </div>
+      {(overlayOnly || narrow) && drawerOpen ? <Guide variant='drawer' onClose={() => setDrawerOpen(false)} /> : undefined}
+    </div>
+  )
+}
 
 export default App
