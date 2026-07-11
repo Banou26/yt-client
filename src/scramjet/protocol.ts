@@ -30,6 +30,7 @@ export const OPEN_SIGNIN = 'open-signin'
 export const CLOSE_SIGNIN = 'close-signin'
 export const CLEAR_COOKIES = 'clear-cookies'
 export const SIGNIN_STATUS = 'signin-status'
+export const SIGNIN_LOADED = 'signin-loaded'
 export const COOKIES_CLEARED = 'cookies-cleared'
 
 export type HostControlRequest = {
@@ -44,6 +45,8 @@ export type HostControlRequest = {
 export type HostControlEvent = {
   type: typeof SIGNIN_STATUS
   signedIn: boolean
+} | {
+  type: typeof SIGNIN_LOADED
 } | {
   type: typeof COOKIES_CLEARED
   id: number

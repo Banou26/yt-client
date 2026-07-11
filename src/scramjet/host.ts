@@ -6,11 +6,16 @@ import { Tap } from '@mercuryworkshop/scramjet'
 import { Controller } from '@mercuryworkshop/scramjet-controller'
 import { expose } from 'osra'
 
-import { CLEAR_COOKIES, CLOSE_SIGNIN, COOKIES_CLEARED, EGRESS_KEY, ENGINE_READY, OPEN_SIGNIN, SIGNIN_STATUS } from './protocol'
+import { CLEAR_COOKIES, CLOSE_SIGNIN, COOKIES_CLEARED, EGRESS_KEY, ENGINE_READY, OPEN_SIGNIN, SIGNIN_LOADED, SIGNIN_STATUS } from './protocol'
 import { FRAME_CONNECT, FRAME_EGRESS_CONNECT } from '../frame/protocol'
 import { createFknTransport, FRAME_BOOTSTRAP_URL } from './fkn-transport'
 
-const SIGN_IN_URL = 'https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F&hl=en'
+// Start on youtube.com and let ITS Sign in button carry the flow to Google.
+// Going straight to accounts.google.com leaves the login underconfigured (the
+// Next/password step silently no-ops); the passive-mode button URL just bounces
+// back. Loading youtube.com first is the recipe that actually completes.
+const SIGN_IN_URL = 'https://www.youtube.com/'
+const YOUTUBE_ORIGIN = 'https://www.youtube.com/'
 
 type FrameWindow = Window & {
   [FRAME_CONNECT]?: (port: MessagePort) => void
@@ -101,19 +106,39 @@ const boot = async () => {
   let signInElement: HTMLIFrameElement | undefined
   let signInPoll: ReturnType<typeof setInterval> | undefined
 
-  const signInComplete = (element: HTMLIFrameElement, prefix: string) => {
-    // The proxied frame is same-origin: its path is the frame prefix plus the
-    // codec-encoded target URL, so decode it to see whether the login flow has
-    // navigated back to youtube.com.
+  // Whether the proxied frame has painted a real document. Scramjet drives
+  // navigation through the service worker, so neither the iframe `load` event
+  // nor its location are reliable — detect content directly: about:blank has an
+  // empty body, a rendered login page has real structure.
+  const signInRendered = (element: HTMLIFrameElement) => {
     try {
-      const path = element.contentWindow?.location.pathname ?? ''
-      if (!path.startsWith(prefix)) return false
-      if (!controller.config.codec.decode(path.slice(prefix.length)).startsWith('https://www.youtube.com/')) return false
+      const doc = element.contentDocument
+      return !!doc && doc.readyState !== 'loading' && (doc.body?.childElementCount ?? 0) > 2
     } catch {
       return false
     }
+  }
+
+  // The frame's decoded target URL, or '' if unreadable.
+  const signInTarget = (element: HTMLIFrameElement, prefix: string) => {
+    try {
+      const path = element.contentWindow?.location.pathname ?? ''
+      if (!path.startsWith(prefix)) return ''
+      return controller.config.codec.decode(path.slice(prefix.length))
+    } catch {
+      return ''
+    }
+  }
+
+  const signInComplete = (element: HTMLIFrameElement, prefix: string) => {
+    // SAPISID in the shared jar is the definitive "logged in" signal — Google
+    // only sets it after a successful auth, at which point it redirects back to
+    // youtube.com. Gate on it, and only hold off if the frame is still visibly
+    // on an accounts.google.com page (mid-flow); if the location is unreadable,
+    // trust the cookie.
     const cookies = controller.cookieJar.getCookies(new URL('https://www.youtube.com/'), false) as string
-    return /(?:^|;\s*)SAPISID=/.test(cookies)
+    if (!/(?:^|;\s*)SAPISID=/.test(cookies)) return false
+    return !signInTarget(element, prefix).startsWith('https://accounts.google.com/')
   }
 
   const destroySignIn = () => {
@@ -140,13 +165,35 @@ const boot = async () => {
     // pages run against the shared cookie jar.
     const proxied = controller.createFrame(element)
     signInElement = element
+    let announcedLoad = false
+    let advanced = false
     const check = () => {
-      if (signInElement !== element || !signInComplete(element, proxied.prefix)) return
+      if (signInElement !== element) return
+      // First rendered proxied document = a page is up; tell the app to drop its
+      // loading overlay.
+      if (!announcedLoad && signInRendered(element)) {
+        announcedLoad = true
+        port.postMessage({ type: SIGNIN_LOADED } satisfies HostControlEvent)
+      }
+      // If routed through youtube.com first, auto-click its own Sign in link (an
+      // <a> whose rewritten href still encodes the ServiceLogin target) once, so
+      // the redirect carries the youtube.com referer. Scoped to youtube.com pages
+      // so it never clicks Google's footer TOS links.
+      if (!advanced && signInTarget(element, proxied.prefix).startsWith(YOUTUBE_ORIGIN)) {
+        try {
+          const link = element.contentDocument?.querySelector<HTMLElement>('a[href*="ServiceLogin"]')
+          if (link) {
+            advanced = true
+            link.click()
+          }
+        } catch {}
+      }
+      if (!signInComplete(element, proxied.prefix)) return
       port.postMessage({ type: SIGNIN_STATUS, signedIn: true } satisfies HostControlEvent)
       destroySignIn()
     }
     element.addEventListener('load', check)
-    signInPoll = setInterval(check, 1_000)
+    signInPoll = setInterval(check, 500)
     proxied.go(SIGN_IN_URL)
   }
 

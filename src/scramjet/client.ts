@@ -1,7 +1,7 @@
 import type { FrameApi, FrameProgress, FrameRequest, FrameResponse } from '../frame/protocol'
 import type { HostControlEvent, HostControlRequest } from './protocol'
 
-import { CLEAR_COOKIES, CLOSE_SIGNIN, COOKIES_CLEARED, ENGINE_READY, OPEN_SIGNIN, SIGNIN_STATUS } from './protocol'
+import { CLEAR_COOKIES, CLOSE_SIGNIN, COOKIES_CLEARED, ENGINE_READY, OPEN_SIGNIN, SIGNIN_LOADED, SIGNIN_STATUS } from './protocol'
 
 let engine: Promise<FrameApi> | undefined
 let engineFrame: HTMLIFrameElement | undefined
@@ -10,7 +10,7 @@ let engineCleanup: (() => void) | undefined
 let engineReject: ((error: Error) => void) | undefined
 let engineGeneration = 0
 let engineControl: MessagePort | undefined
-let signInPending: { resolve: () => void, reject: (error: Error) => void, onStatus?: (signedIn: boolean) => void } | undefined
+let signInPending: { resolve: () => void, reject: (error: Error) => void, onStatus?: (signedIn: boolean) => void, onLoaded?: () => void } | undefined
 // bumped by closeSignIn so an openSignIn parked on startEngine() bails instead
 // of raising an orphaned overlay after the user has navigated away.
 let signInGeneration = 0
@@ -138,6 +138,10 @@ const connectControl = (port: MessagePort) => {
   engineControl = port
   port.addEventListener('message', (event) => {
     const message = event.data as HostControlEvent
+    if (message.type === SIGNIN_LOADED) {
+      signInPending?.onLoaded?.()
+      return
+    }
     if (message.type === SIGNIN_STATUS) {
       const pending = signInPending
       pending?.onStatus?.(message.signedIn)
@@ -220,7 +224,9 @@ export const startEngine = () => {
 
 export const resetEngine = () => invalidateEngine(engineGeneration, new Error('yt-client: engine reset'))
 
-export const openSignIn = async (onStatus?: (signedIn: boolean) => void) => {
+export const openSignIn = async (
+  { onStatus, onLoaded }: { onStatus?: (signedIn: boolean) => void, onLoaded?: () => void } = {},
+) => {
   // capture the generation BEFORE the engine await: a closeSignIn issued while
   // the engine is still booting must cancel this open instead of letting it
   // raise the overlay over whatever route the user navigated to.
@@ -232,7 +238,7 @@ export const openSignIn = async (onStatus?: (signedIn: boolean) => void) => {
   showHostFrame()
   engineControl.postMessage({ type: OPEN_SIGNIN } satisfies HostControlRequest)
   await new Promise<void>((resolve, reject) => {
-    signInPending = { resolve, reject, onStatus }
+    signInPending = { resolve, reject, onStatus, onLoaded }
   })
 }
 

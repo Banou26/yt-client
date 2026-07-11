@@ -57,7 +57,10 @@ export const createFknTransport = (remote: Promise<Pick<EgressApi, 'fknFetch'>>)
       // advances. Promote that soft redirect to a hard 302 so scramjet rewrites
       // it and the login flow proceeds. Scoped to Google auth hosts so the
       // latency-tuned youtube playback/metadata path is untouched.
-      if (AUTH_HOST.test(url.hostname) && response.status >= 200 && response.status < 300) {
+      // Only navigations get the soft-redirect promotion; XHR/fetch (the login
+      // flow's batchexecute calls) must pass through untouched.
+      const isNavigation = (requestHeaders['sec-fetch-dest'] ?? requestHeaders['Sec-Fetch-Dest']) === 'document'
+      if (isNavigation && AUTH_HOST.test(url.hostname) && response.status >= 200 && response.status < 300) {
         const location = response.headers.find(([key]) => key.toLowerCase() === 'location')?.[1]
         if (location) return { status: 302, statusText: 'Found', headers: [['location', location]], body: new ArrayBuffer(0) }
       }
