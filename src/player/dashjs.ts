@@ -42,6 +42,22 @@ export const startDashPlayback = async ({ api, video, videoId, startTime, signal
   const blobUrls = new Set<string>()
 
   const player = dashjs.MediaPlayer().create()
+  // Match the initial (and ongoing) quality to the player size, like Shaka's
+  // abr.restrictToElementSize — otherwise dash.js grabs a huge 4K/AV1 first
+  // segment and first-frame balloons.
+  player.updateSettings({
+    streaming: {
+      abr: {
+        limitBitrateByPortal: true,
+        usePixelRatioInLimitBitrateByPortal: true,
+      },
+      buffer: {
+        // Start playback as soon as the first segment is decodable instead of
+        // over-buffering first (Shaka used rebufferingGoal:0 for the same effect).
+        initialBufferLevel: 1,
+      },
+    },
+  })
 
   const interceptor = async (req: { url: string, headers?: Record<string, string>, range?: unknown, customData?: { request?: { mediaStartTime?: number | null, range?: unknown } } }) => {
     let host = ''
