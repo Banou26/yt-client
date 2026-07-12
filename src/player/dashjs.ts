@@ -1,10 +1,12 @@
 import type { FrameApi } from '../frame/protocol'
 
-// Route A probe: play yt-client's SABR-via-frame stream through dash.js (no Shaka).
-// The frame produces a SegmentBase DASH manifest whose BaseURLs are sabr://<track>?key=<fmt>;
-// we rewrite those to https://sabr.invalid/<track>?key=<fmt> so dash.js resolves them, then a
-// request interceptor turns each segment request into a FrameApi.requestSegment call and hands
-// dash.js the bytes back via a blob URL.
+// Play yt-client's SABR-via-frame stream through dash.js (no Shaka). The frame
+// emits a SegmentBase DASH manifest whose base URLs are sabr://<track>?key=<fmt>.
+// We (1) rewrite it to a time-based SegmentTemplate so dash.js drops its eager
+// per-representation sidx indexing (~20 fetches → 3), and rewrite sabr:// →
+// https://sabr.invalid/ so dash.js resolves the URLs; then (2) a request
+// interceptor turns each segment request into a FrameApi.requestSegment call and
+// hands dash.js the bytes back via a blob URL.
 import * as dashjs from 'dashjs'
 
 type Args = {
@@ -16,11 +18,14 @@ type Args = {
   onError(error: unknown): void
 }
 
-const rangeFrom = (value: unknown): { start: number, end: number } | undefined => {
-  if (typeof value !== 'string') return undefined
-  const m = value.match(/(\d+)-(\d+)/)
-  return m ? { start: Number(m[1]), end: Number(m[2]) } : undefined
-}
+// SegmentBase (sidx byte-ranges) → time-based SegmentTemplate. Segments are ~5s
+// and the frame returns the covering segment for any startMs, so an approximate
+// template duration is fine — the interceptor keys the time off dash.js's
+// per-segment mediaStartTime, not the nominal duration.
+const toTemplate = (xml: string) => xml.replace(
+  /<BaseURL>(sabr:\/\/[^<]+)<\/BaseURL>\s*<SegmentBase[^>]*>\s*<Initialization[^>]*\/>\s*<\/SegmentBase>/g,
+  (_m, base) => `<SegmentTemplate initialization="${base}&init" media="${base}&sq=$Number$" duration="5000" timescale="1000" startNumber="1"/>`,
+)
 
 export const startDashPlayback = async ({ api, video, videoId, startTime, signal, onError }: Args) => {
   if (signal.aborted) throw signal.reason
@@ -28,18 +33,17 @@ export const startDashPlayback = async ({ api, video, videoId, startTime, signal
   const session = await api.openPlayback(videoId, maxHeight)
   if (signal.aborted) throw signal.reason
 
-  const manifestXml = session.manifest.replaceAll('sabr://', 'https://sabr.invalid/')
+  const manifestXml = toTemplate(session.manifest).replaceAll('sabr://', 'https://sabr.invalid/')
   const manifestUrl = URL.createObjectURL(new Blob([manifestXml], { type: 'application/dash+xml' }))
 
   let generation = 0
   let requestNumber = 0
-  let logged = 0
   let destroyed = false
   const blobUrls = new Set<string>()
 
   const player = dashjs.MediaPlayer().create()
 
-  const interceptor = async (req: any) => {
+  const interceptor = async (req: { url: string, headers?: Record<string, string>, range?: unknown, customData?: { request?: { mediaStartTime?: number | null, range?: unknown } } }) => {
     let host = ''
     try { host = new URL(req.url).host } catch { return req }
     if (host !== 'sabr.invalid') return req
@@ -48,21 +52,11 @@ export const startDashPlayback = async ({ api, video, videoId, startTime, signal
       const track = (u.pathname.replace(/^\//, '') || 'audio') as 'audio' | 'video'
       const formatKey = u.searchParams.get('key') ?? ''
       const fr = req.customData?.request ?? {}
-      const rangeStr = fr.range ?? req.headers?.Range ?? req.headers?.range ?? req.range
-      // dash.js labels SegmentBase index fetches 'MediaSegment' too; the real signal is
-      // mediaStartTime — null on the init/sidx byte-range reads, set on actual media.
-      const hasStart = fr.mediaStartTime !== null && fr.mediaStartTime !== undefined && Number.isFinite(Number(fr.mediaStartTime))
+      // dash.js computes mediaStartTime from the SegmentTemplate: null on the init
+      // template fetch, a real time on media segments.
+      const hasStart = fr.mediaStartTime != null && Number.isFinite(Number(fr.mediaStartTime))
       const kind: 'init' | 'media' = hasStart ? 'media' : 'init'
-      const range = rangeFrom(rangeStr)
       const startTimeMs = hasStart ? Math.round(Number(fr.mediaStartTime) * 1000) : 0
-      if (logged < 8) {
-        logged++
-        console.log('[DASHREQ]', JSON.stringify({
-          key: formatKey, action: fr.action, index: fr.index, mediaStartTime: fr.mediaStartTime,
-          duration: fr.duration, mediaType: fr.mediaType, frRange: fr.range, bytesTotal: fr.bytesTotal,
-          partial: fr.isPartialSegmentRequest, derivedKind: kind, derivedStart: startTimeMs,
-        }))
-      }
       const seg = await api.requestSegment({
         requestId: `dash:${++requestNumber}`,
         sessionId: session.id,
@@ -70,7 +64,6 @@ export const startDashPlayback = async ({ api, video, videoId, startTime, signal
         track,
         kind,
         formatKey,
-        range,
         startTimeMs,
         snapshot: {
           currentTimeMs: video.currentTime * 1000,
@@ -80,32 +73,24 @@ export const startDashPlayback = async ({ api, video, videoId, startTime, signal
           viewportHeight: Math.max(1, video.clientHeight),
         },
       })
-      if (seg.end || !seg.data) {
-        console.log('[DASHREQ] no-data', track, kind, 'end=', seg.end)
-        return req
-      }
+      if (seg.end || !seg.data) return req
       const blob = URL.createObjectURL(new Blob([seg.data]))
       blobUrls.add(blob)
       req.url = blob
-      // Strip every range hint so dash.js reads the whole blob (= exactly this segment).
+      // Strip range hints so dash.js reads the whole blob (= exactly this segment).
       if (req.headers) { delete req.headers.Range; delete req.headers.range }
       req.range = undefined
       if (req.customData?.request) req.customData.request.range = null
       return req
-    } catch (error) {
-      console.log('[DASHREQ] err', (error as Error).message)
+    } catch {
       return req
     }
   }
-  player.addRequestInterceptor(interceptor)
+  player.addRequestInterceptor(interceptor as never)
 
-  player.on('error' as any, (e: any) => {
-    console.log('[DASHERR]', JSON.stringify(e?.error ?? e).slice(0, 500))
+  player.on('error' as never, ((e: { error?: { message?: string, code?: number } }) => {
     if (!destroyed) onError(new Error(`dash: ${e?.error?.message ?? e?.error?.code ?? 'error'}`))
-  })
-  player.on('playbackError' as any, (e: any) => console.log('[DASHPBERR]', JSON.stringify(e).slice(0, 300)))
-  player.on('manifestLoaded' as any, () => console.log('[DASH] manifestLoaded'))
-  player.on('streamInitialized' as any, () => console.log('[DASH] streamInitialized'))
+  }) as never)
 
   const seeking = () => { generation += 1 }
   video.addEventListener('seeking', seeking)
