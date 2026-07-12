@@ -190,6 +190,30 @@ const fetchInitialPlayerResponse = async (videoId: string) => {
   return extractInitialPlayerResponse(html)
 }
 
+// The watch-page fetch can be kicked as soon as the videoId is known (route
+// resolution), well before the player subtree mounts and calls openPlayback.
+// Memoized by id so getSabrSource reuses the in-flight transfer instead of
+// starting its own ~500ms fetch; getSabrSource consumes-and-evicts it (below).
+const playbackResponseCache = new Map<string, Promise<Record<string, unknown>>>()
+
+export const prefetchInitialPlayerResponse = (videoId: string) => {
+  const cached = playbackResponseCache.get(videoId)
+  if (cached) return cached
+  const promise = fetchInitialPlayerResponse(videoId)
+  playbackResponseCache.set(videoId, promise)
+  // A rejected prefetch must not poison the real open: drop it so getSabrSource
+  // refetches cleanly.
+  promise.catch(() => {
+    if (playbackResponseCache.get(videoId) === promise) playbackResponseCache.delete(videoId)
+  })
+  // Bound the map — only a handful of prefetched-but-unopened ids matter at once.
+  if (playbackResponseCache.size > 6) {
+    const oldest = playbackResponseCache.keys().next().value
+    if (oldest !== undefined && oldest !== videoId) playbackResponseCache.delete(oldest)
+  }
+  return promise
+}
+
 type BeaconFormat = Pick<YoutubeFormat, 'itag' | 'has_audio' | 'has_video'>
 
 const registerPlayback = async (raw: Record<string, unknown>, nonce: string, formats: BeaconFormat[]) => {
@@ -257,10 +281,13 @@ export type SabrSource = {
 
 export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
   // The watch page depends on nothing else: fetch it while the player client
-  // and botguard session come up. Only the page's /player API alternative is
-  // NOT an option: anonymous /player calls yield preview-tier (~60s) SABR
-  // sessions (see the "past one minute" browser test).
-  const rawPromise = fetchInitialPlayerResponse(videoId)
+  // and botguard session come up. Reuse a prefetch fired at route resolution if
+  // one is in flight, then evict — a session refresh / retry re-enters here for
+  // fresh streaming URLs and must not reuse this response. Only the page's
+  // /player API alternative is NOT an option: anonymous /player calls yield
+  // preview-tier (~60s) SABR sessions (see the "past one minute" browser test).
+  const rawPromise = prefetchInitialPlayerResponse(videoId)
+  playbackResponseCache.delete(videoId)
   void rawPromise.catch(() => {})
   // Warm the egress connection to the streaming host as soon as it is known so
   // the first segment request skips the tunneled TCP+TLS dial.

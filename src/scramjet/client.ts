@@ -107,6 +107,7 @@ const createFrameApi = (port: MessagePort, onFatal: (error: Error) => void) => {
       channel: (id, cursor) => call('channel', id, cursor),
       watch: (id) => call('watch', id),
       comments: (videoId, cursor) => call('comments', videoId, cursor),
+      prefetchPlayback: (videoId) => call('prefetchPlayback', videoId),
       openPlayback: (videoId, maxHeight) => call('openPlayback', videoId, maxHeight),
       requestSegment: (request) => call('requestSegment', request),
       cancelSegment: (sessionId, requestId) => call('cancelSegment', sessionId, requestId),

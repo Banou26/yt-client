@@ -4,6 +4,7 @@ import { css } from '@emotion/react'
 import { EllipsisVertical } from 'lucide-react'
 import { Link } from 'wouter'
 
+import { usePrefetchOnIntent } from '../player/prefetch'
 import { formatDuration, formatMeta } from './format'
 
 const style = css`
@@ -115,8 +116,9 @@ export const VideoCardCompact = ({ video }: { video: VideoCardData }) => {
   const watchHref = `/watch/${video.id}`
   const duration = formatDuration(video.durationSeconds)
   const meta = formatMeta(video.viewCount, video.publishedText)
+  const prefetch = usePrefetchOnIntent(video.id)
   return (
-    <article css={style}>
+    <article css={style} {...prefetch}>
       <Link href={watchHref} className='thumb' tabIndex={-1} aria-hidden='true'>
         {video.thumbnail ? <img src={video.thumbnail} alt='' loading='lazy' /> : undefined}
         {video.isLive

@@ -10,6 +10,7 @@ import SubscribeButton from '../components/subscribe-button'
 import { VideoCardCompact, VideoCardCompactSkeleton } from '../components/video-card-compact'
 import { gql } from '../generated'
 import VideoPlayer from '../player/video-player'
+import { prefetchPlayback } from '../player/prefetch'
 
 // one /next round trip serves the whole page (title included) — the /player
 // data rides in with the playback path already, so no video(id) query here.
@@ -228,6 +229,7 @@ const style = css`
 const RELATED_SKELETON_KEYS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 
 const WatchPage = ({ params }: { params: { videoId: string } }) => {
+  prefetchPlayback(params.videoId)
   const [{ data: watchData, error: watchError, fetching: watchFetching }] = useQuery({
     query: WATCH_META_QUERY,
     variables: { id: params.videoId }

@@ -66,6 +66,7 @@ export type SegmentEnvelope = SegmentMetadata & ({
 })
 
 export type FrameApi = SourceApi & {
+  prefetchPlayback(videoId: string): Promise<void>
   openPlayback(videoId: string, maxHeight?: number): Promise<PlaybackSession>
   requestSegment(request: SegmentRequest): Promise<SegmentEnvelope>
   cancelSegment(sessionId: string, requestId: string): Promise<void>
