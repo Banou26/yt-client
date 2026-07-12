@@ -88,8 +88,14 @@ const boot = async () => {
     // absent so every caller falls back to the tunnelled transports. `redirect`
     // is forced to follow: the extension fetches natively (bypassing scramjet's
     // own manual-redirect rewriting), so it resolves redirects itself.
+    let lastEgressMode: boolean | undefined
     const extFetch: ExtEgressFetch = async (url, options, signal) => {
-      if (!isExtensionExposed()) return null
+      const exposed = isExtensionExposed()
+      if (exposed !== lastEgressMode) {
+        lastEgressMode = exposed
+        console.info(`[yt-client] egress → ${exposed ? 'FKN extension (direct native fetch)' : 'FKN relay + webvpn tunnel'}`)
+      }
+      if (!exposed) return null
       const response = await extPlatformFetch(url, {
         method: options.method,
         headers: options.headers,
