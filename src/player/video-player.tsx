@@ -1,9 +1,8 @@
 import { css } from '@emotion/react'
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useRef, useState } from 'preact/hooks'
 
-import { resetEngine, startEngine } from '../scramjet/client'
-import { setSource } from '../sources/runtime'
-import { startShakaPlayback } from './shaka'
+import { resetEngine } from '../scramjet/client'
+import { VideoJsPlayer } from './videojs/video-js-player'
 
 const playerStyle = css`
   width: 100%;
@@ -33,63 +32,32 @@ const playerStyle = css`
 `
 
 const VideoPlayer = ({ videoId }: { videoId: string }) => {
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const resumeAt = useRef(0)
   const [attempt, setAttempt] = useState(0)
-  const [status, setStatus] = useState('Loading Shaka player')
+  const [status, setStatus] = useState('')
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
-    const abort = new AbortController()
-    let controller: Awaited<ReturnType<typeof startShakaPlayback>> | undefined
-    let retryTimer: ReturnType<typeof setTimeout> | undefined
-    const restart = (error: unknown) => {
-      if (abort.signal.aborted || retryTimer !== undefined) return
-      resumeAt.current = video.currentTime
-      if (attempt >= 3) {
-        void controller?.destroy()
-        const message = error instanceof Error ? error.message : String(error)
-        setStatus(`Playback failed: ${message}`)
-        console.error(error)
-        return
-      }
-      const engineFailure = error instanceof Error && error.message.startsWith('youtube:')
-      retryTimer = setTimeout(() => {
-        if (!abort.signal.aborted) {
-          if (engineFailure) resetEngine()
-          setAttempt((value) => value + 1)
-        }
-        // A fast first retry only when the engine is kept: engine rebuilds are
-        // heavy and deserve the old backoff.
-      }, attempt === 0 && !engineFailure ? 100 : 1_000)
+  // The @videojs/react player + dash.js media engine own playback; on a failure we
+  // remount (key=attempt) and, for engine-level failures, rebuild the scramjet
+  // engine first. Bounded to 3 attempts, mirroring the previous Shaka wrapper.
+  const restart = (error: unknown) => {
+    if (retryTimer.current !== undefined) return
+    if (attempt >= 3) {
+      const message = error instanceof Error ? error.message : String(error)
+      setStatus(`Playback failed: ${message}`)
+      console.error(error)
+      return
     }
-    setStatus('Loading Shaka player')
-    void (async () => {
-      const api = await startEngine()
-      setSource(api)
-      controller = await startShakaPlayback({
-        api,
-        video,
-        videoId,
-        startTime: resumeAt.current,
-        signal: abort.signal,
-        onError: restart,
-      })
-      if (!abort.signal.aborted) setStatus('')
-    })().catch((error) => {
-      if (!abort.signal.aborted) restart(error)
-    })
-    return () => {
-      abort.abort()
-      clearTimeout(retryTimer)
-      void controller?.destroy()
-    }
-  }, [attempt, videoId])
+    const engineFailure = error instanceof Error && error.message.startsWith('youtube:')
+    retryTimer.current = setTimeout(() => {
+      retryTimer.current = undefined
+      if (engineFailure) resetEngine()
+      setAttempt((value) => value + 1)
+    }, attempt === 0 && !engineFailure ? 100 : 1_000)
+  }
 
   return (
     <div css={playerStyle}>
-      <video key={attempt} ref={videoRef} controls playsInline preload="auto" />
+      <VideoJsPlayer key={attempt} videoId={videoId} onError={restart} />
       {status && <div class="playback-status">{status}</div>}
     </div>
   )
