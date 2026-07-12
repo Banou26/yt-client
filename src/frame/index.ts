@@ -1,7 +1,7 @@
 import type { FrameApi, FrameProgress, FrameRequest, FrameResponse, SegmentEnvelope } from './protocol'
 
 import { createYoutubeSource } from '../sources/youtube'
-import { catalogInnertube, getSabrSource, hasSessionCookie } from './innertube'
+import { catalogInnertube, getSabrSource, hasSessionCookie, prefetchInitialPlayerResponse } from './innertube'
 import { createSabrSession, isSabrSessionRefreshError } from './sabr'
 import { resetIdentity } from './identity'
 import { FRAME_CONNECT } from './protocol'
@@ -58,6 +58,11 @@ const api = {
   comments: source.comments,
   session: source.session,
   resetIdentity,
+  prefetchPlayback: async (videoId) => {
+    // Kick (and memoize) the watch-page fetch now; openPlayback reuses it. Do
+    // not await — this resolves the moment the transfer is in flight.
+    prefetchInitialPlayerResponse(videoId)
+  },
   openPlayback: async (videoId, maxHeight) => {
     const id = `playback:${++sessionId}`
     const player = createSabrSession(await getSabrSource(videoId), maxHeight)
@@ -165,6 +170,7 @@ const dispatch = (request: FrameRequest) => {
     case 'comments': return api.comments(...request.args)
     case 'session': return api.session(...request.args)
     case 'resetIdentity': return api.resetIdentity(...request.args)
+    case 'prefetchPlayback': return api.prefetchPlayback(...request.args)
     case 'openPlayback': return api.openPlayback(...request.args)
     case 'requestSegment': return api.requestSegment(...request.args)
     case 'cancelSegment': return api.cancelSegment(...request.args)
