@@ -35,12 +35,16 @@ const VideoPlayer = ({ videoId }: { videoId: string }) => {
   const [attempt, setAttempt] = useState(0)
   const [status, setStatus] = useState('')
   const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const resumeAt = useRef(0)
 
   // The @videojs/react player + dash.js media engine own playback; on a failure we
   // remount (key=attempt) and, for engine-level failures, rebuild the scramjet
   // engine first. Bounded to 3 attempts, mirroring the previous Shaka wrapper.
   const restart = (error: unknown) => {
     if (retryTimer.current !== undefined) return
+    // Capture the playhead before the remount so the retry resumes in place.
+    resumeAt.current = videoRef.current?.currentTime || resumeAt.current
     if (attempt >= 3) {
       const message = error instanceof Error ? error.message : String(error)
       setStatus(`Playback failed: ${message}`)
@@ -57,7 +61,7 @@ const VideoPlayer = ({ videoId }: { videoId: string }) => {
 
   return (
     <div css={playerStyle}>
-      <VideoJsPlayer key={attempt} videoId={videoId} onError={restart} />
+      <VideoJsPlayer key={attempt} ref={videoRef} videoId={videoId} startTime={resumeAt.current} onError={restart} />
       {status && <div class="playback-status">{status}</div>}
     </div>
   )
