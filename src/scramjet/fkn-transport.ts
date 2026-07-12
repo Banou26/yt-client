@@ -84,11 +84,28 @@ const createTransport = (ready: () => Promise<void>, egressFetch: EgressFetch): 
   return transport
 }
 
-// The engine transport: all metadata/token traffic over the latency-tuned FKN proxy.
-export const createFknTransport = (remote: Promise<Pick<EgressApi, 'fknFetch'>>): ProxyTransport =>
+// A window-realm fetch (the FKN browser extension's CORS-free native fetch). It
+// returns null when the extension isn't available so the caller falls back.
+export type ExtEgressFetch = (
+  url: string,
+  options: TransportRequest,
+  signal: AbortSignal | undefined,
+) => Promise<TransportResponse | null>
+
+// The engine transport: metadata/token traffic. When the FKN extension is present
+// it goes over the extension's native fetch (direct, no proxy/tunnel round trip);
+// otherwise it falls back to the latency-tuned FKN proxy.
+export const createFknTransport = (
+  remote: Promise<Pick<EgressApi, 'fknFetch'>>,
+  extFetch?: ExtEgressFetch,
+): ProxyTransport =>
   createTransport(
     async () => { await remote },
-    async (url, options) => (await remote).fknFetch(url, options),
+    async (url, options, signal) => {
+      const viaExtension = await extFetch?.(url, options, signal)
+      if (viaExtension) return viaExtension
+      return (await remote).fknFetch(url, options)
+    },
   )
 
 // The sign-in transport: the WHOLE login flow (youtube.com + accounts.google.com)

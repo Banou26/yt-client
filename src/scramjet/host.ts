@@ -9,6 +9,7 @@ import { expose } from 'osra'
 import { CLEAR_COOKIES, CLOSE_SIGNIN, COOKIES_CLEARED, EGRESS_KEY, ENGINE_READY, OPEN_SIGNIN, SIGNIN_LOADED, SIGNIN_STATUS } from './protocol'
 import { FRAME_CONNECT, FRAME_EGRESS_CONNECT } from '../frame/protocol'
 import { createFknTransport, createWebvpnTransport, FRAME_BOOTSTRAP_URL } from './fkn-transport'
+import type { ExtEgressFetch } from './fkn-transport'
 
 // Start on youtube.com and let ITS Sign in button carry the flow to Google.
 // Going straight to accounts.google.com leaves the login underconfigured (the
@@ -72,7 +73,7 @@ const boot = async () => {
   const frameCodePromise = fetch('/__yt_scramjet__/youtube-frame.js').then((response) => response.text())
   const fknLib = import('@fkn/lib')
   stage('egress-worker')
-  const transportReady = Promise.all([loadBroker(), fknLib]).then(async ([, { relayWorker }]) => {
+  const transportReady = Promise.all([loadBroker(), fknLib]).then(async ([, { relayWorker, fetch: extPlatformFetch, isExtensionExposed }]) => {
     relayWorker(worker, { unregisterSignal: relayAbort.signal })
     const channel = new MessageChannel()
     worker.postMessage({ type: EGRESS_KEY, port: channel.port1 }, [channel.port1])
@@ -81,11 +82,33 @@ const boot = async () => {
       key: EGRESS_KEY,
       transport: { receive: channel.port2, emit: channel.port2 },
     })
-    const transport = createFknTransport(remote)
+    // When the FKN extension is present in this (host) window, its native fetch
+    // holds host permissions — a direct, CORS-free request that skips the proxy
+    // broker and the webvpn tunnel entirely. Returns null when the extension is
+    // absent so every caller falls back to the tunnelled transports. `redirect`
+    // is forced to follow: the extension fetches natively (bypassing scramjet's
+    // own manual-redirect rewriting), so it resolves redirects itself.
+    const extFetch: ExtEgressFetch = async (url, options, signal) => {
+      if (!isExtensionExposed()) return null
+      const response = await extPlatformFetch(url, {
+        method: options.method,
+        headers: options.headers,
+        body: options.body ?? undefined,
+        redirect: 'follow',
+        signal: signal ?? undefined,
+      })
+      return {
+        status: response.status,
+        statusText: response.statusText,
+        headers: [...response.headers],
+        body: response.body,
+      }
+    }
+    const transport = createFknTransport(remote, extFetch)
     await transport.init()
-    return { channel, remote, transport }
+    return { channel, remote, transport, extFetch }
   })
-  const [serviceworker, { channel, remote, transport }] = await Promise.all([workerReady, transportReady])
+  const [serviceworker, { channel, remote, transport, extFetch }] = await Promise.all([workerReady, transportReady])
 
   stage('controller')
   const controller = new Controller({
@@ -282,19 +305,36 @@ const boot = async () => {
     frameWindow.$scramerr = () => {}
     const egressChannel = new MessageChannel()
     frameEgressPort = egressChannel.port2
+    // Frame egress (SABR media, botguard attestation, host warms). Prefer the
+    // extension's native CORS-free fetch when present, else the libcurl/webvpn
+    // tunnel. Each in-flight request gets an AbortController so a frame-side
+    // cancel (e.g. a seek dropping stale segment requests) aborts the extension
+    // fetch too — the tunnel path is cancelled via cancelLibcurlFetch.
+    const egressAborts = new Map<number, AbortController>()
     egressChannel.port2.addEventListener('message', (event) => {
       const request = event.data as FrameEgressRequest
       const egressRequestId = `frame:${proxiedFrame.id}:${request.id}`
       if (request.type === 'cancel') {
+        egressAborts.get(request.id)?.abort()
+        egressAborts.delete(request.id)
         void remote.then((api) => api.cancelLibcurlFetch(egressRequestId)).catch(() => {})
         return
       }
-      void remote.then((api) => api.libcurlFetch(egressRequestId, request.url, request.options)).then(
+      const abort = new AbortController()
+      egressAborts.set(request.id, abort)
+      const run = async () => {
+        const viaExtension = await extFetch(request.url, request.options, abort.signal)
+        if (viaExtension) return viaExtension
+        return (await remote).libcurlFetch(egressRequestId, request.url, request.options)
+      }
+      void run().then(
         (response) => {
+          egressAborts.delete(request.id)
           const message = { id: request.id, response } satisfies FrameEgressResponse
           egressChannel.port2.postMessage(message, response.body ? [response.body] : [])
         },
         (error) => {
+          egressAborts.delete(request.id)
           egressChannel.port2.postMessage({
             id: request.id,
             error: error instanceof Error ? error.message : String(error),
