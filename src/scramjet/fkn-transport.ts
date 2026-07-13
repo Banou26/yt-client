@@ -100,21 +100,36 @@ export type ExtEgressFetch = (
   signal: AbortSignal | undefined,
 ) => Promise<TransportResponse | null>
 
+// YouTube's innertube API answers Firefox's proxied POSTs with 400
+// FAILED_PRECONDITION when they come through the FKN broker (a server-side
+// anti-bot rejection specific to Firefox-originated proxied requests; Chromium's
+// identical requests are accepted). The libcurl/webvpn tunnel — which does an
+// in-browser Chrome-impersonated TLS handshake — is accepted by YouTube, so
+// Firefox metadata rides the tunnel while Chromium keeps the latency-tuned
+// broker. (Segments + botguard already use the tunnel via egressFetch.)
+const isFirefox = typeof navigator !== 'undefined' && /firefox/i.test(navigator.userAgent)
+
 // The engine transport: metadata/token traffic. When the FKN extension is present
 // it goes over the extension's native fetch (direct, no proxy/tunnel round trip);
-// otherwise it falls back to the latency-tuned FKN proxy.
+// otherwise Chromium uses the FKN proxy and Firefox uses the webvpn tunnel.
 export const createFknTransport = (
-  remote: Promise<Pick<EgressApi, 'fknFetch'>>,
+  remote: Promise<Pick<EgressApi, 'fknFetch' | 'libcurlFetch' | 'cancelLibcurlFetch'>>,
   extFetch?: ExtEgressFetch,
-): ProxyTransport =>
-  createTransport(
+): ProxyTransport => {
+  let requestCounter = 0
+  return createTransport(
     async () => { await remote },
     async (url, options, signal) => {
       const viaExtension = await extFetch?.(url, options, signal)
       if (viaExtension) return viaExtension
-      return (await remote).fknFetch(url, options)
+      const api = await remote
+      if (!isFirefox) return api.fknFetch(url, options)
+      const requestId = `meta:${++requestCounter}`
+      signal?.addEventListener('abort', () => { void api.cancelLibcurlFetch(requestId) }, { once: true })
+      return api.libcurlFetch(requestId, url, options)
     },
   )
+}
 
 // The sign-in transport: the WHOLE login flow (youtube.com + accounts.google.com)
 // over one libcurl/webvpn connection, so Google sees a single in-browser-TLS,

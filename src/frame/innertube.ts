@@ -98,6 +98,17 @@ export const catalogInnertube = Innertube.create({
   ...(authCookie && { cookie: authCookie }),
 }).then((client) => {
   const context = client.session.context as unknown as InnertubeContext
+  // retrieve_innertube_config can hand back a canary/experiment clientVersion
+  // (e.g. "2.20260710.06.00-canary_experiment_2.20260708.00.00") — YouTube's
+  // public innertube API then rejects EVERY request with FAILED_PRECONDITION.
+  // (Seen on Firefox: its proxied-request fingerprint gets bucketed into the
+  // canary experiment where Chromium gets the stable version.) Pin it back to a
+  // plain stable X.YYYYMMDD.NN.NN version — the stable one is embedded at the
+  // tail of the canary string; fall back to the pinned version otherwise.
+  const rawVersion = context.client.clientVersion
+  if (rawVersion && !/^\d+\.\d{8}\.\d{2}\.\d{2}$/.test(rawVersion)) {
+    context.client.clientVersion = rawVersion.match(/(\d+\.\d{8}\.\d{2}\.\d{2})$/)?.[1] ?? FALLBACK_CLIENT_VERSION
+  }
   storeVisitorData(context.client.visitorData)
   return client
 })

@@ -59,6 +59,8 @@ describe('FKN transport', () => {
           body: new ReadableStream<Uint8Array>(),
         }
       },
+      libcurlFetch: async () => { throw new Error('unexpected libcurl fetch') },
+      cancelLibcurlFetch: async () => {},
     })
     const transport = createFknTransport(remote)
     await transport.init()
@@ -90,6 +92,8 @@ describe('FKN transport', () => {
         fetched = true
         throw new Error('unexpected remote fetch')
       },
+      libcurlFetch: async () => { throw new Error('unexpected libcurl fetch') },
+      cancelLibcurlFetch: async () => {},
     }))
     await transport.init()
     const result = await transport.request(
