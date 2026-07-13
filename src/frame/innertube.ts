@@ -87,8 +87,8 @@ const authCookie = readAuthCookie()
 
 export const catalogInnertube = Innertube.create({
   fetch: globalThis.fetch.bind(globalThis),
-  generate_session_locally: true,
-  retrieve_innertube_config: false,
+  generate_session_locally: false,
+  retrieve_innertube_config: true,
   retrieve_player: false,
   // Reusing the visitor id keeps persisted PoTokens valid across page loads.
   visitor_data: readVisitorData(),
