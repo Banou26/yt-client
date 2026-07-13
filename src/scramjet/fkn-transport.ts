@@ -49,7 +49,15 @@ const createTransport = (ready: () => Promise<void>, egressFetch: EgressFetch): 
         }
       }
       const requestHeaders = Object.fromEntries(headers)
-      const bytes = body === null ? undefined : await new Response(body).arrayBuffer()
+      // A GET/HEAD must never carry a body. Chromium's service worker reports
+      // request.body as null, but Firefox never implemented the body getter, so
+      // it arrives as undefined — a strict null check let it through as an
+      // empty (truthy) ArrayBuffer, which the native fetch downstream (broker,
+      // extension) rejects: "Request constructor: HEAD or GET Request cannot
+      // have a body."
+      const bytes = body == null || method === 'GET' || method === 'HEAD'
+        ? undefined
+        : await new Response(body).arrayBuffer()
       const response = await egressFetch(url.href, { method, headers: requestHeaders, body: bytes, redirect: 'manual' }, signal)
       // Google's auth endpoints answer some navigation hops with 200 + a Location
       // header (a "soft redirect" scramjet won't rewrite as a 200, so the browser
