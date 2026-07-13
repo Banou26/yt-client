@@ -224,9 +224,16 @@ const boot = async () => {
     let advanced = false
     const check = () => {
       if (signInElement !== element) return
-      // First rendered proxied document = a page is up; tell the app to drop its
-      // loading overlay.
-      if (!announcedLoad && signInRendered(element)) {
+      const target = signInTarget(element, proxied.prefix)
+      // The youtube.com hops (the session-entry page at the start, the cookie
+      // return at the end) are plumbing the user shouldn't see: keep the frame
+      // invisible while it is on youtube.com so only the Google auth pages ever
+      // show. Leave an unreadable ('') target alone — mid-navigation flicker.
+      if (target) element.style.visibility = target.startsWith(YOUTUBE_ORIGIN) ? 'hidden' : 'visible'
+      // First rendered NON-youtube document = the auth page is up; tell the app
+      // to drop its loading overlay. While still on youtube.com the overlay
+      // stays, covering the entry hop + auto-click below.
+      if (!announcedLoad && signInRendered(element) && target && !target.startsWith(YOUTUBE_ORIGIN)) {
         announcedLoad = true
         port.postMessage({ type: SIGNIN_LOADED } satisfies HostControlEvent)
       }
@@ -234,7 +241,7 @@ const boot = async () => {
       // <a> whose rewritten href still encodes the ServiceLogin target) once, so
       // the redirect carries the youtube.com referer. Scoped to youtube.com pages
       // so it never clicks Google's footer TOS links.
-      if (!advanced && signInTarget(element, proxied.prefix).startsWith(YOUTUBE_ORIGIN)) {
+      if (!advanced && target.startsWith(YOUTUBE_ORIGIN)) {
         try {
           const link = element.contentDocument?.querySelector<HTMLElement>('a[href*="ServiceLogin"]')
           if (link) {
