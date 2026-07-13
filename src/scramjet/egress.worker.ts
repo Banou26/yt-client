@@ -1,9 +1,22 @@
 /// <reference lib="webworker" />
 
+import { Buffer } from 'buffer'
+import process from 'process'
+
 import { expose } from 'osra'
 import { libcurl } from 'libcurl.js/bundled'
 import { fetch as fetchWithFkn } from '@fkn/lib'
 import * as net from '@fkn/lib/net'
+
+// The node-polyfill plugin injects process/Buffer globals into the app and
+// dev-served workers, but the production worker chunk misses the injection —
+// and @fkn/lib's net Socket (Stream.Duplex polyfill) calls process.nextTick at
+// runtime, so without this every tunnel dial dies with "process is not
+// defined" (surfacing as libcurl error 7). Shim the globals explicitly.
+const workerGlobal = globalThis as Record<string, unknown>
+workerGlobal.process ??= process
+workerGlobal.Buffer ??= Buffer
+workerGlobal.global ??= globalThis
 
 import type { EgressApi } from './protocol'
 
