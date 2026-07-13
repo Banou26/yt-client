@@ -16,7 +16,11 @@ import type { ExtEgressFetch } from './fkn-transport'
 // Next/password step silently no-ops); the passive-mode button URL just bounces
 // back. Loading youtube.com first is the recipe that actually completes.
 const SIGN_IN_URL = 'https://www.youtube.com/'
-const YOUTUBE_ORIGIN = 'https://www.youtube.com/'
+// Any youtube.com host is a plumbing hop, not a page the user should see: a
+// mobile user agent gets redirected to m.youtube.com (and Google can bounce
+// through accounts.youtube.com on the way back), so a bare www. prefix check
+// leaks those pages past the loading overlay.
+const isYoutubeHop = (target: string) => /^https:\/\/(?:[a-z0-9-]+\.)*youtube\.com\//.test(target)
 
 type FrameWindow = Window & {
   [FRAME_CONNECT]?: (port: MessagePort) => void
@@ -229,11 +233,11 @@ const boot = async () => {
       // return at the end) are plumbing the user shouldn't see: keep the frame
       // invisible while it is on youtube.com so only the Google auth pages ever
       // show. Leave an unreadable ('') target alone — mid-navigation flicker.
-      if (target) element.style.visibility = target.startsWith(YOUTUBE_ORIGIN) ? 'hidden' : 'visible'
+      if (target) element.style.visibility = isYoutubeHop(target) ? 'hidden' : 'visible'
       // First rendered NON-youtube document = the auth page is up; tell the app
       // to drop its loading overlay. While still on youtube.com the overlay
       // stays, covering the entry hop + auto-click below.
-      if (!announcedLoad && signInRendered(element) && target && !target.startsWith(YOUTUBE_ORIGIN)) {
+      if (!announcedLoad && signInRendered(element) && target && !isYoutubeHop(target)) {
         announcedLoad = true
         port.postMessage({ type: SIGNIN_LOADED } satisfies HostControlEvent)
       }
@@ -241,7 +245,7 @@ const boot = async () => {
       // <a> whose rewritten href still encodes the ServiceLogin target) once, so
       // the redirect carries the youtube.com referer. Scoped to youtube.com pages
       // so it never clicks Google's footer TOS links.
-      if (!advanced && target.startsWith(YOUTUBE_ORIGIN)) {
+      if (!advanced && isYoutubeHop(target)) {
         try {
           const link = element.contentDocument?.querySelector<HTMLElement>('a[href*="ServiceLogin"]')
           if (link) {
