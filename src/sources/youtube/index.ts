@@ -1,4 +1,4 @@
-import type { Source, SourceChannel, SourceCommentPage, SourceVideoPage } from '../types'
+import type { Source, SourceChannel, SourceCommentPage, SourceVideo, SourceVideoPage } from '../types'
 
 import { Innertube } from 'youtubei.js/web'
 
@@ -44,12 +44,22 @@ export type YoutubeSourceOptions = {
 }
 
 const pageItems = (feed: Feed) => {
-  const videos = [...feed.videos].map(normalizeFeedVideo).filter((video) => video !== undefined)
-  if (videos.length > 0) return videos
-  // new-layout feeds (channel Videos tab) ship LockupView nodes, which
-  // youtubei.js's videos getter does not include — read them off the memo.
-  const lockups = feed.memo?.get('LockupView') ?? []
-  return [...lockups].map(normalizeLockupVideo).filter((video) => video !== undefined)
+  // youtubei.js's `videos` getter surfaces legacy Video/GridVideo nodes but NOT
+  // LockupView, and a modern feed (the signed-in home grid, channel Videos tab)
+  // MIXES the two. Merging rather than either/or is essential: a single stray
+  // legacy video used to short-circuit the LockupView branch and hide the whole
+  // grid — the signed-in home then showed just that one video.
+  const seen = new Set<string>()
+  const items: SourceVideo[] = []
+  const add = (video: SourceVideo | undefined) => {
+    if (video && !seen.has(video.id)) {
+      seen.add(video.id)
+      items.push(video)
+    }
+  }
+  for (const node of feed.videos) add(normalizeFeedVideo(node))
+  for (const node of feed.memo?.get('LockupView') ?? []) add(normalizeLockupVideo(node))
+  return items
 }
 
 export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSourceOptions): Source => {
