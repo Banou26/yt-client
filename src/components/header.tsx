@@ -427,9 +427,9 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
         </button>
       </form>
       <div className='end'>
-        <button type='button' className='icon-button' aria-label='Settings'>
+        <Link href='/settings' className='icon-button' aria-label='Settings'>
           <EllipsisVertical size={24} strokeWidth={1.5} />
-        </button>
+        </Link>
         <NotificationsMenu />
         {session?.signedIn
           ? <AccountMenu name={session.name ?? undefined} avatar={session.avatar ?? undefined} handle={session.handle ?? undefined} />

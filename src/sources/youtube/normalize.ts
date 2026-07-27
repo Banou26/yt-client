@@ -196,11 +196,19 @@ type PlaylistDetails = {
   }
 }
 
+// `contents` is a SECTION, not the account. The account details live on an
+// AccountItem inside that section's own `contents`, which also mixes in
+// CompactLink rows that carry none of these fields.
+type AccountItemNode = {
+  account_name?: Text
+  account_photo?: Thumbnail[]
+  channel_handle?: Text
+  is_selected?: boolean
+}
+
 type AccountInfo = {
   contents?: {
-    account_name?: Text
-    account_photo?: Thumbnail[]
-    channel_handle?: Text
+    contents?: AccountItemNode[]
   }
 }
 
@@ -964,7 +972,17 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
 }
 
 export const normalizeSession = (input: unknown): SourceSession => {
-  const account = (input as AccountInfo).contents
+  /* One level deeper than it looks. AccountInfo.contents is an
+     AccountItemSection, and the signed-in account is an AccountItem inside ITS
+     contents; reading the section directly finds none of these fields, which is
+     what left the header avatar blank while the session still read as signed in.
+
+     The section also lists other accounts on the same login plus CompactLink
+     rows, so the selected item is preferred and anything without a name is
+     skipped rather than taken by position. */
+  const rows = (input as AccountInfo).contents?.contents ?? []
+  const named = rows.filter((row) => row.account_name !== undefined)
+  const account = named.find((row) => row.is_selected === true) ?? named[0]
   return {
     signedIn: true,
     name: presentText(account?.account_name),

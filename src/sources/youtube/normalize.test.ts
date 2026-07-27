@@ -755,14 +755,20 @@ describe('youtube normalization', () => {
   })
 
   it('normalizes account info into a session', () => {
+    // AccountInfo.contents is a SECTION; the account is an AccountItem inside
+    // its own contents. Reading the section directly finds none of these, which
+    // is what left the header avatar blank on a signed-in session.
     expect(normalizeSession({
       contents: {
-        account_name: { text: 'Banou' },
-        account_photo: [
-          { url: 'small', width: 32 },
-          { url: 'large', width: 88 },
-        ],
-        channel_handle: { text: '@banou' },
+        contents: [{
+          account_name: { text: 'Banou' },
+          account_photo: [
+            { url: 'small', width: 32 },
+            { url: 'large', width: 88 },
+          ],
+          channel_handle: { text: '@banou' },
+          is_selected: true,
+        }],
       },
     })).toEqual({
       signedIn: true,
@@ -772,13 +778,36 @@ describe('youtube normalization', () => {
     })
   })
 
+  it('takes the selected account, not the first row', () => {
+    // The section lists every account on the login and mixes in CompactLink
+    // rows that carry none of these fields, so position is not identity.
+    expect(normalizeSession({
+      contents: {
+        contents: [
+          { navigation_endpoint: {} },
+          { account_name: { text: 'Other' }, account_photo: [{ url: 'other', width: 88 }] },
+          { account_name: { text: 'Banou' }, account_photo: [{ url: 'mine', width: 88 }], is_selected: true },
+        ],
+      },
+    })).toMatchObject({ name: 'Banou', avatar: 'mine' })
+  })
+
   it("treats youtubei.js's 'N/A' account texts as absent", () => {
     expect(normalizeSession({
       contents: {
-        account_name: { text: 'Banou' },
-        channel_handle: { text: undefined, toString: () => 'N/A' },
+        contents: [{
+          account_name: { text: 'Banou' },
+          channel_handle: { text: undefined, toString: () => 'N/A' },
+        }],
       },
     })).toEqual({ signedIn: true, name: 'Banou' })
+  })
+
+  it('still reports a signed-in session when the account section is unreadable', () => {
+    // The cookie jar probe is what decides signed-in; this call only decorates
+    // it, so a shape change must not read back as signed out.
+    expect(normalizeSession({})).toEqual({ signedIn: true })
+    expect(normalizeSession({ contents: { contents: [] } })).toEqual({ signedIn: true })
   })
 
   it('drops comments without an id and approximates shortened reply counts', () => {

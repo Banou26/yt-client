@@ -229,10 +229,14 @@ const createFakeClient = () => {
     },
     account: {
       getInfo: async (): Promise<unknown> => ({
+        // The account is an AccountItem inside the section's own contents.
         contents: {
-          account_name: { text: 'Banou' },
-          account_photo: [{ url: 'avatar' }],
-          channel_handle: { text: '@banou' },
+          contents: [{
+            account_name: { text: 'Banou' },
+            account_photo: [{ url: 'avatar' }],
+            channel_handle: { text: '@banou' },
+            is_selected: true,
+          }],
         },
       }),
     },
