@@ -490,6 +490,33 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
   const searchContinuations = createContinuations<SourceSearchPage>()
   const postContinuations = createContinuations<SourcePostPage>()
   const commentActions = createActionRegistry()
+  /* One browse per channel rather than one per tab. A youtubei.js Channel holds
+     every tab it has, and none of getVideos/getPlaylists/getAbout/getCommunity
+     mutates it (each returns a new feed), so the same fetched object serves
+     every tab, the About panel and the Community list.
+
+     Before this, each tab switch re-browsed the channel and About and Community
+     each browsed it a SECOND time, so flipping between tabs fired a burst of
+     overlapping POSTs to /browse. That burst is what surfaced as an
+     intermittent 405 from the endpoint.
+
+     Short-lived rather than permanent: the header carries subscribe state, and
+     a channel pinned for the session would keep serving the pre-write value. */
+  const CHANNEL_TTL_MS = 60_000
+  const channelFetches = new Map<string, { at: number, result: Promise<ChannelFeed> }>()
+
+  const fetchChannel = async (id: string) => {
+    const cached = channelFetches.get(id)
+    if (cached && Date.now() - cached.at < CHANNEL_TTL_MS) return cached.result
+    const result = (await client).getChannel(id)
+    channelFetches.set(id, { at: Date.now(), result })
+    // A failed fetch must not be cached as the answer: drop it so the next
+    // attempt re-browses rather than replaying a transient error.
+    void result.catch(() => {
+      if (channelFetches.get(id)?.result === result) channelFetches.delete(id)
+    })
+    return result
+  }
   // The tab set, sort options and applied sort belong to the page rather than
   // to the channel entity, and a cursored call does not re-read them, so the
   // last read of each channel keeps both halves.
@@ -828,7 +855,7 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
           videos: await videoContinuations.resolve(kind, cursor),
         }
       }
-      const result = await (await client).getChannel(id)
+      const result = await fetchChannel(id)
       const channel = normalizeChannel(result, id)
       const availableTabs = availableChannelTabs(result)
       const selected = tab && availableTabs.includes(tab) ? tab : defaultChannelTab(availableTabs)
@@ -846,14 +873,14 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
     // tab. `has_about` gates it: getAbout() reaches for a tab that is simply
     // not there on channels that publish no panel.
     channelAbout: async (id) => {
-      const result = await (await client).getChannel(id)
+      const result = await fetchChannel(id)
       if (result.has_about !== true || !result.getAbout) return undefined
       return normalizeChannelAbout(await result.getAbout.call(result))
     },
     communityPosts: async (channelId, cursor) => {
       const kind = `community:${channelId}`
       if (cursor) return postContinuations.resolve(kind, cursor)
-      const result = await (await client).getChannel(channelId)
+      const result = await fetchChannel(channelId)
       if (result.has_community !== true || !result.getCommunity) return { items: [] }
       return postPage(kind, await result.getCommunity.call(result) as PostsFeed)
     },

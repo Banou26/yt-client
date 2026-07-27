@@ -357,6 +357,27 @@ describe('youtube search', () => {
 })
 
 describe('youtube channel tabs', () => {
+  it('browses a channel once and serves every tab off it', async () => {
+    const client = createFakeClient()
+    let fetches = 0
+    const inner = client.getChannel
+    client.getChannel = async () => {
+      fetches += 1
+      return inner()
+    }
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    // A tab switch used to re-browse the channel, and About and Community each
+    // browsed it a SECOND time, so flipping tabs fired a burst of overlapping
+    // POSTs to /browse. One fetched Channel holds every tab it has.
+    await source.channel('c')
+    await source.channel('c', 'PLAYLISTS')
+    await source.channel('c', 'COMMUNITY')
+    await source.channelAbout('c')
+    await source.communityPosts('c')
+    expect(fetches).toBe(1)
+  })
+
+
   it('reports only the tabs the channel actually has', async () => {
     const source = createYoutubeSource({
       fetch: globalThis.fetch,
