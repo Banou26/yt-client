@@ -1,8 +1,9 @@
-import type { ChannelViewQuery } from '../generated/graphql'
+import type { ChannelTab, ChannelViewQuery } from '../generated/graphql'
 
 import { css } from '@emotion/react'
 import { useState } from 'preact/hooks'
 import { useQuery } from 'urql'
+import { useLocation, useSearch } from 'wouter'
 
 import { useDocumentTitle } from '../app'
 import { SubscribeButton } from '../components/subscribe-button'
@@ -13,8 +14,8 @@ import { gql } from '../generated'
 type VideosPage = ChannelViewQuery['channel']['videos']
 
 const CHANNEL_VIEW_QUERY = gql(`
-  query ChannelView($id: ID!, $cursor: String) {
-    channel(id: $id, cursor: $cursor) {
+  query ChannelView($id: ID!, $tab: ChannelTab, $sort: String, $query: String, $cursor: String) {
+    channel(id: $id, tab: $tab, sort: $sort, query: $query, cursor: $cursor) {
       channel {
         id
         name
@@ -36,15 +37,34 @@ const CHANNEL_VIEW_QUERY = gql(`
           viewCount
           publishedText
           isLive
+          isUpcoming
+          badges
         }
         cursor
       }
+      availableTabs
+      tab
+      sortOptions
+      appliedSort
     }
   }
 `)
 
-const TABS = ['Home', 'Videos', 'Shorts', 'Playlists']
-const ACTIVE_TAB = 'Videos'
+// Upstream reports which tabs a channel actually has, so the strip renders that
+// set rather than a fixed one. The label is ours because the enum is not
+// display text; the order comes from the source, which keeps upstream's.
+const TAB_LABELS: Record<ChannelTab, string> = {
+  HOME: 'Home',
+  VIDEOS: 'Videos',
+  SHORTS: 'Shorts',
+  LIVE: 'Live',
+  RELEASES: 'Releases',
+  PODCASTS: 'Podcasts',
+  COURSES: 'Courses',
+  PLAYLISTS: 'Playlists',
+  COMMUNITY: 'Community',
+  SEARCH: 'Search',
+}
 
 const style = css`
   max-width: 128.4rem;
@@ -153,6 +173,38 @@ const style = css`
     border-bottom-color: var(--text-primary);
   }
 
+  /* Only rendered when the tab offers more than one ordering, so it never shows
+     a single dead option next to itself. The labels are upstream's own and are
+     already localized. */
+  .sorts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+    padding: 1.6rem 0 0;
+  }
+
+  .sort {
+    height: 3.2rem;
+    padding: 0 1.2rem;
+    border: none;
+    border-radius: 0.8rem;
+    background: var(--bg-chip);
+    color: var(--text-primary);
+    font-size: 1.4rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  .sort:hover {
+    background: var(--bg-chip-hover);
+  }
+
+  .sort.active {
+    background: var(--bg-inverse);
+    color: var(--text-inverse);
+  }
+
   .videos {
     margin-top: 2.4rem;
   }
@@ -187,13 +239,26 @@ const style = css`
 
 export const ChannelPage = ({ params }: { params: { channelId: string } }) => {
   const id = params.channelId
+  // The channel id stays a path param, matching youtube.com, while the tab and
+  // its options ride in the query string: they address a view of the same page
+  // rather than a different page, and that keeps a tab shareable.
+  const search = useSearch()
+  const urlParams = new URLSearchParams(search)
+  const [, navigate] = useLocation()
+  const tab = (urlParams.get('tab') ?? undefined) as ChannelTab | undefined
+  const sort = urlParams.get('sort') ?? undefined
+  const channelQuery = urlParams.get('query') ?? undefined
   // Consumed pages carry the channel they came from, so switching channels
   // starts from an empty grid in the same render rather than one frame later.
-  const [loaded, setLoaded] = useState<{ id: string, pages: VideosPage[] }>({ id, pages: [] })
-  const pages = loaded.id === id ? loaded.pages : []
+  // The tab, sort and in-channel query are part of the feed identity: switching
+  // any of them has to restart paging rather than append one tab's rows under
+  // another's.
+  const feedKey = `${id}|${tab ?? ''}|${sort ?? ''}|${channelQuery ?? ''}`
+  const [loaded, setLoaded] = useState<{ id: string, pages: VideosPage[] }>({ id: feedKey, pages: [] })
+  const pages = loaded.id === feedKey ? loaded.pages : []
   const [{ data, error, fetching }] = useQuery({
     query: CHANNEL_VIEW_QUERY,
-    variables: { id, cursor: pages[pages.length - 1]?.cursor }
+    variables: { id, tab, sort, query: channelQuery, cursor: pages[pages.length - 1]?.cursor }
   })
   const channel = data?.channel.channel
   const page = data?.channel.videos
@@ -211,9 +276,24 @@ export const ChannelPage = ({ params }: { params: { channelId: string } }) => {
     .filter(part => part != null && part.length > 0)
   const meta = metaParts.length > 0 ? metaParts.join(' • ') : undefined
 
+  // One writer for every view parameter, so a tab switch always clears the sort
+  // and query that belonged to the previous tab: upstream's sort labels differ
+  // per tab, and carrying one across would send an option the new tab rejects.
+  const setView = (param: 'tab' | 'sort', value: string) => {
+    const next = new URLSearchParams(search)
+    if (param === 'tab') {
+      next.delete('sort')
+      next.delete('query')
+    }
+    if (next.get(param) === value) next.delete(param)
+    else next.set(param, value)
+    const rest = next.toString()
+    navigate(rest ? `/channel/${id}?${rest}` : `/channel/${id}`)
+  }
+
   const onMore = () => {
     if (!page?.cursor || fetching) return
-    setLoaded({ id, pages: pages[pages.length - 1] === page ? pages : [...pages, page] })
+    setLoaded({ id: feedKey, pages: pages[pages.length - 1] === page ? pages : [...pages, page] })
   }
 
   return (
@@ -244,16 +324,41 @@ export const ChannelPage = ({ params }: { params: { channelId: string } }) => {
         : undefined}
       {error ? <p className='status'>{error.message}</p> : undefined}
       <nav className='tabs' aria-label='Channel sections'>
-        {TABS.map(tab => (
-          <button
-            key={tab}
-            type='button'
-            className={tab === ACTIVE_TAB ? 'tab active' : 'tab'}
-          >
-            {tab}
-          </button>
-        ))}
+        {(data?.channel.availableTabs ?? []).map(available => {
+          const active = available === data?.channel.tab
+          return (
+            <button
+              key={available}
+              type='button'
+              className={active ? 'tab active' : 'tab'}
+              aria-current={active ? 'page' : undefined}
+              onClick={() => setView('tab', available)}
+            >
+              {TAB_LABELS[available]}
+            </button>
+          )
+        })}
       </nav>
+      {(data?.channel.sortOptions.length ?? 0) > 1
+        ? (
+          <div className='sorts'>
+            {data?.channel.sortOptions.map(option => {
+              const active = option === (data.channel.appliedSort ?? data.channel.sortOptions[0])
+              return (
+                <button
+                  key={option}
+                  type='button'
+                  className={active ? 'sort active' : 'sort'}
+                  aria-pressed={active}
+                  onClick={() => setView('sort', option)}
+                >
+                  {option}
+                </button>
+              )
+            })}
+          </div>
+        )
+        : undefined}
       <div className='videos'>
         <VideoGrid videos={items} fetching={fetching && items.length === 0} variant='channel' />
         {data && !fetching && !error && items.length === 0

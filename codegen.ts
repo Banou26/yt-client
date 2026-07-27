@@ -20,6 +20,14 @@ const config = {
       plugins: ['typescript', 'typescript-resolvers'],
       config: {
         contextType: '../worker/yoga#ServerContext',
+        // A union's __resolveType has to read something the schema does not
+        // declare. Mapping SearchResult onto the discriminated source type is
+        // what lets that stay type-checked instead of casting: the resolver
+        // sees the `kind` tag, and each member still carries the entity's own
+        // fields at the top level so default field resolution works unchanged.
+        mappers: {
+          SearchResult: '../sources/types#SourceSearchResult',
+        },
         useTypeImports: true,
         // String-literal unions rather than TS enums, so the hand-written
         // Source types in src/sources/types.ts stay structurally compatible

@@ -16,6 +16,7 @@ type Author = {
   name?: string
   thumbnails?: Thumbnail[]
   url?: string
+  is_verified?: boolean
 }
 
 type FeedVideo = {
@@ -33,6 +34,9 @@ type FeedVideo = {
   published?: Text
   author?: Author
   is_live?: boolean
+  is_upcoming?: boolean
+  badges?: { label?: string, text?: string, style?: string }[]
+  thumbnail_overlays?: unknown[]
 }
 
 type VideoDetails = {
@@ -268,8 +272,28 @@ const authorChannel = (author: Author | undefined): SourceChannel | undefined =>
   const id = presentText(author?.id)
   const name = presentText(author?.name)
   if (!id || !name) return undefined
-  return { id, name, avatar: thumbnail(author?.thumbnails), handle: handleFromUrl(author?.url) }
+  return {
+    id,
+    name,
+    avatar: thumbnail(author?.thumbnails),
+    handle: handleFromUrl(author?.url),
+    isVerified: author?.is_verified === true ? true : undefined,
+  }
 }
+
+// Upstream's own localized badge texts, taken from `label` rather than the
+// style id: the style vocabulary is internal and changes, while the label is
+// what YouTube itself renders on the card. An unrecognized badge still shows.
+const badgeTexts = (badges: { label?: string, text?: string }[] | undefined) =>
+  (badges ?? [])
+    .map((badge) => presentText(badge.label) ?? presentText(badge.text))
+    .filter((value): value is string => Boolean(value))
+
+// Both are badge-derived. Members-only is matched on the style id because its
+// label is a whole localized sentence, while upcoming has a real getter on the
+// legacy node and only needs the badge as a fallback.
+const hasBadgeStyle = (badges: { style?: string }[] | undefined, fragment: string) =>
+  (badges ?? []).some((badge) => badge.style?.includes(fragment))
 
 // A playlist byline is an Author on some renderers and a plain Text on others.
 // Only the Author shape has an `id`; a Text keeps the channel id on its
@@ -349,6 +373,36 @@ export const normalizeFeedChannel = (input: unknown): SourceChannel | undefined 
   }
 }
 
+// A search Channel node is neither of the shapes the other two channel
+// normalizers handle: it keeps its id at the top level and its name on an
+// Author, where normalizeChannel wants a browse response's
+// `metadata.external_id` (and throws without one) and normalizeFeedChannel
+// wants the id on the Author. Verified against parser/classes/Channel.d.ts.
+export const normalizeSearchChannel = (input: unknown): SourceChannel | undefined => {
+  const node = input as {
+    id?: string
+    author?: Author
+    subscriber_count?: Text
+    video_count?: Text
+    description_snippet?: Text
+    subscribe_button?: { subscribed?: boolean }
+  }
+  const id = node.id ?? presentText(node.author?.id)
+  const name = presentText(node.author?.name)
+  if (!id || !name) return undefined
+  return {
+    id,
+    name,
+    avatar: thumbnail(node.author?.thumbnails),
+    handle: handleFromUrl(node.author?.url),
+    subscriberCountText: presentText(node.subscriber_count),
+    videoCountText: presentText(node.video_count),
+    description: presentText(node.description_snippet),
+    isSubscribed: node.subscribe_button?.subscribed,
+    isVerified: node.author?.is_verified === true ? true : undefined,
+  }
+}
+
 const clampPercent = (value: unknown) =>
   typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : undefined
 
@@ -384,6 +438,9 @@ export const normalizeFeedVideo = (input: unknown): SourceVideo | undefined => {
     publishedText: text(video.published),
     isLive: video.is_live === true ? true : undefined,
     progressPercent: legacyProgressPercent(video),
+    isUpcoming: video.is_upcoming === true ? true : undefined,
+    isMembersOnly: hasBadgeStyle(video.badges, 'MEMBERS_ONLY') ? true : undefined,
+    badges: badgeTexts(video.badges),
     channel: authorChannel(video.author),
   }
 }
@@ -399,6 +456,9 @@ export const normalizeVideoDetails = (input: unknown): SourceVideo | undefined =
     durationSeconds: video.duration,
     viewCount: video.view_count === undefined ? undefined : String(video.view_count),
     isLive: video.is_live === true ? true : undefined,
+    // /player's basic_info carries no badge list, so this is genuinely empty
+    // rather than unread.
+    badges: [],
     channel: video.channel_id && video.author
       ? { id: video.channel_id, name: video.author }
       : undefined,
@@ -434,6 +494,14 @@ export const normalizeLockupVideo = (input: unknown): SourceVideo | undefined =>
     publishedText: text(parts[2]),
     isLive: badges.some((badge) => badge.badge_style?.includes('LIVE')) ? true : undefined,
     progressPercent: lockupProgressPercent(image),
+    isShort: lockup.content_type === 'SHORT' ? true : undefined,
+    isMembersOnly: hasBadgeStyle(badges.map((badge) => ({ style: badge.badge_style })), 'MEMBERS_ONLY')
+      ? true
+      : undefined,
+    // The overlay badges on a lockup carry the DURATION and the live pill, both
+    // of which are already read above as their own fields. Re-listing them here
+    // would render '12:04' as if it were a 4K or CC badge.
+    badges: [],
     channel: lockupChannel(lockup, parts),
   }
 }
@@ -564,6 +632,7 @@ export const normalizePlaylistPanelVideo = (input: unknown): SourceVideo | undef
     // Already in seconds, but it comes from parsing 'N/A' when the row carries
     // no length, which yields NaN rather than an absent value.
     durationSeconds: Number.isFinite(row?.duration?.seconds) ? row?.duration?.seconds : undefined,
+    badges: [],
     // No channel: the row's byline is display text and the node carries no
     // channel id on any field, so a Channel built from it would link nowhere.
   }

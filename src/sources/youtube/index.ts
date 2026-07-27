@@ -1,8 +1,8 @@
-import type { Source, SourceChannel, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourcePlaylistListPage, SourcePlaylistPage, SourcePlaylistPrivacy, SourceSectionedVideoPage, SourceVideo, SourceVideoPage } from '../types'
+import type { Source, SourceChannel, SourceChannelPage, SourceChannelTab, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourcePlaylistListPage, SourcePlaylistPage, SourcePlaylistPrivacy, SourceSearchFeature, SourceSearchFilters, SourceSearchPage, SourceSearchResult, SourceSectionedVideoPage, SourceVideo, SourceVideoPage } from '../types'
 
 import { Innertube } from 'youtubei.js/web'
 
-import { normalizeChannel, normalizeCommentThread, normalizeFeedChannel, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizeSession, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
+import { normalizeChannel, normalizeCommentThread, normalizeFeedChannel, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizeSearchChannel, normalizeSession, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
 
 type Feed = {
   videos: Iterable<unknown>
@@ -33,10 +33,54 @@ type ChannelsFeed = {
   channels?: Iterable<unknown>
 }
 
+// Upstream's own filter vocabulary is lowercase; the schema's is uppercase, so
+// the source lowercases on the way out. Declared structurally rather than
+// imported so this file keeps its one hand-written client contract.
+export type YoutubeSearchFilters = {
+  upload_date?: string
+  type?: string
+  duration?: string
+  prioritize?: string
+  features?: string[]
+}
+
+// `results` mixes Video, Channel, Playlist/LockupView and shelves, so it is read
+// instead of the `videos` getter, which emits only videos and is exactly why
+// channel and playlist hits used to vanish from the page.
+type SearchFeed = Feed & {
+  results?: Iterable<unknown>
+  refinements?: string[]
+  estimated_results?: number
+}
+
+// Every tab getter is optional here because a channel only carries the tabs it
+// actually has: calling getShorts() on a channel without one throws
+// `Tab "shorts" not found` from getTabByURL, so each call is gated on its
+// matching has_* getter rather than attempted and caught.
 type ChannelFeed = Feed & {
   metadata?: unknown
+  has_home?: boolean
   has_videos?: boolean
+  has_shorts?: boolean
+  has_live_streams?: boolean
+  has_releases?: boolean
+  has_podcasts?: boolean
+  has_courses?: boolean
+  has_playlists?: boolean
+  has_community?: boolean
+  has_search?: boolean
+  sort_filters?: string[]
+  getHome?: () => Promise<ChannelFeed>
   getVideos?: () => Promise<ChannelFeed>
+  getShorts?: () => Promise<ChannelFeed>
+  getLiveStreams?: () => Promise<ChannelFeed>
+  getReleases?: () => Promise<ChannelFeed>
+  getPodcasts?: () => Promise<ChannelFeed>
+  getCourses?: () => Promise<ChannelFeed>
+  getPlaylists?: () => Promise<ChannelFeed>
+  getCommunity?: () => Promise<ChannelFeed>
+  applySort?: (sort: string) => Promise<ChannelFeed>
+  search?: (query: string) => Promise<ChannelFeed>
 }
 
 type CommentsFeed = {
@@ -90,7 +134,8 @@ export type YoutubeClient = {
   getSubscriptionsFeed(): Promise<SectionedFeed>
   getHistory(): Promise<SectionedFeed>
   getChannelsFeed(): Promise<ChannelsFeed>
-  search(query: string): Promise<Feed>
+  search(query: string, filters?: YoutubeSearchFilters): Promise<SearchFeed>
+  getSearchSuggestions(query: string, previousQuery?: string): Promise<string[]>
   getBasicInfo(id: string): Promise<{ basic_info?: unknown }>
   getChannel(id: string): Promise<ChannelFeed>
   getComments(videoId: string): Promise<CommentsFeed>
@@ -222,6 +267,95 @@ const filterChipsOf = (feed: { filter_chips?: FilterChip[] }): FilterChip[] => {
   }
 }
 
+// Schema vocabulary to upstream's. ALL is the unset state on every axis, so it
+// is dropped rather than sent: youtubei.js would map it to a real filter value.
+const UPSTREAM_FEATURE = {
+  HD: 'hd',
+  SUBTITLES: 'subtitles',
+  CREATIVE_COMMONS: 'creative_commons',
+  THREE_D: '3d',
+  LIVE: 'live',
+  PURCHASED: 'purchased',
+  FOUR_K: '4k',
+  THREE_SIXTY: '360',
+  LOCATION: 'location',
+  HDR: 'hdr',
+  VR180: 'vr180',
+} as const satisfies Record<SourceSearchFeature, string>
+
+const unlessAll = (value: string | undefined) =>
+  value === undefined || value === 'ALL' ? undefined : value.toLowerCase()
+
+const upstreamFilters = (filters: SourceSearchFilters | undefined): YoutubeSearchFilters | undefined => {
+  if (!filters) return undefined
+  const mapped: YoutubeSearchFilters = {
+    upload_date: unlessAll(filters.uploadDate),
+    type: unlessAll(filters.type),
+    duration: unlessAll(filters.duration),
+    prioritize: unlessAll(filters.sortBy),
+    features: filters.features?.map((feature) => UPSTREAM_FEATURE[feature]),
+  }
+  // An all-empty filter set is passed as undefined so the call is identical to
+  // an unfiltered search rather than sending an object full of undefineds.
+  return Object.values(mapped).some((value) => value !== undefined && value.length !== 0) ? mapped : undefined
+}
+
+// Stable across key order so the same filter set always yields the same cursor
+// namespace, which is what keeps a cursor from crossing filter sets.
+const filterKey = (filters: SourceSearchFilters | undefined) =>
+  [
+    filters?.uploadDate ?? '',
+    filters?.type ?? '',
+    filters?.duration ?? '',
+    filters?.sortBy ?? '',
+    [...(filters?.features ?? [])].sort().join('+'),
+  ].join('|')
+
+// Upstream's display order, which is also the order the tab strip renders in.
+const CHANNEL_TABS = [
+  { tab: 'HOME', has: 'has_home', open: 'getHome' },
+  { tab: 'VIDEOS', has: 'has_videos', open: 'getVideos' },
+  { tab: 'SHORTS', has: 'has_shorts', open: 'getShorts' },
+  { tab: 'LIVE', has: 'has_live_streams', open: 'getLiveStreams' },
+  { tab: 'RELEASES', has: 'has_releases', open: 'getReleases' },
+  { tab: 'PODCASTS', has: 'has_podcasts', open: 'getPodcasts' },
+  { tab: 'COURSES', has: 'has_courses', open: 'getCourses' },
+  { tab: 'PLAYLISTS', has: 'has_playlists', open: 'getPlaylists' },
+  { tab: 'COMMUNITY', has: 'has_community', open: 'getCommunity' },
+] as const satisfies readonly { tab: SourceChannelTab, has: keyof ChannelFeed, open: keyof ChannelFeed }[]
+
+const availableChannelTabs = (feed: ChannelFeed): SourceChannelTab[] => {
+  const tabs = CHANNEL_TABS.filter((entry) => feed[entry.has] === true).map((entry) => entry.tab)
+  // Search is not a content tab upstream, but it is reachable the same way and
+  // the strip renders it last, matching youtube.com.
+  return feed.has_search === true ? [...tabs, 'SEARCH'] : tabs
+}
+
+// Videos first when it exists, because that is what a channel link is almost
+// always opened for; otherwise whatever the channel actually leads with.
+const defaultChannelTab = (available: SourceChannelTab[]): SourceChannelTab =>
+  available.find((tab) => tab === 'VIDEOS') ?? available[0] ?? 'HOME'
+
+const openChannelTab = async (
+  feed: ChannelFeed,
+  tab: SourceChannelTab,
+  query: string | undefined,
+): Promise<ChannelFeed> => {
+  if (tab === 'SEARCH') {
+    // An empty in-channel query would browse the whole channel rather than
+    // search it, so it stays on the landing feed until there is something to
+    // search for.
+    if (!query || !feed.search) return feed
+    return feed.search(query)
+  }
+  const entry = CHANNEL_TABS.find((candidate) => candidate.tab === tab)
+  const open = entry && feed[entry.open]
+  // The tab was reported as available, so this is reachable only if upstream
+  // and its own has_* getter disagree. Falling back to the landing feed beats
+  // throwing `Tab "x" not found` at the page.
+  return typeof open === 'function' ? await (open as () => Promise<ChannelFeed>)() : feed
+}
+
 const LIKE_ENDPOINT = {
   LIKE: '/like/like',
   DISLIKE: '/like/dislike',
@@ -241,7 +375,14 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
   const commentContinuations = createContinuations<SourceCommentPage>()
   const playlistContinuations = createContinuations<SourcePlaylistPage>()
   const playlistListContinuations = createContinuations<SourcePlaylistListPage>()
-  const channels = new Map<string, SourceChannel>()
+  const searchContinuations = createContinuations<SourceSearchPage>()
+  // The tab set, sort options and applied sort belong to the page rather than
+  // to the channel entity, and a cursored call does not re-read them, so the
+  // last read of each channel keeps both halves.
+  const channels = new Map<string, {
+    channel: SourceChannel
+    page: Omit<SourceChannelPage, 'channel' | 'videos'>
+  }>()
   // A playlist write never refetches the playlist, and every mutation resolves
   // to a Playlist whose `title` is non-null, so the last read of each playlist
   // is kept to fill the fields the write did not touch.
@@ -251,6 +392,48 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
     const result: SourceVideoPage = { items: pageItems(feed) }
     if (feed.has_continuation) {
       result.cursor = videoContinuations.register(kind, async () => page(kind, await feed.getContinuation()))
+    }
+    return result
+  }
+
+  // Search rows are read off `results` rather than the `videos` getter, which
+  // emits only videos: that getter is why channel and playlist hits, which
+  // YouTube ranks first for a name query, used to be dropped from the page.
+  // Shelves and watch cards carry no row of their own and fall out here.
+  const searchPage = (kind: string, feed: SearchFeed): SourceSearchPage => {
+    const results: SourceSearchResult[] = []
+    const seen = new Set<string>()
+    for (const node of feed.results ?? []) {
+      const video = normalizeFeedVideo(node) ?? normalizeLockupVideo(node)
+      if (video) {
+        if (seen.has(`video:${video.id}`)) continue
+        seen.add(`video:${video.id}`)
+        results.push({ ...video, kind: 'video' })
+        continue
+      }
+      const playlist = normalizePlaylistLockup(node) ?? normalizeGridPlaylist(node)
+      if (playlist) {
+        if (seen.has(`playlist:${playlist.id}`)) continue
+        seen.add(`playlist:${playlist.id}`)
+        results.push({ ...playlist, kind: 'playlist' })
+        continue
+      }
+      const channel = normalizeSearchChannel(node)
+      if (channel && !seen.has(`channel:${channel.id}`)) {
+        seen.add(`channel:${channel.id}`)
+        results.push({ ...channel, kind: 'channel' })
+      }
+    }
+    const result: SourceSearchPage = {
+      results,
+      refinements: feed.refinements ?? [],
+      estimatedResults: feed.estimated_results,
+    }
+    if (feed.has_continuation) {
+      result.cursor = searchContinuations.register(
+        kind,
+        async () => searchPage(kind, await feed.getContinuation() as SearchFeed),
+      )
     }
     return result
   }
@@ -417,23 +600,52 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
         .map(normalizeFeedChannel)
         .filter((channel) => channel !== undefined)
     },
-    // The query is part of the kind so a cursor from one search cannot page
-    // another one's results after the user types something new.
-    search: async (query, cursor) => cursor
-      ? videoContinuations.resolve(`search:${query}`, cursor)
-      : page(`search:${query}`, await (await client).search(query)),
+    // The query AND the filters are part of the kind: a cursor minted under one
+    // filter set must not page another's results after the user narrows a
+    // search, which would silently mix filtered and unfiltered pages.
+    search: async (query, filters, cursor) => {
+      const kind = `search:${query}:${filterKey(filters)}`
+      if (cursor) return searchContinuations.resolve(kind, cursor)
+      return searchPage(kind, await (await client).search(query, upstreamFilters(filters)))
+    },
+    // Suggestions are pure display text with no continuation and no entity, so
+    // a failure degrades to an empty list rather than failing the header.
+    searchSuggestions: async (query, previousQuery) => {
+      if (query.trim() === '') return []
+      try {
+        return await (await client).getSearchSuggestions(query, previousQuery)
+      } catch {
+        return []
+      }
+    },
     video: async (id) => normalizeVideoDetails((await (await client).getBasicInfo(id)).basic_info),
-    channel: async (id, cursor) => {
-      let channel = channels.get(id)
+    channel: async (id, tab, sort, query, cursor) => {
+      // Cursors are namespaced per (channel, tab, sort, query): the Videos tab
+      // and the Playlists tab of one channel are different feeds, and paging one
+      // with the other's cursor would append unrelated rows.
+      const kind = `channel:${id}:${tab ?? 'DEFAULT'}:${sort ?? ''}:${query ?? ''}`
+      const known = channels.get(id)
       if (cursor) {
-        if (!channel) throw new Error(`youtube: channel ${id} is not loaded`)
-        return { channel, videos: await videoContinuations.resolve(`channel:${id}`, cursor) }
+        if (!known) throw new Error(`youtube: channel ${id} is not loaded`)
+        return {
+          ...known.page,
+          channel: known.channel,
+          videos: await videoContinuations.resolve(kind, cursor),
+        }
       }
       const result = await (await client).getChannel(id)
-      channel = normalizeChannel(result, id)
-      channels.set(id, channel)
-      const videos = result.has_videos && result.getVideos ? await result.getVideos() : result
-      return { channel, videos: page(`channel:${id}`, videos) }
+      const channel = normalizeChannel(result, id)
+      const availableTabs = availableChannelTabs(result)
+      const selected = tab && availableTabs.includes(tab) ? tab : defaultChannelTab(availableTabs)
+      let feed = await openChannelTab(result, selected, query)
+      // Sorting is a second browse round trip, so it only runs when the caller
+      // asked for an option the tab actually offers.
+      const sortOptions = feed.sort_filters ?? []
+      const appliedSort = sort && sortOptions.includes(sort) ? sort : undefined
+      if (appliedSort && feed.applySort) feed = await feed.applySort(appliedSort)
+      const rest = { availableTabs, tab: selected, sortOptions, appliedSort }
+      channels.set(id, { channel, page: rest })
+      return { ...rest, channel, videos: page(kind, feed) }
     },
     // A single /next call carries everything the watch page needs on top of
     // playback (which fetches /player separately): one tunneled round trip. In
@@ -523,10 +735,11 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
       requireSignIn(active, 'change a subscription')
       await (subscribed ? active.interact.subscribe(channelId) : active.interact.unsubscribe(channelId))
       const known = channels.get(channelId)
-      const next: SourceChannel = { ...known, id: channelId, name: known?.name ?? '', isSubscribed: subscribed }
+      const next: SourceChannel = { ...known?.channel, id: channelId, name: known?.channel.name ?? '', isSubscribed: subscribed }
       // Keep the cache honest so a later channel() read does not hand back the
-      // pre-write state.
-      if (known) channels.set(channelId, next)
+      // pre-write state. Only the entity half changes; the page half (tabs and
+      // sort options) is untouched by a subscribe.
+      if (known) channels.set(channelId, { ...known, channel: next })
       return next
     },
     setNotificationLevel: async (channelId, level) => {
@@ -534,8 +747,8 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
       requireSignIn(active, 'change notifications')
       await active.interact.setNotificationPreferences(channelId, level)
       const known = channels.get(channelId)
-      const next: SourceChannel = { ...known, id: channelId, name: known?.name ?? '', notificationLevel: level }
-      if (known) channels.set(channelId, next)
+      const next: SourceChannel = { ...known?.channel, id: channelId, name: known?.channel.name ?? '', notificationLevel: level }
+      if (known) channels.set(channelId, { ...known, channel: next })
       return next
     },
     addToPlaylist: async (playlistId, videoIds) => {

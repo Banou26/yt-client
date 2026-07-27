@@ -18,6 +18,7 @@ export type SourceChannel = {
   description?: string
   isSubscribed?: boolean
   notificationLevel?: SourceNotificationLevel
+  isVerified?: boolean
 }
 
 export type SourceVideo = {
@@ -31,6 +32,12 @@ export type SourceVideo = {
   publishedText?: string
   isLive?: boolean
   progressPercent?: number
+  isUpcoming?: boolean
+  isMembersOnly?: boolean
+  isShort?: boolean
+  // Upstream's own localized badge texts. `badges` is always present so the
+  // resolver never has to invent an empty list for a non-null GraphQL field.
+  badges: string[]
   channel?: SourceChannel
 }
 
@@ -61,9 +68,54 @@ export type SourceHomeFeed = {
   cursor?: string
 }
 
+export type SourceSearchUploadDate = 'ALL' | 'TODAY' | 'WEEK' | 'MONTH' | 'YEAR'
+
+export type SourceSearchType = 'ALL' | 'VIDEO' | 'SHORTS' | 'CHANNEL' | 'PLAYLIST' | 'MOVIE'
+
+export type SourceSearchDuration = 'ALL' | 'UNDER_THREE_MINS' | 'THREE_TO_TWENTY_MINS' | 'OVER_TWENTY_MINS'
+
+export type SourceSearchSort = 'RELEVANCE' | 'POPULARITY'
+
+export type SourceSearchFeature =
+  | 'HD' | 'SUBTITLES' | 'CREATIVE_COMMONS' | 'THREE_D' | 'LIVE'
+  | 'PURCHASED' | 'FOUR_K' | 'THREE_SIXTY' | 'LOCATION' | 'HDR' | 'VR180'
+
+export type SourceSearchFilters = {
+  uploadDate?: SourceSearchUploadDate
+  type?: SourceSearchType
+  duration?: SourceSearchDuration
+  sortBy?: SourceSearchSort
+  features?: SourceSearchFeature[]
+}
+
+// Discriminated at the source so the worker's __resolveType is a field switch
+// and never has to recognize a youtubei.js node. The tag sits ALONGSIDE the
+// entity's own fields rather than wrapping them: GraphQL resolves the members'
+// fields off this same object, and a wrapper would need an unwrapping resolver
+// for all three types. `kind` is not in the schema, so it is never selectable.
+export type SourceSearchResult =
+  | (SourceVideo & { kind: 'video' })
+  | (SourceChannel & { kind: 'channel' })
+  | (SourcePlaylist & { kind: 'playlist' })
+
+export type SourceSearchPage = {
+  results: SourceSearchResult[]
+  refinements: string[]
+  estimatedResults?: number
+  cursor?: string
+}
+
+export type SourceChannelTab =
+  | 'HOME' | 'VIDEOS' | 'SHORTS' | 'LIVE' | 'RELEASES'
+  | 'PODCASTS' | 'COURSES' | 'PLAYLISTS' | 'COMMUNITY' | 'SEARCH'
+
 export type SourceChannelPage = {
   channel: SourceChannel
   videos: SourceVideoPage
+  availableTabs: SourceChannelTab[]
+  tab: SourceChannelTab
+  sortOptions: string[]
+  appliedSort?: string
 }
 
 // The queue rail a playlist-context watch comes back with. It is NOT a
@@ -163,9 +215,17 @@ export type Source = {
   subscriptions(cursor?: string): Promise<SourceVideoPage>
   history(cursor?: string): Promise<SourceSectionedVideoPage>
   subscribedChannels(): Promise<SourceChannel[]>
-  search(query: string, cursor?: string): Promise<SourceVideoPage>
+  // A cursor is bound to the query AND the filters that minted it: changing a
+  // filter has to start a new feed, not page the previous one's results.
+  search(query: string, filters?: SourceSearchFilters, cursor?: string): Promise<SourceSearchPage>
+  // Not an InnerTube call. It reads suggestqueries-clients6.youtube.com through
+  // the rewritten fetch, so every keystroke that reaches it is a tunneled round
+  // trip and the caller is expected to debounce.
+  searchSuggestions(query: string, previousQuery?: string): Promise<string[]>
   video(id: string): Promise<SourceVideo | undefined>
-  channel(id: string, cursor?: string): Promise<SourceChannelPage>
+  // `tab` omitted means the channel's own landing tab. `query` applies only to
+  // the SEARCH tab. `sort` is one of the page's own sortOptions labels.
+  channel(id: string, tab?: SourceChannelTab, sort?: string, query?: string, cursor?: string): Promise<SourceChannelPage>
   // Passing a playlist puts the video in a queue, and the same call then also
   // brings back the panel. `playlistIndex` is 0-based; the server corrects an
   // out-of-range one, so the honoured position is the one on the result.
@@ -210,6 +270,7 @@ export const SOURCE_METHODS = [
   'history',
   'subscribedChannels',
   'search',
+  'searchSuggestions',
   'video',
   'channel',
   'watch',
@@ -247,8 +308,10 @@ export const SOURCE_CURSOR_ARGUMENT = {
   home: 1,
   subscriptions: 0,
   history: 0,
-  search: 1,
-  channel: 1,
+  // Both moved when their argument lists grew in front of the cursor: search
+  // gained `filters` and channel gained `tab`, `sort` and `query`.
+  search: 2,
+  channel: 4,
   comments: 1,
   playlists: 0,
   playlist: 1,
@@ -271,6 +334,7 @@ export const SOURCE_REPLAY = {
   history: 'unless-cursor',
   subscribedChannels: 'always',
   search: 'unless-cursor',
+  searchSuggestions: 'always',
   video: 'always',
   channel: 'unless-cursor',
   watch: 'always',

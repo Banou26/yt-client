@@ -9,6 +9,15 @@ type FakeFeed = {
   getContinuation(): Promise<FakeFeed>
 }
 
+type FakeSearch = {
+  videos: unknown[]
+  results: unknown[]
+  refinements: string[]
+  estimated_results: number
+  has_continuation: boolean
+  getContinuation(): Promise<FakeSearch>
+}
+
 type FakeComments = {
   contents: { comment: { comment_id: string, content: { text: string } } }[]
   has_continuation: boolean
@@ -30,6 +39,20 @@ type FakePlaylists = {
 
 const feed = (id: string, next?: () => Promise<FakeFeed>): FakeFeed => ({
   videos: [{ video_id: id, title: { text: id } }],
+  has_continuation: Boolean(next),
+  getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
+})
+
+// A search response carries its rows on `results` rather than `videos`: that
+// getter emits only videos, which is why channel and playlist hits were dropped.
+const search = (id: string, next?: () => Promise<FakeSearch>): FakeSearch => ({
+  videos: [],
+  results: [
+    { video_id: id, title: { text: id } },
+    { id: 'UCchannel', author: { id: 'UCchannel', name: 'A Channel' }, subscriber_count: { text: '1M subscribers' } },
+  ],
+  refinements: ['refined query'],
+  estimated_results: 1234,
   has_continuation: Boolean(next),
   getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
 })
@@ -67,13 +90,28 @@ const createFakeClient = () => {
   // POSTs to browse/edit_playlist and differs only in the body, which is also
   // where youtubei.js's own casing defects live.
   const payloads: FakeCall[] = []
+  // Filter mapping is a translation layer to upstream's lowercase vocabulary, so
+  // what actually reached the client is the only thing worth asserting on.
+  const searchFilters: unknown[] = []
   return {
     calls,
     payloads,
+    searchFilters,
     getHomeFeed: async () => feed('first', async () => feed('second')),
-    search: async () => feed('search'),
+    search: async (_query: string, filters?: unknown) => {
+      searchFilters.push(filters)
+      return search('search', async () => search('search-2'))
+    },
+    getSearchSuggestions: async (query: string) => [`${query} one`, `${query} two`],
     getBasicInfo: async () => ({ basic_info: undefined }),
-    getChannel: async () => ({ ...feed('channel'), metadata: { external_id: 'c', title: 'Channel' } }),
+    getChannel: async () => ({
+      ...feed('channel'),
+      metadata: { external_id: 'c', title: 'Channel' },
+      has_videos: true,
+      has_playlists: true,
+      getVideos: async () => feed('channel-videos', async () => feed('channel-videos-2')),
+      getPlaylists: async () => feed('channel-playlists', async () => feed('channel-playlists-2')),
+    }),
     getComments: async () => comments('top', async () => comments('next')),
     getPlaylists: async () => playlists('PLone', async () => playlists('PLtwo')),
     getPlaylist: async (id: string) => playlist(`${id}-first`, async () => playlist(`${id}-second`)),
@@ -142,6 +180,105 @@ const createFakeClient = () => {
   }
 }
 
+describe('youtube search', () => {
+  it('keeps channel and playlist hits that the videos getter drops', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    const results = await source.search('query')
+    // The rows are tagged rather than wrapped, so the worker's __resolveType is
+    // a field switch and GraphQL still resolves each member's own fields off
+    // this same object.
+    expect(results.results.map((row) => row.kind)).toEqual(['video', 'channel'])
+    expect(results.results[0]).toMatchObject({ kind: 'video', id: 'search' })
+    expect(results.results[1]).toMatchObject({ kind: 'channel', id: 'UCchannel', name: 'A Channel' })
+    expect(results.refinements).toEqual(['refined query'])
+    expect(results.estimatedResults).toBe(1234)
+  })
+
+  it('translates the filter vocabulary and drops the unset axes', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await source.search('query', { uploadDate: 'WEEK', sortBy: 'POPULARITY', features: ['FOUR_K', 'CREATIVE_COMMONS'] })
+    // ALL is the unset state on every axis: sending it would be a real filter
+    // value upstream rather than an absent one.
+    await source.search('query', { uploadDate: 'ALL', type: 'ALL' })
+    expect(client.searchFilters[0]).toEqual({
+      upload_date: 'week',
+      type: undefined,
+      duration: undefined,
+      prioritize: 'popularity',
+      features: ['4k', 'creative_commons'],
+    })
+    expect(client.searchFilters[1]).toBeUndefined()
+  })
+
+  it('refuses a cursor minted under a different filter set', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    const unfiltered = await source.search('query')
+    expect(unfiltered.cursor).toBeTruthy()
+    // Paging a narrowed search with the unfiltered cursor would append results
+    // the filter excludes, which reads as the filter silently switching off.
+    await expect(source.search('query', { uploadDate: 'WEEK' }, unfiltered.cursor))
+      .rejects.toThrow('belongs to')
+    // The same filter set still pages normally.
+    await expect(source.search('query', undefined, unfiltered.cursor)).resolves.toBeTruthy()
+  })
+
+  it('degrades suggestions to an empty list rather than failing the header', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    expect(await source.searchSuggestions('bl')).toEqual(['bl one', 'bl two'])
+    // An empty box has nothing to suggest and must not cost a round trip.
+    expect(await source.searchSuggestions('   ')).toEqual([])
+    client.getSearchSuggestions = async () => { throw new Error('suggest host unreachable') }
+    expect(await source.searchSuggestions('bl')).toEqual([])
+  })
+})
+
+describe('youtube channel tabs', () => {
+  it('reports only the tabs the channel actually has', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    const result = await source.channel('c')
+    // The fake carries Videos and Playlists only, so Shorts must not appear:
+    // opening a tab a channel lacks throws `Tab "shorts" not found` upstream.
+    expect(result.availableTabs).toEqual(['VIDEOS', 'PLAYLISTS'])
+    expect(result.tab).toBe('VIDEOS')
+    expect(result.videos.items[0]?.id).toBe('channel-videos')
+  })
+
+  it('opens the requested tab and ignores one the channel does not have', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    const playlists = await source.channel('c', 'PLAYLISTS')
+    expect(playlists.tab).toBe('PLAYLISTS')
+    expect(playlists.videos.items[0]?.id).toBe('channel-playlists')
+    // Falling back beats throwing at the page for a tab that is not there.
+    const missing = await source.channel('c', 'COMMUNITY')
+    expect(missing.tab).toBe('VIDEOS')
+  })
+
+  it('refuses a cursor minted for a different tab of the same channel', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    const videos = await source.channel('c')
+    expect(videos.videos.cursor).toBeTruthy()
+    await expect(source.channel('c', 'PLAYLISTS', undefined, undefined, videos.videos.cursor))
+      .rejects.toThrow('belongs to')
+  })
+})
+
 describe('youtube source', () => {
   it('keeps continuations opaque and replayable', async () => {
     const client = createFakeClient()
@@ -175,7 +312,13 @@ describe('youtube source', () => {
     })
     const home = await source.home()
     expect(home.cursor).toBeTruthy()
-    await expect(source.search('query', home.cursor)).rejects.toThrow('belongs to home')
+    // Two different rejections, both of which have to hold. Search keeps its own
+    // registry now (its pages are a union, not a video list), so a home cursor
+    // is not merely the wrong KIND there, it does not exist at all.
+    await expect(source.search('query', undefined, home.cursor)).rejects.toThrow('unknown continuation')
+    // Within one registry the kind is what separates feeds, and that check is
+    // the one that stops a home cursor from paging the subscriptions feed.
+    await expect(source.subscriptions(home.cursor)).rejects.toThrow('belongs to home')
   })
 
   it('lets a failed continuation be retried instead of caching the failure', async () => {
@@ -319,8 +462,10 @@ describe('youtube source', () => {
     home: [undefined as unknown as string],
     subscriptions: [],
     history: [],
-    search: ['query'],
-    channel: ['c'],
+    // Both grew arguments in front of the cursor: search gained `filters` and
+    // channel gained `tab`, `sort` and `query`.
+    search: ['query', undefined as unknown as string],
+    channel: ['c', undefined as unknown as string, undefined as unknown as string, undefined as unknown as string],
     comments: ['abc'],
     playlists: [],
     playlist: ['PL1'],

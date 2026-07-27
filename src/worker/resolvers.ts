@@ -1,14 +1,40 @@
+import type { SearchFilters } from '../generated/graphql'
 import type { Resolvers } from '../generated/resolvers'
+import type { SourceSearchFilters } from '../sources/types'
+
+// GraphQL nullables arrive as null and the Source contract speaks in undefined,
+// so the boundary is converted field by field rather than passed through: a
+// null reaching youtubei.js is a real filter value, not an absent one.
+const searchFilters = (filters: SearchFilters | null | undefined): SourceSearchFilters | undefined => {
+  if (!filters) return undefined
+  return {
+    uploadDate: filters.uploadDate ?? undefined,
+    type: filters.type ?? undefined,
+    duration: filters.duration ?? undefined,
+    sortBy: filters.sortBy ?? undefined,
+    features: filters.features ?? undefined,
+  }
+}
 
 export const resolvers = {
+  // The source tags every row with its kind, so this stays a field switch and
+  // never has to recognize a youtubei.js node shape.
+  SearchResult: {
+    __resolveType: (result) =>
+      result.kind === 'video' ? 'Video' : result.kind === 'channel' ? 'Channel' : 'Playlist',
+  },
   Query: {
     home: (_, { chip, cursor }, context) => context.source.home(chip ?? undefined, cursor ?? undefined),
     subscriptions: (_, { cursor }, context) => context.source.subscriptions(cursor ?? undefined),
     history: (_, { cursor }, context) => context.source.history(cursor ?? undefined),
     subscribedChannels: (_, _args, context) => context.source.subscribedChannels(),
-    search: (_, { query, cursor }, context) => context.source.search(query, cursor ?? undefined),
+    search: (_, { query, filters, cursor }, context) =>
+      context.source.search(query, searchFilters(filters), cursor ?? undefined),
+    searchSuggestions: (_, { query, previousQuery }, context) =>
+      context.source.searchSuggestions(query, previousQuery ?? undefined),
     video: (_, { id }, context) => context.source.video(id).then((video) => video ?? null),
-    channel: (_, { id, cursor }, context) => context.source.channel(id, cursor ?? undefined),
+    channel: (_, { id, tab, sort, query, cursor }, context) =>
+      context.source.channel(id, tab ?? undefined, sort ?? undefined, query ?? undefined, cursor ?? undefined),
     watch: (_, { id, playlistId, playlistIndex }, context) =>
       context.source.watch(id, playlistId ?? undefined, playlistIndex ?? undefined).then((meta) => meta ?? null),
     comments: (_, { videoId, cursor }, context) => context.source.comments(videoId, cursor ?? undefined),

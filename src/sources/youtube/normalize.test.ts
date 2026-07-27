@@ -1,8 +1,73 @@
 import { describe, expect, it } from 'vitest'
 
-import { normalizeChannel, normalizeCommentThread, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizePlaylistPanelVideo, normalizeSession, normalizeVideoDetails, normalizeWatchMeta, normalizeWatchPlaylist } from './normalize'
+import { normalizeChannel, normalizeCommentThread, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizePlaylistPanelVideo, normalizeSearchChannel, normalizeSession, normalizeVideoDetails, normalizeWatchMeta, normalizeWatchPlaylist } from './normalize'
 
 describe('youtube normalization', () => {
+  it('reads a search channel off the shape normalizeChannel cannot take', () => {
+    // A search Channel keeps its id at the top level and its name on an Author.
+    // normalizeChannel wants a browse response's metadata.external_id and
+    // THROWS without one, so reusing it here would take out the whole page.
+    expect(normalizeSearchChannel({
+      id: 'UC123',
+      author: {
+        id: 'UC123',
+        name: 'A Channel',
+        url: 'https://www.youtube.com/@achannel',
+        thumbnails: [{ url: 'avatar', width: 176 }],
+        is_verified: true,
+      },
+      subscriber_count: { text: '1.2M subscribers' },
+      video_count: { text: '431 videos' },
+      description_snippet: { text: 'We make things' },
+      subscribe_button: { subscribed: true },
+    })).toEqual({
+      id: 'UC123',
+      name: 'A Channel',
+      avatar: 'avatar',
+      handle: '@achannel',
+      subscriberCountText: '1.2M subscribers',
+      videoCountText: '431 videos',
+      description: 'We make things',
+      isSubscribed: true,
+      isVerified: true,
+    })
+  })
+
+  it('drops a search node that is not a channel', () => {
+    expect(normalizeSearchChannel({ id: 'UC123' })).toBeUndefined()
+    expect(normalizeSearchChannel({})).toBeUndefined()
+    // The placeholder Author upstream builds for an absent byline must not read
+    // back as a real channel behind a dead link.
+    expect(normalizeSearchChannel({ author: { id: 'N/A', name: 'N/A' } })).toBeUndefined()
+  })
+
+  it('reads the card badges upstream already localized', () => {
+    expect(normalizeFeedVideo({
+      video_id: 'abc',
+      title: { text: 'Video title' },
+      is_upcoming: true,
+      badges: [
+        { label: '4K', style: 'BADGE_STYLE_TYPE_SIMPLE' },
+        { label: 'CC', style: 'BADGE_STYLE_TYPE_SIMPLE' },
+        { label: 'Members only', style: 'BADGE_STYLE_TYPE_MEMBERS_ONLY' },
+      ],
+    })).toMatchObject({
+      id: 'abc',
+      isUpcoming: true,
+      // Matched on the style id rather than the label, which is a whole
+      // localized sentence.
+      isMembersOnly: true,
+      badges: ['4K', 'CC', 'Members only'],
+    })
+  })
+
+  it('leaves badges an empty list rather than absent', () => {
+    // The GraphQL field is non-null, so every path has to produce a list: an
+    // absent one would make the resolver invent it.
+    expect(normalizeFeedVideo({ video_id: 'abc', title: { text: 'T' } })?.badges).toEqual([])
+    expect(normalizeVideoDetails({ id: 'abc', title: 'T' })?.badges).toEqual([])
+  })
+
   it('normalizes feed videos', () => {
     expect(normalizeFeedVideo({
       video_id: 'abc',
@@ -18,6 +83,7 @@ describe('youtube normalization', () => {
       title: 'Video title',
       thumbnail: 'large',
       durationSeconds: 125,
+      badges: [],
       channel: { id: 'channel', name: 'Channel' },
     })
   })
@@ -149,6 +215,7 @@ describe('youtube normalization', () => {
       durationSeconds: 3723,
       viewCount: '1.1M views',
       publishedText: '3 months ago',
+      badges: [],
       channel: { id: 'UC123', name: 'Channel', avatar: 'avatar' },
     })
   })
@@ -274,6 +341,7 @@ describe('youtube normalization', () => {
         durationSeconds: 600,
         viewCount: '1.2M views',
         publishedText: '3 years ago',
+        badges: [],
         channel: { id: 'UC123', name: 'Channel' },
       },
       setVideoId: 'slot-1',
@@ -390,8 +458,8 @@ describe('youtube normalization', () => {
         subscriberCountText: '2.5M subscribers',
       },
       related: [
-        { id: 'rel1', title: 'Related one', durationSeconds: 60, channel: { id: 'UC456', name: 'Other' } },
-        { id: 'rel2', title: 'Related two' },
+        { id: 'rel1', title: 'Related one', durationSeconds: 60, badges: [], channel: { id: 'UC456', name: 'Other' } },
+        { id: 'rel2', title: 'Related two', badges: [] },
       ],
     })
   })
@@ -407,12 +475,12 @@ describe('youtube normalization', () => {
       duration: { text: '1:01', seconds: 61 },
       author: 'Owner',
       set_video_id: 'set-q1',
-    })).toEqual({ id: 'q1', title: 'Queue row', thumbnail: 'large', durationSeconds: 61 })
+    })).toEqual({ id: 'q1', title: 'Queue row', thumbnail: 'large', durationSeconds: 61, badges: [] })
   })
 
   it('unwraps a queue row and drops the rows that carry no video', () => {
     expect(normalizePlaylistPanelVideo({ primary: { video_id: 'q2', title: { text: 'Wrapped' } } }))
-      .toEqual({ id: 'q2', title: 'Wrapped', thumbnail: undefined, durationSeconds: undefined })
+      .toEqual({ id: 'q2', title: 'Wrapped', thumbnail: undefined, durationSeconds: undefined, badges: [] })
     // The mix teaser tail has no video id at all.
     expect(normalizePlaylistPanelVideo({ playlist_video: {} })).toBeUndefined()
     // A missing length parses to NaN upstream rather than to an absent value.
@@ -443,7 +511,7 @@ describe('youtube normalization', () => {
       id: 'PL1',
       title: 'My queue',
       author: 'Owner',
-      items: [{ id: 'q1', title: 'First', thumbnail: undefined, durationSeconds: undefined }],
+      items: [{ id: 'q1', title: 'First', thumbnail: undefined, durationSeconds: undefined, badges: [] }],
       // 0-based, so position zero has to survive the guard.
       currentIndex: 0,
       isInfinite: false,

@@ -30,6 +30,7 @@ type Channel {
   description: String
   isSubscribed: Boolean
   notificationLevel: NotificationLevel
+  isVerified: Boolean
 }
 
 type Video {
@@ -45,6 +46,16 @@ type Video {
   # 0-100 watch progress, for the red bar across the thumbnail. Only feeds that
   # carry a resume overlay (history, home) populate it.
   progressPercent: Int
+  # A premiere or a scheduled stream: it has a page but nothing to play yet, so
+  # a card must not offer it as watchable the way a finished video is.
+  isUpcoming: Boolean
+  # Vertical, and 9:16 in the grid. Shorts reach the normalizers as their own
+  # node kind, so this is set at the source rather than guessed from duration.
+  isMembersOnly: Boolean
+  isShort: Boolean
+  # Upstream's own badge texts (4K, CC, New), already localized. Kept as text
+  # because the vocabulary changes and an unknown badge should still render.
+  badges: [String!]!
   channel: Channel
 }
 
@@ -79,9 +90,102 @@ type HomeFeed {
   cursor: String
 }
 
+# Search ranks channels and playlists above videos for a name query, so a
+# video-only page silently drops the best answer. The source tags every row with
+# its kind, which keeps __resolveType a pure field switch in the worker rather
+# than a second place that has to know youtubei.js node shapes.
+union SearchResult = Video | Channel | Playlist
+
+type SearchPage {
+  results: [SearchResult!]!
+  # Upstream's "did you mean" and related-query chips, as plain query strings.
+  refinements: [String!]!
+  estimatedResults: Float
+  cursor: String
+}
+
+# Upstream's own vocabulary, lowercased by the source before it reaches
+# youtubei.js. ALL is the unset state rather than a filter that gets sent.
+enum SearchUploadDate {
+  ALL
+  TODAY
+  WEEK
+  MONTH
+  YEAR
+}
+
+enum SearchType {
+  ALL
+  VIDEO
+  SHORTS
+  CHANNEL
+  PLAYLIST
+  MOVIE
+}
+
+enum SearchDuration {
+  ALL
+  UNDER_THREE_MINS
+  THREE_TO_TWENTY_MINS
+  OVER_TWENTY_MINS
+}
+
+# youtubei.js only encodes these two orderings. 'Upload date' and 'Rating' are
+# reachable at runtime through the response's own sub_menu endpoints, which
+# carry pre-baked params, so they are deliberately NOT modelled here as if they
+# were a free choice.
+enum SearchSort {
+  RELEVANCE
+  POPULARITY
+}
+
+enum SearchFeature {
+  HD
+  SUBTITLES
+  CREATIVE_COMMONS
+  THREE_D
+  LIVE
+  PURCHASED
+  FOUR_K
+  THREE_SIXTY
+  LOCATION
+  HDR
+  VR180
+}
+
+input SearchFilters {
+  uploadDate: SearchUploadDate
+  type: SearchType
+  duration: SearchDuration
+  sortBy: SearchSort
+  features: [SearchFeature!]
+}
+
+# The tabs a channel can expose. Which ones actually exist varies per channel,
+# so a page reports its own `availableTabs` rather than the UI assuming a set.
+enum ChannelTab {
+  HOME
+  VIDEOS
+  SHORTS
+  LIVE
+  RELEASES
+  PODCASTS
+  COURSES
+  PLAYLISTS
+  COMMUNITY
+  SEARCH
+}
+
 type ChannelPage {
   channel: Channel!
   videos: VideoPage!
+  # Only the tabs this channel really has, in upstream's display order.
+  availableTabs: [ChannelTab!]!
+  tab: ChannelTab!
+  # Sort options for the current tab, as upstream's own localized labels. The
+  # applied one is echoed back so the control can show what is active.
+  sortOptions: [String!]!
+  appliedSort: String
 }
 
 # The queue rail beside the player, present only when /watch was opened inside a
@@ -197,9 +301,19 @@ type Query {
   subscriptions(cursor: String): VideoPage!
   history(cursor: String): SectionedVideoPage!
   subscribedChannels: [Channel!]!
-  search(query: String!, cursor: String): VideoPage!
+  # Results are heterogeneous: see the SearchResult union. A cursor is bound to
+  # the query AND the filter set that minted it, so changing a filter starts a
+  # fresh feed rather than paging the previous one's results.
+  search(query: String!, filters: SearchFilters, cursor: String): SearchPage!
+  # Free-text suggestions for the search box. Not an InnerTube call: it reads
+  # suggestqueries-clients6.youtube.com through the same rewritten fetch, so it
+  # is one tunneled round trip per call and callers must debounce.
+  searchSuggestions(query: String!, previousQuery: String): [String!]!
   video(id: ID!): Video
-  channel(id: ID!, cursor: String): ChannelPage!
+  # `tab` defaults to the channel's own landing tab. `query` only applies to the
+  # SEARCH tab and is ignored elsewhere. `sort` is one of the page's own
+  # `sortOptions` labels.
+  channel(id: ID!, tab: ChannelTab, sort: String, query: String, cursor: String): ChannelPage!
   # `playlistId` puts the video in a queue: the same /next call then also returns
   # the playlist panel. `playlistIndex` is 0-based, and the server corrects an
   # out-of-range one rather than failing, so read the position back off
