@@ -16,8 +16,11 @@ describe('youtube normalization', () => {
         thumbnails: [{ url: 'avatar', width: 176 }],
         is_verified: true,
       },
-      subscriber_count: { text: '1.2M subscribers' },
-      video_count: { text: '431 videos' },
+      // Both slots are MISNAMED upstream: subscriberCountText carries the
+      // handle and videoCountText carries the subscriber count. youtubei.js
+      // flags this in parser/classes/Channel.js:25 and keeps the old names.
+      subscriber_count: { text: '@achannel' },
+      video_count: { text: '1.2M subscribers' },
       description_snippet: { text: 'We make things' },
       subscribe_button: { subscribed: true },
     })).toEqual({
@@ -26,11 +29,27 @@ describe('youtube normalization', () => {
       avatar: 'avatar',
       handle: '@achannel',
       subscriberCountText: '1.2M subscribers',
-      videoCountText: '431 videos',
       description: 'We make things',
       isSubscribed: true,
       isVerified: true,
     })
+  })
+
+  it('takes the search channel handle off the misnamed slot when the url has none', () => {
+    // Reading the two slots literally rendered the handle twice on every search
+    // channel row: once as the handle and again as the subscriber count.
+    expect(normalizeSearchChannel({
+      id: 'UC123',
+      author: { id: 'UC123', name: 'A Channel' },
+      subscriber_count: { text: '@achannel' },
+      video_count: { text: '1.2M subscribers' },
+    })).toMatchObject({ handle: '@achannel', subscriberCountText: '1.2M subscribers' })
+    // A slot that does not hold a handle must not be shown as one.
+    expect(normalizeSearchChannel({
+      id: 'UC123',
+      author: { id: 'UC123', name: 'A Channel' },
+      subscriber_count: { text: '1.2M subscribers' },
+    })?.handle).toBeUndefined()
   })
 
   it('drops a search node that is not a channel', () => {

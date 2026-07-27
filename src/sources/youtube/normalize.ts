@@ -390,13 +390,19 @@ export const normalizeSearchChannel = (input: unknown): SourceChannel | undefine
   const id = node.id ?? presentText(node.author?.id)
   const name = presentText(node.author?.name)
   if (!id || !name) return undefined
+  // The two count fields are MISNAMED on this node and reading them literally
+  // renders the handle twice. YouTube repurposed the renderer's slots and
+  // youtubei.js kept the original property names, flagging it in its own source
+  // (parser/classes/Channel.js:25): `subscriberCountText` now carries the
+  // handle and `videoCountText` carries the subscriber count. A video count is
+  // simply not on this node, so it stays absent rather than being invented.
+  const handle = handleFromUrl(node.author?.url) ?? presentText(node.subscriber_count)
   return {
     id,
     name,
     avatar: thumbnail(node.author?.thumbnails),
-    handle: handleFromUrl(node.author?.url),
-    subscriberCountText: presentText(node.subscriber_count),
-    videoCountText: presentText(node.video_count),
+    handle: handle?.startsWith('@') ? handle : undefined,
+    subscriberCountText: presentText(node.video_count),
     description: presentText(node.description_snippet),
     isSubscribed: node.subscribe_button?.subscribed,
     isVerified: node.author?.is_verified === true ? true : undefined,

@@ -104,14 +104,28 @@ const createFakeClient = () => {
     },
     getSearchSuggestions: async (query: string) => [`${query} one`, `${query} two`],
     getBasicInfo: async () => ({ basic_info: undefined }),
-    getChannel: async () => ({
-      ...feed('channel'),
-      metadata: { external_id: 'c', title: 'Channel' },
-      has_videos: true,
-      has_playlists: true,
-      getVideos: async () => feed('channel-videos', async () => feed('channel-videos-2')),
-      getPlaylists: async () => feed('channel-playlists', async () => feed('channel-playlists-2')),
-    }),
+    getChannel: async () => {
+      // Real methods rather than arrows, and each one checks its receiver. Every
+      // upstream tab opener is a prototype method that reaches for
+      // `this.getTabByURL`, so looking one up and calling it bare fails with
+      // `reading 'getTabByURL' of undefined`. An arrow would ignore `this` and
+      // let that regression through.
+      const channel = {
+        ...feed('channel'),
+        metadata: { external_id: 'c', title: 'Channel' },
+        has_videos: true,
+        has_playlists: true,
+        async getVideos(this: unknown) {
+          if (this !== channel) throw new TypeError("Cannot read properties of undefined (reading 'getTabByURL')")
+          return feed('channel-videos', async () => feed('channel-videos-2'))
+        },
+        async getPlaylists(this: unknown) {
+          if (this !== channel) throw new TypeError("Cannot read properties of undefined (reading 'getTabByURL')")
+          return feed('channel-playlists', async () => feed('channel-playlists-2'))
+        },
+      }
+      return channel
+    },
     getComments: async () => comments('top', async () => comments('next')),
     getPlaylists: async () => playlists('PLone', async () => playlists('PLtwo')),
     getPlaylist: async (id: string) => playlist(`${id}-first`, async () => playlist(`${id}-second`)),

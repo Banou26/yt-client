@@ -350,10 +350,14 @@ const openChannelTab = async (
   }
   const entry = CHANNEL_TABS.find((candidate) => candidate.tab === tab)
   const open = entry && feed[entry.open]
-  // The tab was reported as available, so this is reachable only if upstream
-  // and its own has_* getter disagree. Falling back to the landing feed beats
-  // throwing `Tab "x" not found` at the page.
-  return typeof open === 'function' ? await (open as () => Promise<ChannelFeed>)() : feed
+  // The tab was reported as available, so a missing opener is reachable only if
+  // upstream and its own has_* getter disagree. Falling back to the landing feed
+  // beats throwing `Tab "x" not found` at the page.
+  if (typeof open !== 'function') return feed
+  // `.call(feed)` rather than `open()`: every one of these is a prototype method
+  // that reaches for `this.getTabByURL`, so invoking the looked-up reference
+  // bare detaches it and fails with `reading 'getTabByURL' of undefined`.
+  return (open as (this: ChannelFeed) => Promise<ChannelFeed>).call(feed)
 }
 
 const LIKE_ENDPOINT = {
