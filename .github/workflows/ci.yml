@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # TypeScript 7 needs legacy peer resolution here, matching .npmrc.
+      - run: npm ci --legacy-peer-deps
+
+      # Runs graphql-codegen first, so a schema change that outgrows the
+      # hand-written Source types fails here rather than at runtime. The
+      # SOURCE_METHODS / FRAME_METHODS exhaustiveness guards and the
+      # SOURCE_REPLAY classification are compile-time only, so this job is what
+      # actually enforces them.
+      - run: npm run type-check
+
+      - run: npm test
+
+      # Includes the separate frame bundle, which has no HMR and is easy to
+      # leave stale after a src/frame change.
+      - run: npm run build
