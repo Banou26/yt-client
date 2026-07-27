@@ -3,13 +3,15 @@ import { useRef } from 'preact/hooks'
 import { startEngine } from '../scramjet/client'
 
 // Kick (and memoize, in the frame) a video's watch-page fetch ahead of its
-// openPlayback — on feed hover or at route resolution — so the ~500ms transfer
+// openPlayback, on feed hover or at route resolution, so the ~500ms transfer
 // overlaps the navigation + player mount instead of trailing it. The head start
 // is what buys the latency: firing at route resolution is ~free (openPlayback
 // fires ~immediately after), but firing on feed hover overlaps the whole
 // navigation and cuts first-frame by up to ~1s on a lingering hover. The frame
 // dedupes and bounds the number of in-flight prefetches; this Set only avoids
-// re-issuing the RPC for an id already kicked this session.
+// re-issuing the RPC for an id already kicked this session. videoId is always
+// the bare id (the watch URL's `v` param), never an href, so a hover prefetch
+// and the later route-resolution prefetch land on the same key.
 const prefetched = new Set<string>()
 
 export const prefetchPlayback = (videoId: string) => {

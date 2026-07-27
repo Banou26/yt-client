@@ -1,14 +1,36 @@
-import type { Source, SourceChannel, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourceVideo, SourceVideoPage } from '../types'
+import type { Source, SourceChannel, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourceSectionedVideoPage, SourceVideo, SourceVideoPage } from '../types'
 
 import { Innertube } from 'youtubei.js/web'
 
-import { normalizeChannel, normalizeCommentThread, normalizeFeedVideo, normalizeLockupVideo, normalizeSession, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
+import { normalizeChannel, normalizeCommentThread, normalizeFeedChannel, normalizeFeedVideo, normalizeLockupVideo, normalizeSession, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
 
 type Feed = {
   videos: Iterable<unknown>
   memo?: Map<string, unknown[]>
   has_continuation: boolean
   getContinuation(): Promise<Feed>
+}
+
+type FilterChip = {
+  title?: unknown
+  is_selected?: boolean
+  endpoint?: { payload?: { token?: string, params?: string } }
+}
+
+type HomeFeedResponse = Feed & {
+  filter_chips?: FilterChip[]
+  applyFilter?: (chip: FilterChip) => Promise<HomeFeedResponse>
+}
+
+// History and Subscriptions group their items under headings. `sections` is the
+// grouped view; the flat `videos` getter throws the boundaries away.
+type SectionedFeed = Feed & {
+  sections?: { header?: { title?: unknown }, contents?: Iterable<unknown> }[]
+  removeVideo?: (videoId: string, pagesToLoad?: number) => Promise<unknown>
+}
+
+type ChannelsFeed = {
+  channels?: Iterable<unknown>
 }
 
 type ChannelFeed = Feed & {
@@ -23,8 +45,11 @@ type CommentsFeed = {
   getContinuation(): Promise<CommentsFeed>
 }
 
-type YoutubeClient = {
-  getHomeFeed(): Promise<Feed>
+export type YoutubeClient = {
+  getHomeFeed(): Promise<HomeFeedResponse>
+  getSubscriptionsFeed(): Promise<SectionedFeed>
+  getHistory(): Promise<SectionedFeed>
+  getChannelsFeed(): Promise<ChannelsFeed>
   search(query: string): Promise<Feed>
   getBasicInfo(id: string): Promise<{ basic_info?: unknown }>
   getChannel(id: string): Promise<ChannelFeed>
@@ -117,6 +142,37 @@ const createContinuations = <Page>() => {
   return { register, resolve }
 }
 
+// youtubei.js Text instances stringify through toString; feed nodes hand back
+// either shape depending on the renderer.
+const text = (value: unknown): string | undefined => {
+  if (typeof value === 'string') return value
+  const node = value as { text?: string, toString?: () => string } | undefined
+  if (node?.text) return node.text
+  const stringified = node?.toString?.()
+  return stringified && stringified !== 'N/A' ? stringified : undefined
+}
+
+// The chip's continuation token identifies it; its title is localized and would
+// change under a different hl.
+const chipId = (chip: { endpoint?: { payload?: { token?: string, params?: string } } }) =>
+  chip.endpoint?.payload?.token ?? chip.endpoint?.payload?.params
+
+// removeVideo defaults to scanning a single page, so anything the user has
+// scrolled past would report 'Unable to find video in watch history'. Bounded
+// because each extra page is a tunneled round trip.
+const HISTORY_REMOVAL_PAGES = 10
+
+// filter_chips THROWS when a feed carries no chip bar (and when it carries more
+// than one), so it cannot be read with optional chaining. A feed without chips
+// is ordinary, not an error.
+const filterChipsOf = (feed: { filter_chips?: FilterChip[] }): FilterChip[] => {
+  try {
+    return feed.filter_chips ?? []
+  } catch {
+    return []
+  }
+}
+
 const LIKE_ENDPOINT = {
   LIKE: '/like/like',
   DISLIKE: '/like/dislike',
@@ -130,8 +186,9 @@ const requireSignIn = (client: YoutubeClient, action: string) => {
 }
 
 export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSourceOptions): Source => {
-  const client = createClient?.() ?? Innertube.create({ fetch, retrieve_player: false }) as Promise<YoutubeClient>
+  const client = createClient?.() ?? Innertube.create({ fetch, retrieve_player: false }) as unknown as Promise<YoutubeClient>
   const videoContinuations = createContinuations<SourceVideoPage>()
+  const sectionContinuations = createContinuations<SourceSectionedVideoPage>()
   const commentContinuations = createContinuations<SourceCommentPage>()
   const channels = new Map<string, SourceChannel>()
 
@@ -139,6 +196,29 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
     const result: SourceVideoPage = { items: pageItems(feed) }
     if (feed.has_continuation) {
       result.cursor = videoContinuations.register(kind, async () => page(kind, await feed.getContinuation()))
+    }
+    return result
+  }
+
+  // Sections carry the day headings the History page is built around. A feed
+  // that reports none still yields one untitled section, so the caller renders
+  // a plain list rather than nothing.
+  const sectionedPage = (kind: string, feed: SectionedFeed): SourceSectionedVideoPage => {
+    const sections = (feed.sections ?? []).flatMap((section) => {
+      const items = [...(section.contents ?? [])]
+        .map((node) => normalizeFeedVideo(node) ?? normalizeLockupVideo(node))
+        .filter((video) => video !== undefined)
+      if (items.length === 0) return []
+      return [{ title: text(section.header?.title), items }]
+    })
+    const result: SourceSectionedVideoPage = {
+      sections: sections.length > 0 ? sections : [{ items: pageItems(feed) }],
+    }
+    if (feed.has_continuation) {
+      result.cursor = sectionContinuations.register(
+        kind,
+        async () => sectionedPage(kind, await feed.getContinuation() as SectionedFeed),
+      )
     }
     return result
   }
@@ -158,9 +238,54 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
 
   return {
     id: 'youtube',
-    home: async (cursor) => cursor
-      ? videoContinuations.resolve('home', cursor)
-      : page('home', await (await client).getHomeFeed()),
+    // The chip is part of the continuation kind so a cursor minted under one
+    // filter cannot page another one's results.
+    home: async (chip, cursor) => {
+      const kind = chip ? `home:${chip}` : 'home'
+      if (cursor) {
+        const next = await videoContinuations.resolve(kind, cursor)
+        return { items: next.items, chips: [], cursor: next.cursor }
+      }
+      const feed = await (await client).getHomeFeed()
+      const chips = filterChipsOf(feed)
+      // applyFilter costs a second browse round trip, so it only runs when a
+      // chip other than All is actually selected.
+      const filter = chip ? chips.find((candidate) => chipId(candidate) === chip) : undefined
+      const filtered = filter && feed.applyFilter ? await feed.applyFilter(filter) : feed
+      const result = page(kind, filtered)
+      return {
+        items: result.items,
+        // Chips come from the unfiltered response: the filtered one echoes back
+        // a reduced set that would make the rail collapse after one click.
+        chips: chips.flatMap((candidate) => {
+          const id = chipId(candidate)
+          const label = text(candidate.title)
+          if (!id || !label) return []
+          return [{ id, label, selected: candidate.is_selected === true || id === chip }]
+        }),
+        cursor: result.cursor,
+      }
+    },
+    subscriptions: async (cursor) => {
+      if (cursor) return videoContinuations.resolve('subscriptions', cursor)
+      const active = await client
+      requireSignIn(active, 'see your subscriptions')
+      return page('subscriptions', await active.getSubscriptionsFeed())
+    },
+    history: async (cursor) => {
+      if (cursor) return sectionContinuations.resolve('history', cursor)
+      const active = await client
+      requireSignIn(active, 'see your history')
+      return sectionedPage('history', await active.getHistory())
+    },
+    subscribedChannels: async () => {
+      const active = await client
+      requireSignIn(active, 'see your subscriptions')
+      const feed = await active.getChannelsFeed()
+      return [...(feed.channels ?? [])]
+        .map(normalizeFeedChannel)
+        .filter((channel) => channel !== undefined)
+    },
     // The query is part of the kind so a cursor from one search cannot page
     // another one's results after the user types something new.
     search: async (query, cursor) => cursor
@@ -217,6 +342,21 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
       // non-null list without being fetched back. See the Mutation comment in
       // src/worker/schema.gql.
       return { id, likeStatus: status, related: [] }
+    },
+    // History.removeVideo string-matches the English menu label for LockupView
+    // items, so this breaks under a non-English hl. It is the only removal path
+    // youtubei.js exposes.
+    removeFromHistory: async (videoId) => {
+      const active = await client
+      requireSignIn(active, 'change your history')
+      // A FRESH feed every time: removeVideo scans the pages its instance holds
+      // and, when it has to look further, replaces that instance's contents with
+      // the next page. Reusing one long-lived History would therefore lose the
+      // earlier pages after the first removal that had to page forward.
+      const history = await active.getHistory()
+      if (!history.removeVideo) throw new Error('youtube: this history feed cannot be edited')
+      await history.removeVideo(videoId, HISTORY_REMOVAL_PAGES)
+      return videoId
     },
     setSubscribed: async (channelId, subscribed) => {
       const active = await client

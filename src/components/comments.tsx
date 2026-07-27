@@ -7,8 +7,9 @@ import { useQuery } from 'urql'
 import { Link } from 'wouter'
 
 import { gql } from '../generated'
+import { useInfiniteFeed } from './use-infinite-feed'
 
-type CommentData = CommentsQuery['comments']['items'][number]
+type CommentPage = CommentsQuery['comments']
 
 const COMMENTS_QUERY = gql(`
   query Comments($videoId: ID!, $cursor: String) {
@@ -219,28 +220,24 @@ const style = css`
 `
 
 export const Comments = ({ videoId, commentCountText }: { videoId: string, commentCountText?: string | null }) => {
-  const [loaded, setLoaded] = useState<{ items: CommentData[], cursor: string | null }>({ items: [], cursor: null })
+  const [loadedPages, setLoadedPages] = useState<CommentPage[]>([])
   const [{ data, error, fetching }] = useQuery({
     query: COMMENTS_QUERY,
-    variables: { videoId, cursor: loaded.cursor }
+    variables: { videoId, cursor: loadedPages[loadedPages.length - 1]?.cursor ?? null }
   })
   const page = data?.comments
-  const loadedIds = new Set(loaded.items.map(item => item.id))
-  const items = [...loaded.items, ...(page?.items.filter(item => !loadedIds.has(item.id)) ?? [])]
+  const { items } = useInfiniteFeed({
+    pages: page ? [...loadedPages, page] : loadedPages,
+    key: comment => comment.id
+  })
   const heading = commentCountText
     ? /comment/i.test(commentCountText) ? commentCountText : `${commentCountText} Comments`
     : 'Comments'
   const onMore = () => {
     if (!page?.cursor) return
-    setLoaded(previous => {
-      const previousIds = new Set(previous.items.map(item => item.id))
-      return {
-        items: [...previous.items, ...page.items.filter(item => !previousIds.has(item.id))],
-        cursor: page.cursor ?? null
-      }
-    })
+    setLoadedPages(previous => [...previous, page])
   }
-  // only bail entirely when the FIRST page failed — a pagination error must not
+  // only bail entirely when the FIRST page failed: a pagination error must not
   // unmount already-loaded comments (comment cursors die on engine restarts).
   if (error && items.length === 0) return null
   if (!fetching && !error && items.length === 0 && !page?.disabled) return null

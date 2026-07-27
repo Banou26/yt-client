@@ -2,8 +2,9 @@ import { css } from '@emotion/react'
 import { EllipsisVertical, Share2, ThumbsDown, ThumbsUp } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { useMutation, useQuery } from 'urql'
-import { Link, useLocation } from 'wouter'
+import { Link, useLocation, useSearch } from 'wouter'
 
+import { useDocumentTitle } from '../app'
 import Comments from '../components/comments'
 import DescriptionBox from '../components/description-box'
 import SubscribeButton from '../components/subscribe-button'
@@ -285,11 +286,18 @@ const style = css`
 
 const RELATED_SKELETON_KEYS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 
-const WatchPage = ({ params }: { params: { videoId: string } }) => {
-  prefetchPlayback(params.videoId)
+// /watch carries the id in the query string, matching youtube.com, so a pasted
+// link works. wouter's useSearch keeps the leading '?', which URLSearchParams
+// accepts. Nothing here is a path param any more, and reading one would yield
+// undefined silently: wouter checks the component prop bivariantly, so the
+// compiler would not object.
+const WatchPage = () => {
+  const videoId = new URLSearchParams(useSearch()).get('v') ?? ''
+  prefetchPlayback(videoId)
   const [{ data: watchData, error: watchError, fetching: watchFetching }] = useQuery({
     query: WATCH_META_QUERY,
-    variables: { id: params.videoId }
+    variables: { id: videoId },
+    pause: videoId === ''
   })
   const [, navigate] = useLocation()
   const [rateState, rateVideo] = useMutation(RATE_VIDEO)
@@ -303,10 +311,11 @@ const WatchPage = ({ params }: { params: { videoId: string } }) => {
   useEffect(() => {
     setCopied(false)
     clearTimeout(copiedTimer.current)
-  }, [params.videoId])
+  }, [videoId])
   useEffect(() => () => clearTimeout(copiedTimer.current), [])
 
   const watch = watchData?.watch
+  useDocumentTitle(watch?.title ?? undefined)
   const channel = watch?.channel
   const related = watch?.related
   // The rating now comes back with the video rather than living in component
@@ -321,7 +330,7 @@ const WatchPage = ({ params }: { params: { videoId: string } }) => {
       return
     }
     const next = watch.likeStatus === status ? 'INDIFFERENT' : status
-    void rateVideo({ id: params.videoId, status: next }).then((result) => {
+    void rateVideo({ id: videoId, status: next }).then((result) => {
       if (result.error) showToast(result.error.message.replace(/^\[\w+]\s*/, ''))
     })
   }
@@ -340,8 +349,8 @@ const WatchPage = ({ params }: { params: { videoId: string } }) => {
           grid placement of .stage changes. */}
       <div className='stage'>
         <VideoPlayer
-          key={`player:${params.videoId}`}
-          videoId={params.videoId}
+          key={`player:${videoId}`}
+          videoId={videoId}
           theater={theater}
           onTheater={toggleTheater}
         />
@@ -410,7 +419,7 @@ const WatchPage = ({ params }: { params: { videoId: string } }) => {
         {watch?.description || watch?.viewCountText || watch?.publishedDateText
           ? (
             <DescriptionBox
-              key={`description:${params.videoId}`}
+              key={`description:${videoId}`}
               viewCountText={watch.viewCountText}
               publishedDateText={watch.publishedDateText}
               description={watch.description}
@@ -419,7 +428,7 @@ const WatchPage = ({ params }: { params: { videoId: string } }) => {
           : undefined}
         {/* mount after the /next answer so the comments call never contends with startup */}
         {!watchFetching
-          ? <Comments key={`comments:${params.videoId}`} videoId={params.videoId} commentCountText={watch?.commentCountText} />
+          ? <Comments key={`comments:${videoId}`} videoId={videoId} commentCountText={watch?.commentCountText} />
           : undefined}
       </div>
       {watchFetching || (related && related.length > 0)

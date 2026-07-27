@@ -1,5 +1,7 @@
 import type { FrameApi, FrameProgress, FrameRequest, FrameResponse, SegmentEnvelope } from './protocol'
 
+import type { YoutubeClient } from '../sources/youtube'
+
 import { createYoutubeSource } from '../sources/youtube'
 import { catalogInnertube, getSabrSource, hasSessionCookie, prefetchInitialPlayerResponse } from './innertube'
 import { createSabrSession, isSabrSessionRefreshError } from './sabr'
@@ -10,7 +12,9 @@ import { FRAME_CONNECT, isFrameMethod } from './protocol'
 // source forwards to the app unchanged.
 const { id: _sourceId, ...sourceApi } = createYoutubeSource({
   fetch: globalThis.fetch.bind(globalThis),
-  createClient: () => catalogInnertube,
+  // YoutubeClient is the structural subset this source actually calls, so the
+  // real Innertube is widened to it rather than matched field for field.
+  createClient: () => catalogInnertube as unknown as Promise<YoutubeClient>,
   signedIn: hasSessionCookie,
 })
 

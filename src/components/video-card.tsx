@@ -9,11 +9,22 @@ import { formatDuration, formatMeta } from './format'
 
 export type VideoCardData =
   Pick<Video, 'id' | 'title'>
-  & Partial<Pick<Video, 'description' | 'durationSeconds' | 'publishedText' | 'thumbnail' | 'viewCount'>>
+  & Partial<
+    Pick<Video, 'description' | 'durationSeconds' | 'progressPercent' | 'publishedText' | 'thumbnail' | 'viewCount'>
+  >
   & {
     isLive?: boolean | null
     channel?: (Pick<Channel, 'id' | 'name'> & Partial<Pick<Channel, 'avatar'>>) | null
   }
+
+export const watchHrefFor = (videoId: string) => `/watch?v=${encodeURIComponent(videoId)}`
+
+// Clamped because upstream progress is a rounded percentage that can read
+// slightly over 100, which would spill the fill past the thumbnail edge.
+export const resumePercent = (progressPercent?: number | null) =>
+  progressPercent !== undefined && progressPercent !== null && progressPercent > 0
+    ? Math.min(progressPercent, 100)
+    : undefined
 
 const style = css`
   display: flex;
@@ -52,6 +63,22 @@ const style = css`
   .badge.live {
     background: var(--brand);
     text-transform: uppercase;
+  }
+
+  .progress {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: block;
+    height: 0.4rem;
+    background: var(--bg-scrim);
+  }
+
+  .progress span {
+    display: block;
+    height: 100%;
+    background: var(--brand);
   }
 
   .details {
@@ -162,10 +189,11 @@ const style = css`
 `
 
 export const VideoCard = ({ video, variant }: { video: VideoCardData, variant?: 'channel' }) => {
-  const watchHref = `/watch/${video.id}`
+  const watchHref = watchHrefFor(video.id)
   const channelHref = video.channel ? `/channel/${video.channel.id}` : undefined
   const duration = formatDuration(video.durationSeconds)
   const meta = formatMeta(video.viewCount, video.publishedText)
+  const progress = resumePercent(video.progressPercent)
   const prefetch = usePrefetchOnIntent(video.id)
   return (
     <article css={style} className={variant} {...prefetch}>
@@ -174,6 +202,14 @@ export const VideoCard = ({ video, variant }: { video: VideoCardData, variant?: 
         {video.isLive
           ? <span className='badge live'>LIVE</span>
           : duration ? <span className='badge'>{duration}</span> : undefined}
+        {/* After the badge so the resume bar wins wherever the two overlap. */}
+        {progress !== undefined
+          ? (
+            <span className='progress'>
+              <span style={{ width: `${progress}%` }} />
+            </span>
+          )
+          : undefined}
       </Link>
       <div className='details'>
         {video.channel && channelHref && variant !== 'channel'

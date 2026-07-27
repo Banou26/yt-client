@@ -1,13 +1,20 @@
+import type { ChannelViewQuery } from '../generated/graphql'
+
 import { css } from '@emotion/react'
+import { useState } from 'preact/hooks'
 import { useQuery } from 'urql'
 
+import { useDocumentTitle } from '../app'
 import { SubscribeButton } from '../components/subscribe-button'
+import { FeedSentinel, useInfiniteFeed } from '../components/use-infinite-feed'
 import { VideoGrid } from '../components/video-grid'
 import { gql } from '../generated'
 
+type VideosPage = ChannelViewQuery['channel']['videos']
+
 const CHANNEL_VIEW_QUERY = gql(`
-  query ChannelView($id: ID!) {
-    channel(id: $id) {
+  query ChannelView($id: ID!, $cursor: String) {
+    channel(id: $id, cursor: $cursor) {
       channel {
         id
         name
@@ -30,6 +37,7 @@ const CHANNEL_VIEW_QUERY = gql(`
           publishedText
           isLive
         }
+        cursor
       }
     }
   }
@@ -178,15 +186,36 @@ const style = css`
 `
 
 export const ChannelPage = ({ params }: { params: { channelId: string } }) => {
-  const [{ data, error, fetching }] = useQuery({ query: CHANNEL_VIEW_QUERY, variables: { id: params.channelId } })
+  const id = params.channelId
+  // Consumed pages carry the channel they came from, so switching channels
+  // starts from an empty grid in the same render rather than one frame later.
+  const [loaded, setLoaded] = useState<{ id: string, pages: VideosPage[] }>({ id, pages: [] })
+  const pages = loaded.id === id ? loaded.pages : []
+  const [{ data, error, fetching }] = useQuery({
+    query: CHANNEL_VIEW_QUERY,
+    variables: { id, cursor: pages[pages.length - 1]?.cursor }
+  })
   const channel = data?.channel.channel
-  const videos = data?.channel.videos.items ?? []
+  const page = data?.channel.videos
+  // urql keeps the previous result while the next page is in flight, so the
+  // live page can repeat one already consumed: useInfiniteFeed dedupes by id.
+  const { items, cursor } = useInfiniteFeed({
+    pages: page ? [...pages, page] : pages,
+    key: video => video.id
+  })
+  useDocumentTitle(channel?.name ?? 'Channel')
   const handle = channel?.handle
     ? channel.handle.startsWith('@') ? channel.handle : `@${channel.handle}`
     : undefined
   const metaParts = [handle, channel?.subscriberCountText, channel?.videoCountText]
     .filter(part => part != null && part.length > 0)
   const meta = metaParts.length > 0 ? metaParts.join(' • ') : undefined
+
+  const onMore = () => {
+    if (!page?.cursor || fetching) return
+    setLoaded({ id, pages: pages[pages.length - 1] === page ? pages : [...pages, page] })
+  }
+
   return (
     <main css={style}>
       {channel?.banner ? <img className='banner' src={channel.banner} alt='' /> : undefined}
@@ -226,11 +255,13 @@ export const ChannelPage = ({ params }: { params: { channelId: string } }) => {
         ))}
       </nav>
       <div className='videos'>
-        <VideoGrid videos={videos} fetching={fetching && !data} variant='channel' />
-        {data && !fetching && !error && videos.length === 0
+        <VideoGrid videos={items} fetching={fetching && items.length === 0} variant='channel' />
+        {data && !fetching && !error && items.length === 0
           ? <p className='status'>This channel has no videos.</p>
           : undefined}
       </div>
+      {fetching && items.length > 0 ? <p className='status'>Loading more…</p> : undefined}
+      <FeedSentinel onVisible={onMore} disabled={fetching || !cursor} />
     </main>
   )
 }

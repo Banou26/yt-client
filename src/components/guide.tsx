@@ -3,9 +3,22 @@ import type { FunctionComponent } from 'preact'
 import { css } from '@emotion/react'
 import { Clapperboard, Flame, Gamepad2, History, House, ListVideo, Menu, Music2 } from 'lucide-react'
 import { useEffect } from 'preact/hooks'
-import { Link, useLocation } from 'wouter'
+import { useQuery } from 'urql'
+import { Link, useLocation, useSearch } from 'wouter'
 
+import { gql } from '../generated'
+import { useSession } from '../session'
 import { Logo } from './header'
+
+const GUIDE_SUBSCRIPTIONS_QUERY = gql(`
+  query GuideSubscriptions {
+    subscribedChannels {
+      id
+      name
+      avatar
+    }
+  }
+`)
 
 type GuideEntry = {
   label: string
@@ -16,23 +29,90 @@ type GuideEntry = {
 
 const MAIN_ENTRIES: GuideEntry[] = [
   { label: 'Home', href: '/', Icon: House, match: '/' },
+  // No Shorts route exists yet (Phase 7), so this lands on Home instead of
+  // linking to a page that is not there. No `match`: it is never the current page.
   { label: 'Shorts', href: '/', Icon: Clapperboard },
-  { label: 'Subscriptions', href: '/', Icon: ListVideo }
+  { label: 'Subscriptions', href: '/feed/subscriptions', Icon: ListVideo, match: '/feed/subscriptions' }
 ]
 
 const YOU_ENTRIES: GuideEntry[] = [
-  { label: 'History', href: '/', Icon: History }
+  { label: 'History', href: '/feed/history', Icon: History, match: '/feed/history' }
 ]
 
 const EXPLORE_ENTRIES: GuideEntry[] = [
+  // No Trending route exists yet (Phase 5), same placeholder as Shorts above.
   { label: 'Trending', href: '/', Icon: Flame },
-  { label: 'Music', href: '/search/Music', Icon: Music2, match: '/search/Music' },
-  { label: 'Gaming', href: '/search/Gaming', Icon: Gamepad2, match: '/search/Gaming' }
+  { label: 'Music', href: '/results?search_query=Music', Icon: Music2, match: '/results?search_query=Music' },
+  { label: 'Gaming', href: '/results?search_query=Gaming', Icon: Gamepad2, match: '/results?search_query=Gaming' }
 ]
 
 const MINI_ENTRIES: GuideEntry[] = [...MAIN_ENTRIES, ...YOU_ENTRIES]
 
 const FOOTER_LINKS = ['About', 'Press', 'Contact', 'Terms', 'Privacy', 'Developers']
+
+// Prefix rather than equality, so a route nested under an entry (a section of
+// History, a channel tab) keeps that entry lit. Home is the one entry whose
+// prefix is every path, so it only ever matches exactly.
+const isActive = (match: string | undefined, path: string, search: string) => {
+  if (match === undefined) return false
+  // Query-backed entries have to match the query too: without it every search
+  // result would light up Music. wouter's useSearch keeps the leading '?', so
+  // it is stripped before joining or the result is '/results??search_query=...'
+  // and never matches.
+  const query = search.startsWith('?') ? search.slice(1) : search
+  const current = match.includes('?') && query ? `${path}?${query}` : path
+  return current === match || current.startsWith(`${match}/`)
+}
+
+const GuideLink = ({ entry }: { entry: GuideEntry }) => {
+  const [path] = useLocation()
+  const search = useSearch()
+  const active = isActive(entry.match, path, search)
+  return (
+    <Link
+      href={entry.href}
+      className={active ? 'item active' : 'item'}
+      aria-current={active ? 'page' : undefined}
+    >
+      <entry.Icon size={24} strokeWidth={1.5} />
+      <span className='label'>{entry.label}</span>
+    </Link>
+  )
+}
+
+const SubscriptionRail = () => {
+  const { signedIn } = useSession()
+  const [path] = useLocation()
+  // The guide renders on every route, so an ungated query would make every
+  // anonymous page load pay a round trip that can only come back as an error.
+  const [{ data }] = useQuery({ query: GUIDE_SUBSCRIPTIONS_QUERY, pause: !signedIn })
+  const channels = data?.subscribedChannels ?? []
+
+  if (!signedIn || channels.length === 0) return null
+
+  return (
+    <div className='section'>
+      <div className='section-title'>Subscriptions</div>
+      {channels.map(channel => {
+        const href = `/channel/${channel.id}`
+        const active = isActive(href, path, '')
+        return (
+          <Link
+            key={channel.id}
+            href={href}
+            className={active ? 'item active' : 'item'}
+            aria-current={active ? 'page' : undefined}
+          >
+            {channel.avatar
+              ? <img className='avatar' src={channel.avatar} alt='' loading='lazy' referrerpolicy='no-referrer' />
+              : <span className='avatar fallback' aria-hidden='true'>{channel.name.slice(0, 1).toUpperCase()}</span>}
+            <span className='label channel-name'>{channel.name}</span>
+          </Link>
+        )
+      })}
+    </div>
+  )
+}
 
 const sectionsStyle = css`
   .section {
@@ -79,6 +159,29 @@ const sectionsStyle = css`
     font-weight: 500;
   }
 
+  .avatar {
+    flex: none;
+    width: 2.4rem;
+    height: 2.4rem;
+    border-radius: 50%;
+    object-fit: cover;
+    background: var(--bg-chip);
+  }
+
+  .avatar.fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    font-weight: 500;
+  }
+
+  .channel-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .footer {
     border-top: 1px solid var(--border-subtle);
     margin-top: 1.2rem;
@@ -101,42 +204,28 @@ const sectionsStyle = css`
   }
 `
 
-const GuideSections = () => {
-  const [location] = useLocation()
-
-  const renderEntry = (entry: GuideEntry) => (
-    <Link
-      key={entry.label}
-      href={entry.href}
-      className={entry.match !== undefined && entry.match === location ? 'item active' : 'item'}
-    >
-      <entry.Icon size={24} strokeWidth={1.5} />
-      <span className='label'>{entry.label}</span>
-    </Link>
-  )
-
-  return (
-    <div css={sectionsStyle}>
-      <div className='section'>
-        {MAIN_ENTRIES.map(renderEntry)}
-      </div>
-      <div className='section'>
-        <div className='section-title'>You</div>
-        {YOU_ENTRIES.map(renderEntry)}
-      </div>
-      <div className='section'>
-        <div className='section-title'>Explore</div>
-        {EXPLORE_ENTRIES.map(renderEntry)}
-      </div>
-      <div className='footer'>
-        <div className='footer-links'>
-          {FOOTER_LINKS.map(label => <span key={label}>{label}</span>)}
-        </div>
-        <div className='copyright'>© 2026 yt-client</div>
-      </div>
+const GuideSections = () => (
+  <div css={sectionsStyle}>
+    <div className='section'>
+      {MAIN_ENTRIES.map(entry => <GuideLink key={entry.label} entry={entry} />)}
     </div>
-  )
-}
+    <div className='section'>
+      <div className='section-title'>You</div>
+      {YOU_ENTRIES.map(entry => <GuideLink key={entry.label} entry={entry} />)}
+    </div>
+    <div className='section'>
+      <div className='section-title'>Explore</div>
+      {EXPLORE_ENTRIES.map(entry => <GuideLink key={entry.label} entry={entry} />)}
+    </div>
+    <SubscriptionRail />
+    <div className='footer'>
+      <div className='footer-links'>
+        {FOOTER_LINKS.map(label => <span key={label}>{label}</span>)}
+      </div>
+      <div className='copyright'>© 2026 yt-client</div>
+    </div>
+  </div>
+)
 
 const expandedStyle = css`
   position: fixed;
@@ -257,8 +346,6 @@ export const Guide = (
   { variant, onClose }:
   { variant: 'expanded' | 'mini' | 'drawer', onClose?: () => void }
 ) => {
-  const [location] = useLocation()
-
   useEffect(() => {
     if (variant !== 'drawer') return
     const onKeyDown = (event: KeyboardEvent) => {
@@ -277,16 +364,7 @@ export const Guide = (
     variant === 'mini'
       ? (
         <nav css={miniStyle} aria-label='Guide'>
-          {MINI_ENTRIES.map(entry => (
-            <Link
-              key={entry.label}
-              href={entry.href}
-              className={entry.match !== undefined && entry.match === location ? 'item active' : 'item'}
-            >
-              <entry.Icon size={24} strokeWidth={1.5} />
-              <span className='label'>{entry.label}</span>
-            </Link>
-          ))}
+          {MINI_ENTRIES.map(entry => <GuideLink key={entry.label} entry={entry} />)}
         </nav>
       )
       : variant === 'drawer'

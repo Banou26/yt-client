@@ -2,6 +2,7 @@ import type { VideoCardData } from './video-card'
 
 import { css } from '@emotion/react'
 
+import { FeedSentinel } from './use-infinite-feed'
 import { VideoCard, VideoCardSkeleton } from './video-card'
 
 const style = css`
@@ -20,15 +21,30 @@ const style = css`
   }
 `
 
+const FIRST_PAGE_SKELETONS = 12
+const NEXT_PAGE_SKELETONS = 4
+
 export const VideoGrid = (
-  { videos, fetching = false, variant }:
-  { videos: VideoCardData[], fetching?: boolean, variant?: 'channel' }
+  { videos, fetching = false, variant, onMore, hasMore = false }: {
+    videos: VideoCardData[]
+    fetching?: boolean
+    variant?: 'channel'
+    onMore?: () => void
+    hasMore?: boolean
+  }
 ) => (
   <div css={style} className={variant}>
     {videos.map(video => <VideoCard key={video.id} video={video} variant={variant} />)}
-    {fetching && videos.length === 0
-      ? Array.from({ length: 12 }, (_, index) => <VideoCardSkeleton key={index} />)
+    {/* A page loading under existing cards gets trailing placeholders only:
+        replacing the whole grid with skeletons would rip the rows the reader is
+        looking at out from under the scroll position. */}
+    {fetching
+      ? Array.from(
+        { length: videos.length === 0 ? FIRST_PAGE_SKELETONS : NEXT_PAGE_SKELETONS },
+        (_, index) => <VideoCardSkeleton key={`skeleton-${index}`} />,
+      )
       : undefined}
+    {onMore ? <FeedSentinel onVisible={onMore} disabled={!hasMore || fetching} /> : undefined}
   </div>
 )
 

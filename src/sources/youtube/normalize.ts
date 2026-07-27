@@ -95,10 +95,10 @@ type LockupVideo = {
   content_type?: string
   content_image?: {
     image?: Thumbnail[]
-    overlays?: { badges?: { text?: string, badge_style?: string }[] }[]
+    overlays?: { badges?: { text?: string, badge_style?: string }[], progress_bar?: { start_percent?: number } }[]
     primary_thumbnail?: {
       image?: Thumbnail[]
-      overlays?: { badges?: { text?: string, badge_style?: string }[] }[]
+      overlays?: { badges?: { text?: string, badge_style?: string }[], progress_bar?: { start_percent?: number } }[]
     }
   }
   metadata?: {
@@ -221,6 +221,48 @@ export const normalizeChannel = (input: unknown, fallbackId?: string): SourceCha
   }
 }
 
+// The subscribed-channel rail comes back as GridChannel/Channel nodes, which
+// carry their id on `author`/`id` rather than the `metadata.external_id` shape
+// normalizeChannel expects off a browse response.
+export const normalizeFeedChannel = (input: unknown): SourceChannel | undefined => {
+  const node = input as {
+    id?: string
+    author?: Author
+    subscribers?: Text
+    video_count?: Text
+  }
+  const id = node.author?.id ?? node.id
+  const name = node.author?.name
+  if (!id || !name) return undefined
+  return {
+    id,
+    name,
+    avatar: thumbnail(node.author?.thumbnails),
+    handle: handleFromUrl(node.author?.url),
+    subscriberCountText: presentText(node.subscribers),
+    videoCountText: presentText(node.video_count),
+  }
+}
+
+const clampPercent = (value: unknown) =>
+  typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : undefined
+
+// The watched fraction reaches us two different ways and both are live: legacy
+// Video nodes hang a ThumbnailOverlayResumePlayback off `thumbnail_overlays`
+// with `percent_duration_watched`, while LockupView nodes carry a
+// ThumbnailBottomOverlayView on the image whose progress bar reports
+// `start_percent`. History and home mix the two node kinds, so reading only one
+// shape leaves the resume bar missing from half the page.
+const legacyProgressPercent = (input: unknown) => {
+  const overlays = (input as { thumbnail_overlays?: { percent_duration_watched?: number }[] }).thumbnail_overlays ?? []
+  return overlays.map((overlay) => clampPercent(overlay.percent_duration_watched)).find((value) => value !== undefined)
+}
+
+const lockupProgressPercent = (image: {
+  overlays?: { progress_bar?: { start_percent?: number } }[]
+} | undefined) =>
+  (image?.overlays ?? []).map((overlay) => clampPercent(overlay.progress_bar?.start_percent)).find((value) => value !== undefined)
+
 export const normalizeFeedVideo = (input: unknown): SourceVideo | undefined => {
   const video = input as FeedVideo
   const id = video.video_id ?? video.id
@@ -243,6 +285,7 @@ export const normalizeFeedVideo = (input: unknown): SourceVideo | undefined => {
     viewCount: text(video.short_view_count ?? video.view_count),
     publishedText: text(video.published),
     isLive: video.is_live === true ? true : undefined,
+    progressPercent: legacyProgressPercent(video),
     channel: author,
   }
 }
@@ -289,6 +332,7 @@ export const normalizeLockupVideo = (input: unknown): SourceVideo | undefined =>
     viewCount: text(parts[1]),
     publishedText: text(parts[2]),
     isLive: badges.some((badge) => badge.badge_style?.includes('LIVE')) ? true : undefined,
+    progressPercent: lockupProgressPercent(image),
     channel: channelId && channelName
       ? {
           id: channelId,

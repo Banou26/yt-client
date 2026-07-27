@@ -33,11 +33,40 @@ type Video {
   viewCount: String
   publishedText: String
   isLive: Boolean
+  # 0-100 watch progress, for the red bar across the thumbnail. Only feeds that
+  # carry a resume overlay (history, home) populate it.
+  progressPercent: Int
   channel: Channel
 }
 
 type VideoPage {
   items: [Video!]!
+  cursor: String
+}
+
+# A feed that YouTube groups under headings, like History's day boundaries.
+# The grouping is the point of the page, so it is not flattened away.
+type VideoSection {
+  title: String
+  items: [Video!]!
+}
+
+type SectionedVideoPage {
+  sections: [VideoSection!]!
+  cursor: String
+}
+
+# The id is the chip's continuation token, never its label: the label is
+# localized and changes with hl.
+type FeedChip {
+  id: ID!
+  label: String!
+  selected: Boolean!
+}
+
+type HomeFeed {
+  items: [Video!]!
+  chips: [FeedChip!]!
   cursor: String
 }
 
@@ -84,7 +113,15 @@ type Session {
 }
 
 type Query {
-  home(cursor: String): VideoPage!
+  # `chip` is a FeedChip.id; omitting it is the All feed. Applying one costs a
+  # second browse round trip on top of the base feed.
+  home(chip: ID, cursor: String): HomeFeed!
+  # Signed-in only. youtubei.js refuses these before the network call when
+  # signed out, so callers gate on `session.signedIn` rather than firing a
+  # request that cannot succeed.
+  subscriptions(cursor: String): VideoPage!
+  history(cursor: String): SectionedVideoPage!
+  subscribedChannels: [Channel!]!
   search(query: String!, cursor: String): VideoPage!
   video(id: ID!): Video
   channel(id: ID!, cursor: String): ChannelPage!
@@ -102,6 +139,8 @@ type Query {
 # not fetched back, and a non-null field like Channel.name would then fail).
 type Mutation {
   rateVideo(id: ID!, status: LikeStatus!): WatchMeta!
+  # Resolves to the removed video id so the cache can drop it from the feed.
+  removeFromHistory(videoId: ID!): ID!
   setSubscribed(channelId: ID!, subscribed: Boolean!): Channel!
   setNotificationLevel(channelId: ID!, level: NotificationLevel!): Channel!
 }

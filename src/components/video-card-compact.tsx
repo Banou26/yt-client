@@ -6,6 +6,7 @@ import { Link } from 'wouter'
 
 import { usePrefetchOnIntent } from '../player/prefetch'
 import { formatDuration, formatMeta } from './format'
+import { resumePercent, watchHrefFor } from './video-card'
 
 const style = css`
   display: flex;
@@ -46,6 +47,22 @@ const style = css`
   .badge.live {
     background: var(--brand);
     text-transform: uppercase;
+  }
+
+  .progress {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: block;
+    height: 0.3rem;
+    background: var(--bg-scrim);
+  }
+
+  .progress span {
+    display: block;
+    height: 100%;
+    background: var(--brand);
   }
 
   .text {
@@ -113,9 +130,10 @@ const style = css`
 `
 
 export const VideoCardCompact = ({ video }: { video: VideoCardData }) => {
-  const watchHref = `/watch/${video.id}`
+  const watchHref = watchHrefFor(video.id)
   const duration = formatDuration(video.durationSeconds)
   const meta = formatMeta(video.viewCount, video.publishedText)
+  const progress = resumePercent(video.progressPercent)
   const prefetch = usePrefetchOnIntent(video.id)
   return (
     <article css={style} {...prefetch}>
@@ -124,6 +142,14 @@ export const VideoCardCompact = ({ video }: { video: VideoCardData }) => {
         {video.isLive
           ? <span className='badge live'>LIVE</span>
           : duration ? <span className='badge'>{duration}</span> : undefined}
+        {/* After the badge so the resume bar wins wherever the two overlap. */}
+        {progress !== undefined
+          ? (
+            <span className='progress'>
+              <span style={{ width: `${progress}%` }} />
+            </span>
+          )
+          : undefined}
       </Link>
       <div className='text'>
         <h3 className='title'>

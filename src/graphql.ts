@@ -21,6 +21,9 @@ const cache = cacheExchange({
     // embeds it in its parent; without these graphcache warns about each one
     // and refuses to cache the containing query.
     VideoPage: () => null,
+    HomeFeed: () => null,
+    SectionedVideoPage: () => null,
+    VideoSection: () => null,
     ChannelPage: () => null,
     CommentPage: () => null,
     Session: () => null,

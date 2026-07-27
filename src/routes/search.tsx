@@ -1,13 +1,20 @@
-import { css } from '@emotion/react'
-import { useQuery } from 'urql'
-import { Link } from 'wouter'
+import type { SearchResultsQuery } from '../generated/graphql'
 
-import { formatDuration, formatMeta, safeDecode } from '../components/format'
+import { css } from '@emotion/react'
+import { useState } from 'preact/hooks'
+import { useQuery } from 'urql'
+import { Link, useSearch } from 'wouter'
+
+import { useDocumentTitle } from '../app'
+import { formatDuration, formatMeta } from '../components/format'
+import { FeedSentinel, useInfiniteFeed } from '../components/use-infinite-feed'
 import { gql } from '../generated'
 
+type ResultsPage = SearchResultsQuery['search']
+
 const SEARCH_RESULTS_QUERY = gql(`
-  query SearchResults($query: String!) {
-    search(query: $query) {
+  query SearchResults($query: String!, $cursor: String) {
+    search(query: $query, cursor: $cursor) {
       items {
         id
         title
@@ -20,6 +27,7 @@ const SEARCH_RESULTS_QUERY = gql(`
         isLive
         channel { id name avatar }
       }
+      cursor
     }
   }
 `)
@@ -85,6 +93,11 @@ const style = css`
     font-size: 1.2rem;
     font-weight: 500;
     line-height: 1.8rem;
+  }
+
+  .badge.live {
+    background: var(--brand);
+    text-transform: uppercase;
   }
 
   .info {
@@ -170,17 +183,41 @@ const style = css`
   }
 `
 
-const SearchPage = ({ params }: { params: { query: string } }) => {
-  const query = safeDecode(params.query)
-  const [{ data, error, fetching }] = useQuery({ query: SEARCH_RESULTS_QUERY, variables: { query } })
+const SearchPage = () => {
+  // URLSearchParams hands back an already-decoded value, so decoding it again
+  // would corrupt any query containing a literal '%'.
+  const query = new URLSearchParams(useSearch()).get('search_query') ?? ''
+  useDocumentTitle(query.length > 0 ? query : 'Search')
+  // Consumed pages carry the query they came from, so a new search starts from
+  // an empty list in the same render rather than one frame later via an effect.
+  const [loaded, setLoaded] = useState<{ query: string, pages: ResultsPage[] }>({ query, pages: [] })
+  const pages = loaded.query === query ? loaded.pages : []
+  const [{ data, error, fetching }] = useQuery({
+    query: SEARCH_RESULTS_QUERY,
+    variables: { query, cursor: pages[pages.length - 1]?.cursor },
+    pause: query.length === 0
+  })
+  const page = data?.search
+  // urql keeps the previous result while the next page is in flight, so the
+  // live page can repeat one already consumed: useInfiniteFeed dedupes by id.
+  const { items, cursor } = useInfiniteFeed({
+    pages: page ? [...pages, page] : pages,
+    key: video => video.id
+  })
+
+  const onMore = () => {
+    if (!page?.cursor || fetching) return
+    setLoaded({ query, pages: pages[pages.length - 1] === page ? pages : [...pages, page] })
+  }
+
   return (
     <main css={style}>
       <h1 className='sr-only'>Results for {query}</h1>
       {error ? <p className='status'>{error.message}</p> : undefined}
-      {fetching && !data ? <p className='status'>Searching…</p> : undefined}
+      {fetching && items.length === 0 ? <p className='status'>Searching…</p> : undefined}
       <div className='results'>
-        {(data?.search.items ?? []).map(video => {
-          const watchHref = `/watch/${video.id}`
+        {items.map(video => {
+          const watchHref = `/watch?v=${video.id}`
           const duration = formatDuration(video.durationSeconds)
           const meta = formatMeta(video.viewCount, video.publishedText)
           const snippet = video.descriptionSnippet ?? video.description
@@ -188,7 +225,9 @@ const SearchPage = ({ params }: { params: { query: string } }) => {
             <article className='result' key={video.id}>
               <Link href={watchHref} className='thumb' tabIndex={-1} aria-hidden='true'>
                 {video.thumbnail ? <img src={video.thumbnail} alt='' loading='lazy' /> : undefined}
-                {duration ? <span className='badge'>{duration}</span> : undefined}
+                {video.isLive
+                  ? <span className='badge live'>LIVE</span>
+                  : duration ? <span className='badge'>{duration}</span> : undefined}
               </Link>
               <div className='info'>
                 <h2 className='title'>
@@ -213,6 +252,11 @@ const SearchPage = ({ params }: { params: { query: string } }) => {
           )
         })}
       </div>
+      {query.length > 0 && !fetching && !error && items.length === 0
+        ? <p className='status'>No results found.</p>
+        : undefined}
+      {fetching && items.length > 0 ? <p className='status'>Loading more…</p> : undefined}
+      <FeedSentinel onVisible={onMore} disabled={fetching || !cursor} />
     </main>
   )
 }

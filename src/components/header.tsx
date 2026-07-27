@@ -4,11 +4,10 @@ import { css } from '@emotion/react'
 import { CircleUserRound, EllipsisVertical, Menu, Mic, Search } from 'lucide-react'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { useQuery } from 'urql'
-import { Link, useLocation, useRoute } from 'wouter'
+import { Link, useLocation, useSearch } from 'wouter'
 
 import { gql } from '../generated'
 import { AccountMenu } from './account-menu'
-import { safeDecode } from './format'
 
 const HEADER_SESSION_QUERY = gql(`
   query HeaderSession {
@@ -217,7 +216,7 @@ const style = css`
 
 export const Header = ({ onMenu }: { onMenu?: () => void }) => {
   const [, navigate] = useLocation()
-  const [matchesSearch, searchParams] = useRoute('/search/:query')
+  const search = useSearch()
   const inputRef = useRef<HTMLInputElement>(null)
   // Defer the session probe until the engine is ready so its accounts_list call
   // never competes with the latency-critical watch/player boot.
@@ -250,12 +249,14 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  const currentQuery = matchesSearch && searchParams?.query ? safeDecode(searchParams.query) : undefined
+  // Only /results carries search_query, so reading it off whatever the current
+  // location is keeps the box filled there and empty everywhere else.
+  const currentQuery = new URLSearchParams(search).get('search_query') ?? undefined
 
   const onSubmit = (event: TargetedSubmitEvent<HTMLFormElement>) => {
     event.preventDefault()
     const query = inputRef.current?.value.trim()
-    if (query) navigate(`/search/${encodeURIComponent(query)}`)
+    if (query) navigate(`/results?search_query=${encodeURIComponent(query)}`)
   }
 
   return (

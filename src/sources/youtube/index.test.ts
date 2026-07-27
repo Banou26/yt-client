@@ -38,6 +38,18 @@ const createFakeClient = () => {
     getBasicInfo: async () => ({ basic_info: undefined }),
     getChannel: async () => ({ ...feed('channel'), metadata: { external_id: 'c', title: 'Channel' } }),
     getComments: async () => comments('top', async () => comments('next')),
+    getSubscriptionsFeed: async () => feed('sub'),
+    getHistory: async () => ({
+      ...feed('watched'),
+      sections: [
+        { header: { title: 'Today' }, contents: [{ video_id: 'today', title: { text: 'Today video' } }] },
+        { header: { title: 'Yesterday' }, contents: [{ video_id: 'older', title: { text: 'Older video' } }] },
+      ],
+      removeVideo: async (videoId: string, _pagesToLoad?: number) => void calls.push(`removeHistory:${videoId}`),
+    }),
+    getChannelsFeed: async () => ({
+      channels: [{ author: { id: 'UC1', name: 'Chan', thumbnails: [{ url: 'a' }] } }],
+    }),
     session: { logged_in: true },
     interact: {
       subscribe: async (channelId: string) => void calls.push(`subscribe:${channelId}`),
@@ -82,15 +94,15 @@ describe('youtube source', () => {
     const first = await source.home()
     expect(first.items[0]?.id).toBe('first')
     expect(first.cursor).toBeTruthy()
-    const second = await source.home(first.cursor)
+    const second = await source.home(undefined, first.cursor)
     expect(second.items[0]?.id).toBe('second')
     // urql re-executes a query on remount and on back-navigation. Replaying a
     // cursor must return the same page rather than throwing, and must not cost
     // a second round trip.
-    const replay = await source.home(first.cursor)
+    const replay = await source.home(undefined, first.cursor)
     expect(replay.items[0]?.id).toBe('second')
     expect(continuationCalls).toBe(1)
-    await expect(source.home('youtube:home:999')).rejects.toThrow('unknown continuation')
+    await expect(source.home(undefined, 'youtube:home:999')).rejects.toThrow('unknown continuation')
   })
 
   it('refuses a cursor issued for a different feed', async () => {
@@ -116,8 +128,8 @@ describe('youtube source', () => {
       createClient: async () => client,
     })
     const first = await source.home()
-    await expect(source.home(first.cursor)).rejects.toThrow('network blip')
-    await expect(source.home(first.cursor)).resolves.toMatchObject({ items: [{ id: 'second' }] })
+    await expect(source.home(undefined, first.cursor)).rejects.toThrow('network blip')
+    await expect(source.home(undefined, first.cursor)).resolves.toMatchObject({ items: [{ id: 'second' }] })
   })
 
   it('fetches watch metadata through a single /next call', async () => {
@@ -186,7 +198,9 @@ describe('youtube source', () => {
   // pin the position: the leading arguments listed here must be exactly the
   // arguments that come before the cursor.
   const CURSOR_CASES: Record<keyof typeof SOURCE_CURSOR_ARGUMENT, string[]> = {
-    home: [],
+    home: [undefined as unknown as string],
+    subscriptions: [],
+    history: [],
     search: ['query'],
     channel: ['c'],
     comments: ['abc'],
@@ -242,6 +256,86 @@ describe('youtube source', () => {
     await expect(source.rateVideo('abc', 'LIKE')).rejects.toThrow('sign in to rate a video')
     await expect(source.setSubscribed('c', true)).rejects.toThrow('sign in to change a subscription')
     expect(client.calls).toEqual([])
+  })
+
+  it('groups history by its section headings', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+      signedIn: () => true,
+    })
+    const page = await source.history()
+    expect(page.sections.map((section) => section.title)).toEqual(['Today', 'Yesterday'])
+    expect(page.sections[0]?.items[0]?.id).toBe('today')
+  })
+
+  it('refuses signed-out reads of the account feeds before any request', async () => {
+    const client = createFakeClient()
+    client.session.logged_in = false
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await expect(source.subscriptions()).rejects.toThrow('sign in to see your subscriptions')
+    await expect(source.history()).rejects.toThrow('sign in to see your history')
+    await expect(source.subscribedChannels()).rejects.toThrow('sign in to see your subscriptions')
+    expect(client.calls).toEqual([])
+  })
+
+  it('normalizes the subscribed channel rail off its author node', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+      signedIn: () => true,
+    })
+    await expect(source.subscribedChannels()).resolves.toEqual([
+      { id: 'UC1', name: 'Chan', avatar: 'a', handle: undefined, subscriberCountText: undefined, videoCountText: undefined },
+    ])
+  })
+
+  it('removes from history without needing the page to be open first', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => client,
+      signedIn: () => true,
+    })
+    // removeVideo replaces its instance's contents when it has to page forward,
+    // so each removal takes a fresh feed rather than reusing one that may have
+    // already advanced past the video being removed.
+    await expect(source.removeFromHistory('today')).resolves.toBe('today')
+    expect(client.calls).toContain('removeHistory:today')
+  })
+
+  it('asks removeVideo to look past the first page', async () => {
+    const client = createFakeClient()
+    const requested: (number | undefined)[] = []
+    client.getHistory = async () => ({
+      ...feed('watched'),
+      sections: [] as { header: { title: string }, contents: { video_id: string, title: { text: string } }[] }[],
+      removeVideo: async (videoId: string, pagesToLoad?: number) => {
+        requested.push(pagesToLoad)
+        return void videoId
+      },
+    })
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => client,
+      signedIn: () => true,
+    })
+    await source.removeFromHistory('deep')
+    // The default is one page, which would fail for anything the user scrolled
+    // past.
+    expect(requested[0]).toBeGreaterThan(1)
+  })
+
+  it('survives a feed whose filter_chips getter throws', async () => {
+    const client = createFakeClient()
+    client.getHomeFeed = async () => ({
+      ...feed('first'),
+      // youtubei.js throws from this getter when the response carries no chip
+      // bar, so optional chaining does not protect the call site.
+      get filter_chips (): never { throw new Error('There are no feed filter chipbars') },
+    })
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await expect(source.home()).resolves.toMatchObject({ items: [{ id: 'first' }], chips: [] })
   })
 
   it('covers every cursored method declared to runtime.ts', () => {

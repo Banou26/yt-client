@@ -25,11 +25,34 @@ export type SourceVideo = {
   viewCount?: string
   publishedText?: string
   isLive?: boolean
+  progressPercent?: number
   channel?: SourceChannel
 }
 
 export type SourceVideoPage = {
   items: SourceVideo[]
+  cursor?: string
+}
+
+export type SourceVideoSection = {
+  title?: string
+  items: SourceVideo[]
+}
+
+export type SourceSectionedVideoPage = {
+  sections: SourceVideoSection[]
+  cursor?: string
+}
+
+export type SourceFeedChip = {
+  id: string
+  label: string
+  selected: boolean
+}
+
+export type SourceHomeFeed = {
+  items: SourceVideo[]
+  chips: SourceFeedChip[]
   cursor?: string
 }
 
@@ -77,7 +100,10 @@ export type SourceSession = {
 
 export type Source = {
   id: string
-  home(cursor?: string): Promise<SourceVideoPage>
+  home(chip?: string, cursor?: string): Promise<SourceHomeFeed>
+  subscriptions(cursor?: string): Promise<SourceVideoPage>
+  history(cursor?: string): Promise<SourceSectionedVideoPage>
+  subscribedChannels(): Promise<SourceChannel[]>
   search(query: string, cursor?: string): Promise<SourceVideoPage>
   video(id: string): Promise<SourceVideo | undefined>
   channel(id: string, cursor?: string): Promise<SourceChannelPage>
@@ -88,6 +114,7 @@ export type Source = {
   // new state. Only identity and the changed fields are meaningful; the rest is
   // filled with placeholders because the write does not refetch the entity.
   rateVideo(id: string, status: SourceLikeStatus): Promise<SourceWatchMeta>
+  removeFromHistory(videoId: string): Promise<string>
   setSubscribed(channelId: string, subscribed: boolean): Promise<SourceChannel>
   setNotificationLevel(channelId: string, level: SourceNotificationLevel): Promise<SourceChannel>
 }
@@ -99,6 +126,9 @@ export type SourceApi = Omit<Source, 'id'>
 // `Source` without listing it here fails `SourceMethodsAreExhaustive` below.
 export const SOURCE_METHODS = [
   'home',
+  'subscriptions',
+  'history',
+  'subscribedChannels',
   'search',
   'video',
   'channel',
@@ -106,6 +136,7 @@ export const SOURCE_METHODS = [
   'comments',
   'session',
   'rateVideo',
+  'removeFromHistory',
   'setSubscribed',
   'setNotificationLevel',
 ] as const satisfies readonly (keyof SourceApi)[]
@@ -123,7 +154,9 @@ export type SourceMethodsAreExhaustive = Exhaustive<Exclude<keyof SourceApi, Sou
 // cannot survive an engine restart. The index marks which argument carries one:
 // a call that passes it must fail rather than silently replay from the start.
 export const SOURCE_CURSOR_ARGUMENT = {
-  home: 0,
+  home: 1,
+  subscriptions: 0,
+  history: 0,
   search: 1,
   channel: 1,
   comments: 1,
@@ -142,6 +175,9 @@ export const SOURCE_CURSOR_ARGUMENT = {
 // method added for mutations MUST be 'never'.
 export const SOURCE_REPLAY = {
   home: 'unless-cursor',
+  subscriptions: 'unless-cursor',
+  history: 'unless-cursor',
+  subscribedChannels: 'always',
   search: 'unless-cursor',
   video: 'always',
   channel: 'unless-cursor',
@@ -149,6 +185,7 @@ export const SOURCE_REPLAY = {
   comments: 'unless-cursor',
   session: 'always',
   rateVideo: 'never',
+  removeFromHistory: 'never',
   setSubscribed: 'never',
   setNotificationLevel: 'never',
 } as const satisfies Record<SourceMethod, 'always' | 'unless-cursor' | 'never'>
