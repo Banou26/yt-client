@@ -50,6 +50,9 @@ export const resolvers = {
   Mutation: {
     rateVideo: (_, { id, status }, context) => context.source.rateVideo(id, status),
     removeFromHistory: (_, { videoId }, context) => context.source.removeFromHistory(videoId),
+    postComment: (_, { videoId, text }, context) => context.source.postComment(videoId, text),
+    replyToComment: (_, { actionsToken, text }, context) => context.source.replyToComment(actionsToken, text),
+    rateComment: (_, { actionsToken, status }, context) => context.source.rateComment(actionsToken, status),
     setSubscribed: (_, { channelId, subscribed }, context) => context.source.setSubscribed(channelId, subscribed),
     setNotificationLevel: (_, { channelId, level }, context) => context.source.setNotificationLevel(channelId, level),
     addToPlaylist: (_, { playlistId, videoIds }, context) => context.source.addToPlaylist(playlistId, videoIds),

@@ -207,6 +207,11 @@ export type SourceComment = {
   // A cursor into the same registry every other page uses, minted only for a
   // comment that actually has replies. Opaque to the caller, like all cursors.
   repliesCursor?: string
+  // Opaque handle for this comment's like, dislike and reply endpoints, which
+  // are per-comment protobuf params that cannot be rebuilt from the id. Absent
+  // when the read carried no commands, which is what a signed-out page looks
+  // like: a control with no token is a control that should not be offered.
+  actionsToken?: string
 }
 
 export type SourceCommentSort = 'TOP' | 'NEWEST'
@@ -306,6 +311,11 @@ export type Source = {
   // filled with placeholders because the write does not refetch the entity.
   rateVideo(id: string, status: SourceLikeStatus): Promise<SourceWatchMeta>
   removeFromHistory(videoId: string): Promise<string>
+  // Resolves to a Boolean rather than the created comment: the response carries
+  // no parseable comment, and inventing an id would poison the normalized cache.
+  postComment(videoId: string, text: string): Promise<boolean>
+  replyToComment(actionsToken: string, text: string): Promise<boolean>
+  rateComment(actionsToken: string, status: SourceLikeStatus): Promise<SourceComment>
   setSubscribed(channelId: string, subscribed: boolean): Promise<SourceChannel>
   setNotificationLevel(channelId: string, level: SourceNotificationLevel): Promise<SourceChannel>
   addToPlaylist(playlistId: string, videoIds: string[]): Promise<SourcePlaylist>
@@ -348,6 +358,9 @@ export const SOURCE_METHODS = [
   'session',
   'rateVideo',
   'removeFromHistory',
+  'postComment',
+  'replyToComment',
+  'rateComment',
   'setSubscribed',
   'setNotificationLevel',
   'addToPlaylist',
@@ -417,6 +430,9 @@ export const SOURCE_REPLAY = {
   session: 'always',
   rateVideo: 'never',
   removeFromHistory: 'never',
+  postComment: 'never',
+  replyToComment: 'never',
+  rateComment: 'never',
   setSubscribed: 'never',
   setNotificationLevel: 'never',
   // Every playlist edit is a write. Replaying one after an engine restart adds

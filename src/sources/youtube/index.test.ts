@@ -18,8 +18,19 @@ type FakeSearch = {
   getContinuation(): Promise<FakeSearch>
 }
 
+type FakeCommand = { call(actions: unknown, args?: Record<string, unknown>): Promise<unknown> }
+
 type FakeComments = {
-  contents: { comment: { comment_id: string, content: { text: string } } }[]
+  contents: {
+    comment: {
+      comment_id: string
+      content: { text: string }
+      like_command?: FakeCommand
+      dislike_command?: FakeCommand
+      unlike_command?: FakeCommand
+      reply_command?: { dialog?: { reply_button?: { endpoint?: FakeCommand } } }
+    }
+  }[]
   has_continuation: boolean
   getContinuation(): Promise<FakeComments>
 }
@@ -57,8 +68,28 @@ const search = (id: string, next?: () => Promise<FakeSearch>): FakeSearch => ({
   getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
 })
 
+// Comment actions are per-comment endpoints the source has to retain, so the
+// fake carries real callables and records what was invoked.
+const commentCalls: string[] = []
+
+const commandFor = (id: string, name: string) => ({
+  call: async (_actions: unknown, args?: Record<string, unknown>) => {
+    commentCalls.push(args ? `${name}:${id}:${JSON.stringify(args)}` : `${name}:${id}`)
+    return {}
+  },
+})
+
 const comments = (id: string, next?: () => Promise<FakeComments>): FakeComments => ({
-  contents: [{ comment: { comment_id: id, content: { text: id } } }],
+  contents: [{
+    comment: {
+      comment_id: id,
+      content: { text: id },
+      like_command: commandFor(id, 'like'),
+      dislike_command: commandFor(id, 'dislike'),
+      unlike_command: commandFor(id, 'unlike'),
+      reply_command: { dialog: { reply_button: { endpoint: commandFor(id, 'reply') } } },
+    },
+  }],
   has_continuation: Boolean(next),
   getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
 })
@@ -169,6 +200,7 @@ const createFakeClient = () => {
     }),
     session: { logged_in: true },
     interact: {
+      comment: async (videoId: string, body: string) => void calls.push(`comment:${videoId}:${body}`),
       subscribe: async (channelId: string) => void calls.push(`subscribe:${channelId}`),
       unsubscribe: async (channelId: string) => void calls.push(`unsubscribe:${channelId}`),
       setNotificationPreferences: async (channelId: string, type: string) =>
@@ -219,6 +251,50 @@ const createFakeClient = () => {
     },
   }
 }
+
+describe('youtube comment writes', () => {
+  it('acts through the endpoint the page arrived with, not the comment id', async () => {
+    commentCalls.length = 0
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    const page = await source.comments('abc')
+    const token = page.items[0]?.actionsToken
+    // The commands are opaque per-comment protobuf params: without a retained
+    // handle there is no way to reach them from the id alone.
+    expect(token).toBeTruthy()
+
+    await source.rateComment(token!, 'LIKE')
+    await source.rateComment(token!, 'DISLIKE')
+    // Clearing a rating is its own endpoint rather than a parameter, so
+    // INDIFFERENT has to undo whichever direction was set.
+    await source.rateComment(token!, 'INDIFFERENT')
+    await source.replyToComment(token!, 'well said')
+    expect(commentCalls).toEqual([
+      'like:top',
+      'dislike:top',
+      'unlike:top',
+      'reply:top:{"commentText":"well said"}',
+    ])
+  })
+
+  it('reports an evicted comment handle as reloadable rather than failing opaquely', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    await expect(source.rateComment('youtube:comment:99999', 'LIKE'))
+      .rejects.toThrow('no longer available')
+  })
+
+  it('posts a top-level comment through the video rather than a handle', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await expect(source.postComment('abc', 'first')).resolves.toBe(true)
+    expect(client.calls).toContain('comment:abc:first')
+  })
+})
 
 describe('youtube search', () => {
   it('keeps channel and playlist hits that the videos getter drops', async () => {

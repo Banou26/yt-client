@@ -300,6 +300,10 @@ type Comment {
   isHearted: Boolean
   # Present only when the comment has replies. Pass it to `commentReplies`.
   repliesCursor: String
+  # Opaque handle for this comment's own like, dislike and reply endpoints.
+  # Absent when the read carried no commands, which is what signed out looks
+  # like, so a control without one should not be rendered.
+  actionsToken: String
 }
 
 type CommentPage {
@@ -429,6 +433,12 @@ type Mutation {
   rateVideo(id: ID!, status: LikeStatus!): WatchMeta!
   # Resolves to the removed video id so the cache can drop it from the feed.
   removeFromHistory(videoId: ID!): ID!
+  # Resolves to a Boolean, not a Comment: upstream answers a create with an
+  # opaque response carrying no parseable comment, and a fabricated id would
+  # poison the normalized cache. The composer prepends its own row instead.
+  postComment(videoId: ID!, text: String!): Boolean!
+  replyToComment(actionsToken: String!, text: String!): Boolean!
+  rateComment(actionsToken: String!, status: LikeStatus!): Comment!
   setSubscribed(channelId: ID!, subscribed: Boolean!): Channel!
   setNotificationLevel(channelId: ID!, level: NotificationLevel!): Channel!
   addToPlaylist(playlistId: ID!, videoIds: [ID!]!): Playlist!

@@ -103,6 +103,18 @@ type CommentThreadNode = {
   comment_replies_data?: { contents?: Iterable<unknown> } | null
 }
 
+type EndpointNode = {
+  call(actions: unknown, args?: Record<string, unknown>): Promise<unknown>
+}
+
+type CommentActionNode = {
+  like_command?: EndpointNode
+  dislike_command?: EndpointNode
+  unlike_command?: EndpointNode
+  undislike_command?: EndpointNode
+  reply_command?: { dialog?: { reply_button?: { endpoint?: EndpointNode } } }
+}
+
 type ContinuationResponse = {
   on_response_received_endpoints_memo?: Map<string, unknown[]>
 }
@@ -170,6 +182,7 @@ export type YoutubeClient = {
     getInfo(): Promise<unknown>
   }
   interact: {
+    comment(videoId: string, text: string): Promise<unknown>
     subscribe(channelId: string): Promise<unknown>
     unsubscribe(channelId: string): Promise<unknown>
     setNotificationPreferences(channelId: string, type: SourceNotificationLevel): Promise<unknown>
@@ -268,6 +281,57 @@ const createContinuations = <Page>() => {
   const kindOf = (cursor: string) => entries.get(cursor)?.kind
 
   return { register, resolve, kindOf }
+}
+
+/* Comment actions are opaque protobuf endpoints minted per comment per session:
+   there is no id or token that can be rebuilt from the comment id, so the only
+   way to like or reply to a comment is to hold the endpoint the page arrived
+   with. Bounded and eviction-ordered exactly like the continuation registry, and
+   for the same reason: it is a cache of live handles, not durable state.
+
+   An evicted token fails the write with a message the UI can act on, which is
+   the honest outcome. Retrying after a reload mints a fresh one. */
+const ACTION_LIMIT = 256
+
+type CommentActions = {
+  like?: EndpointNode
+  dislike?: EndpointNode
+  unlike?: EndpointNode
+  undislike?: EndpointNode
+  // Resolved through the reply command's DIALOG rather than the command
+  // itself: CommentView.reply() reads reply_command.dialog.reply_button
+  // .endpoint, and the command endpoint alone opens a dialog instead of posting.
+  reply?: EndpointNode
+}
+
+const createActionRegistry = () => {
+  const entries = new Map<string, { commentId: string, actions: CommentActions }>()
+  let actionId = 0
+
+  const register = (commentId: string, actions: CommentActions) => {
+    const token = `youtube:comment:${++actionId}`
+    entries.set(token, { commentId, actions })
+    while (entries.size > ACTION_LIMIT) {
+      const oldest = entries.keys().next().value
+      if (oldest === undefined) break
+      entries.delete(oldest)
+    }
+    return token
+  }
+
+  const resolve = (token: string) => {
+    const entry = entries.get(token)
+    if (!entry) {
+      throw new Error('youtube: this comment is no longer available, reload the page and try again')
+    }
+    // Re-inserted on read so the comments a reader is actually interacting with
+    // stay live while they scroll past hundreds of others.
+    entries.delete(token)
+    entries.set(token, entry)
+    return entry
+  }
+
+  return { register, resolve }
 }
 
 // youtubei.js Text instances stringify through toString; feed nodes hand back
@@ -425,6 +489,7 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
   const playlistListContinuations = createContinuations<SourcePlaylistListPage>()
   const searchContinuations = createContinuations<SourceSearchPage>()
   const postContinuations = createContinuations<SourcePostPage>()
+  const commentActions = createActionRegistry()
   // The tab set, sort options and applied sort belong to the page rather than
   // to the channel entity, and a cursored call does not re-read them, so the
   // last read of each channel keeps both halves.
@@ -533,9 +598,28 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
      Nothing extra is fetched. The parser has already applied the comment entity
      mutations to on_response_received_endpoints_memo (parser.js:221), so the
      CommentViews that come back are fully populated. */
+  const actionsToken = (node: unknown, commentId: string) => {
+    const commands = node as CommentActionNode | undefined
+    const actions: CommentActions = {
+      like: commands?.like_command,
+      dislike: commands?.dislike_command,
+      unlike: commands?.unlike_command,
+      undislike: commands?.undislike_command,
+      reply: commands?.reply_command?.dialog?.reply_button?.endpoint,
+    }
+    // Nothing actionable means nothing to hold: a signed-out read carries no
+    // commands at all, and minting a token for it would only produce a control
+    // that fails on click.
+    if (!actions.like && !actions.dislike && !actions.reply) return undefined
+    return commentActions.register(commentId, actions)
+  }
+
   const repliesPage = (kind: string, memo: Map<string, unknown[]> | undefined): SourceCommentPage => {
     const result: SourceCommentPage = {
-      items: (memo?.get('CommentView') ?? []).map(normalizeCommentView).filter((comment) => comment !== undefined),
+      items: (memo?.get('CommentView') ?? []).flatMap((node) => {
+        const comment = normalizeCommentView(node)
+        return comment ? [{ ...comment, actionsToken: actionsToken(node, comment.id) }] : []
+      }),
     }
     const next = (memo?.get('ContinuationItem') ?? [])[0] as ContinuationNode | undefined
     // A replies continuation hangs its next page off a "Load more" BUTTON
@@ -559,11 +643,13 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
         const thread = node as CommentThreadNode
         const continuation = [...(thread.comment_replies_data?.contents ?? [])]
           .find((item) => (item as ContinuationNode).endpoint !== undefined) as ContinuationNode | undefined
-        if (!continuation?.endpoint) return [comment]
+        const token = actionsToken((node as { comment?: unknown }).comment, comment.id)
+        if (!continuation?.endpoint) return [{ ...comment, actionsToken: token }]
         const repliesKind = `replies:${comment.id}`
         const endpoint = continuation.endpoint
         return [{
           ...comment,
+          actionsToken: token,
           repliesCursor: commentContinuations.register(repliesKind, async () => {
             const response = await endpoint.call((await client).actions, { parse: true }) as ContinuationResponse
             return repliesPage(repliesKind, response.on_response_received_endpoints_memo)
@@ -872,6 +958,49 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
       if (!history.removeVideo) throw new Error('youtube: this history feed cannot be edited')
       await history.removeVideo(videoId, HISTORY_REMOVAL_PAGES)
       return videoId
+    },
+    /* The response is an opaque ApiResponse with no parseable comment in it, so
+       this resolves to a Boolean rather than to an entity: fabricating a
+       Comment would mean inventing an id, and a made-up id in a normalized
+       cache is worse than no entity at all. The composer prepends its own row
+       from the session identity. */
+    postComment: async (videoId, textBody) => {
+      const active = await client
+      requireSignIn(active, 'post a comment')
+      await active.interact.comment(videoId, textBody)
+      return true
+    },
+    replyToComment: async (token, textBody) => {
+      const active = await client
+      requireSignIn(active, 'reply to a comment')
+      const { actions } = commentActions.resolve(token)
+      if (!actions.reply) throw new Error('youtube: replies are turned off for this comment')
+      // `commentText` is the key the reply button's endpoint reads; the button
+      // itself carries the thread it belongs to.
+      await actions.reply.call(active.actions, { commentText: textBody })
+      return true
+    },
+    rateComment: async (token, status) => {
+      const active = await client
+      requireSignIn(active, 'rate a comment')
+      const { commentId, actions } = commentActions.resolve(token)
+      // Four separate endpoints rather than one with a parameter, so clearing a
+      // rating is a different call from setting one and the previous state
+      // decides which. INDIFFERENT has to undo whichever was set.
+      const endpoint = status === 'LIKE'
+        ? actions.like
+        : status === 'DISLIKE'
+          ? actions.dislike
+          : actions.unlike ?? actions.undislike
+      if (!endpoint) throw new Error('youtube: this comment cannot be rated')
+      await endpoint.call(active.actions)
+      return {
+        id: commentId,
+        text: '',
+        runs: [],
+        isLiked: status === 'LIKE' ? true : undefined,
+        isDisliked: status === 'DISLIKE' ? true : undefined,
+      }
     },
     setSubscribed: async (channelId, subscribed) => {
       const active = await client
