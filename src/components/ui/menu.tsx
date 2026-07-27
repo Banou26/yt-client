@@ -294,15 +294,20 @@ const itemStyle = css`
 `
 
 export const MenuItem = (
-  { icon: Icon, label, detail, checked, disabled, trailingIcon: TrailingIcon, closeOnSelect, onSelect }: {
+  { icon: Icon, label, detail, checked, disabled, trailingIcon: TrailingIcon, closeOnSelect, onSelect, ariaLabel }: {
     icon?: IconComponent
-    label: string
+    /* Usually a string, but a row is allowed to be richer: the notifications
+       panel renders an avatar, a message and a still. `ariaLabel` is what a
+       non-string row is announced as, since the accessible name can no longer
+       be derived from the text. */
+    label: ComponentChildren
     detail?: string
     checked?: boolean
     disabled?: boolean
     trailingIcon?: IconComponent
     closeOnSelect?: boolean
     onSelect?: () => void
+    ariaLabel?: string
   },
 ) => {
   const menu = useContext(MenuContext)
@@ -323,9 +328,14 @@ export const MenuItem = (
       aria-disabled={disabled ? 'true' : undefined}
       // Focus inside the panel is managed, so no row is a tab stop of its own.
       tabIndex={-1}
+      // A row whose label is not a string has no text to derive a name from,
+      // so it carries an explicit one.
+      aria-label={typeof label === 'string' ? undefined : ariaLabel}
       // Typeahead matches this rather than the rendered text, so a trailing
-      // count ("12 videos") can never become part of what the user types.
-      data-menu-label={label}
+      // count ("12 videos") can never become part of what the user types. A
+      // rich label would stringify to '[object Object]' here, so it falls back
+      // to the explicit name.
+      data-menu-label={typeof label === 'string' ? label : ariaLabel}
       onClick={() => {
         if (disabled) return
         onSelect?.()

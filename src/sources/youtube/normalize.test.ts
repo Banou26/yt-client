@@ -1,8 +1,36 @@
 import { describe, expect, it } from 'vitest'
 
-import { normalizeChannel, normalizeChannelAbout, normalizeRuns, normalizeCommentThread, normalizeCommunityPost, normalizeFeedVideo, normalizeShortsLockup, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizePlaylistPanelVideo, normalizeSearchChannel, normalizeSession, normalizeVideoDetails, normalizeWatchMeta, normalizeWatchPlaylist } from './normalize'
+import { normalizeChannel, normalizeChannelAbout, normalizeNotification, normalizeRuns, normalizeCommentThread, normalizeCommunityPost, normalizeFeedVideo, normalizeShortsLockup, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizePlaylistPanelVideo, normalizeSearchChannel, normalizeSession, normalizeVideoDetails, normalizeWatchMeta, normalizeWatchPlaylist } from './normalize'
 
 describe('youtube normalization', () => {
+  it('keeps the notification avatar and still in their own slots', () => {
+    // They are two separate fields rather than one list: putting the 16:9 still
+    // in the round avatar slot is what reading them as interchangeable does.
+    expect(normalizeNotification({
+      notification_id: 'n1',
+      short_message: { text: 'Blender uploaded a new video' },
+      sent_time: { text: '1 hour ago' },
+      thumbnails: [{ url: 'avatar', width: 48 }],
+      video_thumbnails: [{ url: 'still', width: 320 }],
+      endpoint: { payload: { videoId: 'abc' } },
+      read: false,
+    })).toEqual({
+      id: 'n1',
+      message: 'Blender uploaded a new video',
+      sentText: '1 hour ago',
+      avatar: 'avatar',
+      thumbnail: 'still',
+      videoId: 'abc',
+      read: undefined,
+    })
+  })
+
+  it('drops a notification with no message to show', () => {
+    expect(normalizeNotification({ notification_id: 'n1' })).toBeUndefined()
+    expect(normalizeNotification({ short_message: { text: 'orphan' } })).toBeUndefined()
+    expect(normalizeNotification(undefined)).toBeUndefined()
+  })
+
   it('segments a rich text body into linkable runs', () => {
     // Every one of these is inert when the body is collapsed with text(), which
     // is the state descriptions and comments were in.

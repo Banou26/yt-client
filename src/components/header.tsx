@@ -8,6 +8,7 @@ import { Link, useLocation, useSearch } from 'wouter'
 
 import { gql } from '../generated'
 import { AccountMenu } from './account-menu'
+import { NotificationsMenu } from './notifications-menu'
 
 // Suggestions are display text with no entity and no continuation, so a failed
 // call degrades to an empty list at the source rather than surfacing here.
@@ -429,6 +430,7 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
         <button type='button' className='icon-button' aria-label='Settings'>
           <EllipsisVertical size={24} strokeWidth={1.5} />
         </button>
+        <NotificationsMenu />
         {session?.signedIn
           ? <AccountMenu name={session.name ?? undefined} avatar={session.avatar ?? undefined} handle={session.handle ?? undefined} />
           : (

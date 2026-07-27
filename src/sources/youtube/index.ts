@@ -1,8 +1,8 @@
-import type { Source, SourceChannel, SourceChannelPage, SourceChannelTab, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourcePlaylistListPage, SourcePlaylistPage, SourcePlaylistPrivacy, SourceSearchFeature, SourceSearchFilters, SourceSearchPage, SourceSearchResult, SourcePostPage, SourceSectionedVideoPage, SourceVideo, SourceVideoPage } from '../types'
+import type { Source, SourceChannel, SourceChannelPage, SourceChannelTab, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourcePlaylistListPage, SourcePlaylistPage, SourcePlaylistPrivacy, SourceSearchFeature, SourceSearchFilters, SourceSearchPage, SourceSearchResult, SourceNotificationPage, SourcePostPage, SourceSectionedVideoPage, SourceVideo, SourceVideoPage } from '../types'
 
 import { Innertube } from 'youtubei.js/web'
 
-import { normalizeChannel, normalizeCommentThread, normalizeCommentView, normalizeFeedChannel, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizeChannelAbout, normalizeCommunityPost, normalizeSearchChannel, normalizeSession, normalizeShortsLockup, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
+import { normalizeChannel, normalizeCommentThread, normalizeCommentView, normalizeFeedChannel, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizeNotification, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizeChannelAbout, normalizeCommunityPost, normalizeSearchChannel, normalizeSession, normalizeShortsLockup, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
 
 type Feed = {
   videos: Iterable<unknown>
@@ -119,6 +119,13 @@ type ContinuationResponse = {
   on_response_received_endpoints_memo?: Map<string, unknown[]>
 }
 
+// NotificationsMenu is NOT a Feed: it exposes `contents` and its own
+// getContinuation, with no has_continuation getter to gate on.
+type NotificationsFeed = {
+  contents?: Iterable<unknown>
+  getContinuation(): Promise<NotificationsFeed>
+}
+
 type CommentsFeed = {
   contents: Iterable<unknown>
   header?: { comments_count?: unknown, count?: unknown }
@@ -176,6 +183,8 @@ export type YoutubeClient = {
   getBasicInfo(id: string): Promise<{ basic_info?: unknown }>
   getChannel(id: string): Promise<ChannelFeed>
   getComments(videoId: string, sortBy?: 'TOP_COMMENTS' | 'NEWEST_FIRST'): Promise<CommentsFeed>
+  getNotifications(): Promise<NotificationsFeed>
+  getUnseenNotificationsCount(): Promise<number>
   getPlaylists(): Promise<PlaylistsFeed>
   getPlaylist(id: string): Promise<PlaylistFeed>
   account: {
@@ -490,6 +499,7 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
   const searchContinuations = createContinuations<SourceSearchPage>()
   const postContinuations = createContinuations<SourcePostPage>()
   const commentActions = createActionRegistry()
+  const notificationContinuations = createContinuations<SourceNotificationPage>()
   /* One browse per channel rather than one per tab. A youtubei.js Channel holds
      every tab it has, and none of getVideos/getPlaylists/getAbout/getCommunity
      mutates it (each returns a new feed), so the same fetched object serves
@@ -574,6 +584,32 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
       result.cursor = searchContinuations.register(
         kind,
         async () => searchPage(kind, await feed.getContinuation() as SearchFeed),
+      )
+    }
+    return result
+  }
+
+  /* The record-click endpoints, held the same way comment commands are: there
+     is no manager method for marking a notification read, only the endpoint the
+     row arrived with. Keyed by notification id rather than an opaque token
+     because the id IS stable here, unlike a comment's commands. */
+  const notificationClicks = new Map<string, EndpointNode>()
+
+  const notificationPage = (feed: NotificationsFeed): SourceNotificationPage => {
+    const items = [...(feed.contents ?? [])].flatMap((node) => {
+      const notification = normalizeNotification(node)
+      if (!notification) return []
+      const click = (node as { record_click_endpoint?: EndpointNode }).record_click_endpoint
+      if (click) notificationClicks.set(notification.id, click)
+      return [notification]
+    })
+    const result: SourceNotificationPage = { items }
+    // No has_continuation on this menu, so the cursor is minted unconditionally
+    // and an exhausted one simply comes back empty.
+    if (items.length > 0) {
+      result.cursor = notificationContinuations.register(
+        'notifications',
+        async () => notificationPage(await feed.getContinuation()),
       )
     }
     return result
@@ -1157,6 +1193,33 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
         ...(afterSetVideoId ? { movedSetVideoIdPredecessor: afterSetVideoId } : {}),
       }])
       return writtenPlaylist(playlistId, {})
+    },
+    notifications: async (cursor) => {
+      if (cursor) return notificationContinuations.resolve('notifications', cursor)
+      const active = await client
+      requireSignIn(active, 'see your notifications')
+      return notificationPage(await active.getNotifications())
+    },
+    unseenNotificationCount: async () => {
+      const active = await client
+      if (!active.session.logged_in) return 0
+      try {
+        return await active.getUnseenNotificationsCount()
+      } catch {
+        // The count is decoration on a bell that still opens: upstream's own
+        // implementation carries a FIXME about not parsing this properly, so a
+        // shape change must not take the header down with it.
+        return 0
+      }
+    },
+    markNotificationRead: async (id) => {
+      const active = await client
+      requireSignIn(active, 'update a notification')
+      const endpoint = notificationClicks.get(id)
+      // No manager method exists for this: the row carries its own
+      // record-click endpoint, which is the only way to mark it read.
+      if (endpoint) await endpoint.call(active.actions)
+      return id
     },
     // Signed-in state comes from the cookie jar probe; the accounts_list call
     // only decorates it, so its failure must not read back as signed out.

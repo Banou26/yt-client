@@ -109,6 +109,21 @@ export type SourceChannelTab =
   | 'HOME' | 'VIDEOS' | 'SHORTS' | 'LIVE' | 'RELEASES'
   | 'PODCASTS' | 'COURSES' | 'PLAYLISTS' | 'COMMUNITY' | 'ABOUT' | 'SEARCH'
 
+export type SourceNotification = {
+  id: string
+  message: string
+  sentText?: string
+  avatar?: string
+  thumbnail?: string
+  videoId?: string
+  read?: boolean
+}
+
+export type SourceNotificationPage = {
+  items: SourceNotification[]
+  cursor?: string
+}
+
 export type SourceChannelLink = {
   title: string
   url: string
@@ -305,6 +320,8 @@ export type Source = {
   // public one opens anonymously.
   playlists(cursor?: string): Promise<SourcePlaylistListPage>
   playlist(id: string, cursor?: string): Promise<SourcePlaylistPage>
+  notifications(cursor?: string): Promise<SourceNotificationPage>
+  unseenNotificationCount(): Promise<number>
   session(): Promise<SourceSession>
   // Writes resolve to the affected entity so the normalized cache can merge the
   // new state. Only identity and the changed fields are meaningful; the rest is
@@ -313,6 +330,8 @@ export type Source = {
   removeFromHistory(videoId: string): Promise<string>
   // Resolves to a Boolean rather than the created comment: the response carries
   // no parseable comment, and inventing an id would poison the normalized cache.
+  // Resolves to the id so the cache can mark just that row read.
+  markNotificationRead(id: string): Promise<string>
   postComment(videoId: string, text: string): Promise<boolean>
   replyToComment(actionsToken: string, text: string): Promise<boolean>
   rateComment(actionsToken: string, status: SourceLikeStatus): Promise<SourceComment>
@@ -355,9 +374,12 @@ export const SOURCE_METHODS = [
   'commentReplies',
   'playlists',
   'playlist',
+  'notifications',
+  'unseenNotificationCount',
   'session',
   'rateVideo',
   'removeFromHistory',
+  'markNotificationRead',
   'postComment',
   'replyToComment',
   'rateComment',
@@ -396,6 +418,7 @@ export const SOURCE_CURSOR_ARGUMENT = {
   comments: 2,
   commentReplies: 0,
   communityPosts: 1,
+  notifications: 0,
   playlists: 0,
   playlist: 1,
 } as const satisfies Partial<Record<SourceMethod, number>>
@@ -427,9 +450,12 @@ export const SOURCE_REPLAY = {
   commentReplies: 'unless-cursor',
   playlists: 'unless-cursor',
   playlist: 'unless-cursor',
+  notifications: 'unless-cursor',
+  unseenNotificationCount: 'always',
   session: 'always',
   rateVideo: 'never',
   removeFromHistory: 'never',
+  markNotificationRead: 'never',
   postComment: 'never',
   replyToComment: 'never',
   rateComment: 'never',

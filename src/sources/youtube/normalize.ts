@@ -1,4 +1,4 @@
-import type { SourceChannel, SourceChannelAbout, SourceTextRun, SourceComment, SourceLikeStatus, SourcePost, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourceSession, SourceVideo, SourceWatchMeta, SourceWatchPlaylist } from '../types'
+import type { SourceChannel, SourceChannelAbout, SourceNotification, SourceTextRun, SourceComment, SourceLikeStatus, SourcePost, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourceSession, SourceVideo, SourceWatchMeta, SourceWatchPlaylist } from '../types'
 
 type Thumbnail = {
   url?: string
@@ -556,6 +556,33 @@ export const normalizeRuns = (value: string | Text | undefined): SourceTextRun[]
       browseId: payload?.browseId,
     }]
   })
+}
+
+export const normalizeNotification = (input: unknown): SourceNotification | undefined => {
+  const node = input as {
+    notification_id?: string
+    short_message?: Text
+    sent_time?: Text
+    thumbnails?: Thumbnail[]
+    video_thumbnails?: Thumbnail[]
+    endpoint?: { payload?: { videoId?: string } }
+    read?: boolean
+  } | undefined
+  const id = node?.notification_id
+  const message = presentText(node?.short_message)
+  if (!id || !message) return undefined
+  return {
+    id,
+    message,
+    sentText: presentText(node?.sent_time),
+    // `thumbnails` is the channel avatar and `video_thumbnails` the still. They
+    // are separate fields rather than one list, and swapping them puts a 16:9
+    // frame in a round avatar slot.
+    avatar: thumbnail(node?.thumbnails),
+    thumbnail: thumbnail(node?.video_thumbnails),
+    videoId: node?.endpoint?.payload?.videoId,
+    read: node?.read === true ? true : undefined,
+  }
 }
 
 const clampPercent = (value: unknown) =>

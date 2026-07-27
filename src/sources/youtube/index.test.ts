@@ -127,6 +127,25 @@ const posts = (id: string, next?: () => Promise<FakePosts>): FakePosts => ({
   getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
 })
 
+type FakeNotifications = {
+  contents: unknown[]
+  getContinuation(): Promise<FakeNotifications>
+}
+
+const notifications = (id: string, next?: () => Promise<FakeNotifications>): FakeNotifications => ({
+  contents: [{
+    notification_id: id,
+    short_message: { text: `Message ${id}` },
+    sent_time: { text: '1 hour ago' },
+    thumbnails: [{ url: 'avatar', width: 48 }],
+    video_thumbnails: [{ url: 'still', width: 320 }],
+    endpoint: { payload: { videoId: `v-${id}` } },
+    record_click_endpoint: commandFor(id, 'recordClick'),
+    read: false,
+  }],
+  getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
+})
+
 type FakeCall = { endpoint: string, args?: Record<string, unknown> }
 
 const createFakeClient = () => {
@@ -185,6 +204,8 @@ const createFakeClient = () => {
     },
     getComments: async () => comments('top', async () => comments('next')),
     getPlaylists: async () => playlists('PLone', async () => playlists('PLtwo')),
+    getNotifications: async () => notifications('n1', async () => notifications('n2')),
+    getUnseenNotificationsCount: async () => 3,
     getPlaylist: async (id: string) => playlist(`${id}-first`, async () => playlist(`${id}-second`)),
     getSubscriptionsFeed: async () => feed('sub'),
     getHistory: async () => ({
@@ -614,6 +635,7 @@ describe('youtube source', () => {
     channel: ['c', undefined as unknown as string, undefined as unknown as string, undefined as unknown as string],
     comments: ['abc', undefined as unknown as string],
     communityPosts: ['c'],
+    notifications: [],
     playlists: [],
     playlist: ['PL1'],
   }

@@ -177,6 +177,26 @@ enum ChannelTab {
   SEARCH
 }
 
+type Notification {
+  id: ID!
+  # The whole line as upstream writes it ("Blender uploaded ..."), already
+  # localized. There is no separate title or channel name on this node.
+  message: String!
+  sentText: String
+  # The channel avatar, and the video still where the notification is about one.
+  avatar: String
+  thumbnail: String
+  # Where tapping it goes. Absent when the endpoint is a kind this client does
+  # not route, in which case the row is shown but not linked.
+  videoId: String
+  read: Boolean
+}
+
+type NotificationPage {
+  items: [Notification!]!
+  cursor: String
+}
+
 type ChannelLink {
   title: String!
   url: String!
@@ -419,6 +439,10 @@ type Query {
   # NOT gated: a public playlist opens signed out. An inaccessible one comes
   # back as an upstream error rather than as an empty page.
   playlist(id: ID!, cursor: String): PlaylistPage!
+  # Signed-in only. Polling is the caller's business: each call is a tunneled
+  # round trip, so the header polls slowly and only while the tab is visible.
+  notifications(cursor: String): NotificationPage!
+  unseenNotificationCount: Int!
   session: Session!
 }
 
@@ -439,6 +463,8 @@ type Mutation {
   postComment(videoId: ID!, text: String!): Boolean!
   replyToComment(actionsToken: String!, text: String!): Boolean!
   rateComment(actionsToken: String!, status: LikeStatus!): Comment!
+  # Resolves to the notification id so the cache can mark just that row read.
+  markNotificationRead(id: ID!): ID!
   setSubscribed(channelId: ID!, subscribed: Boolean!): Channel!
   setNotificationLevel(channelId: ID!, level: NotificationLevel!): Channel!
   addToPlaylist(playlistId: ID!, videoIds: [ID!]!): Playlist!
