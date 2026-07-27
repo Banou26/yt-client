@@ -7,6 +7,7 @@ import type { PlaybackFormat } from './protocol'
 
 import { mintPoToken, recoverPoTokenSession, warmPoTokenSession } from './botguard'
 import { egressFetch } from './egress'
+import { isPlayableFormat } from './formats'
 import { GVS_ORIGIN_KEY, VISITOR_DATA_KEY } from './identity'
 
 export { GVS_ORIGIN_KEY }
@@ -326,10 +327,7 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
   }
   const streaming = info.streaming_data
   if (!streaming?.server_abr_streaming_url) throw new Error('youtube: SABR URL is missing')
-  const rawFormats = (streaming.adaptive_formats ?? []).filter((format) => {
-    if (!format.has_audio || format.has_video) return true
-    return !format.xtags && !format.is_drc && !format.is_dubbed && !format.is_auto_dubbed && !format.is_descriptive
-  }) as unknown as YoutubeFormat[]
+  const rawFormats = (streaming.adaptive_formats ?? []).filter(isPlayableFormat) as unknown as YoutubeFormat[]
   const playbackFormats = rawFormats.map(playbackFormat).filter((format) => format !== undefined)
   // The manifest must advertise EXACTLY the formats the SABR session can serve,
   // so it is filtered by format KEY rather than by itag. Filtering by itag is
