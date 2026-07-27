@@ -26,7 +26,7 @@ const style = css`
     aspect-ratio: 16 / 9;
     border-radius: 1.2rem;
     overflow: hidden;
-    background: #212121;
+    background: var(--bg-elevated);
   }
 
   .thumb img {
@@ -42,15 +42,15 @@ const style = css`
     bottom: 0.6rem;
     padding: 0.1rem 0.4rem;
     border-radius: 0.4rem;
-    background: rgba(0, 0, 0, 0.8);
-    color: #ffffff;
+    background: var(--bg-badge);
+    color: var(--text-on-media);
     font-size: 1.2rem;
     font-weight: 500;
     line-height: 1.8rem;
   }
 
   .badge.live {
-    background: #ff0000;
+    background: var(--brand);
     text-transform: uppercase;
   }
 
@@ -66,7 +66,7 @@ const style = css`
     height: 3.6rem;
     border-radius: 50%;
     overflow: hidden;
-    background: #272727;
+    background: var(--bg-chip);
   }
 
   .avatar img {
@@ -80,7 +80,7 @@ const style = css`
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #f1f1f1;
+    color: var(--text-primary);
     font-size: 1.6rem;
     font-weight: 500;
   }
@@ -96,7 +96,7 @@ const style = css`
     font-size: 1.6rem;
     font-weight: 500;
     line-height: 2.2rem;
-    color: #f1f1f1;
+    color: var(--text-primary);
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -108,18 +108,18 @@ const style = css`
     width: fit-content;
     font-size: 1.4rem;
     font-weight: 400;
-    color: #aaaaaa;
+    color: var(--text-secondary);
     transition: color 0.15s ease;
   }
 
   .channel-name:hover {
-    color: #f1f1f1;
+    color: var(--text-primary);
   }
 
   .meta {
     font-size: 1.4rem;
     font-weight: 400;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 
   &.channel .text {
@@ -145,7 +145,7 @@ const style = css`
     border: none;
     border-radius: 50%;
     background: transparent;
-    color: #f1f1f1;
+    color: var(--text-primary);
     cursor: pointer;
     opacity: 0;
     transition: background 0.15s ease, opacity 0.15s ease;
@@ -157,7 +157,7 @@ const style = css`
   }
 
   .more:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--bg-hover);
   }
 `
 
@@ -213,13 +213,13 @@ const skeletonStyle = css`
   .thumb {
     aspect-ratio: 16 / 9;
     border-radius: 1.2rem;
-    background: #212121;
+    background: var(--bg-elevated);
   }
 
   .bar {
     height: 1.6rem;
     border-radius: 0.4rem;
-    background: #212121;
+    background: var(--bg-elevated);
     margin-top: 1.2rem;
   }
 

@@ -43,7 +43,7 @@ const style = css`
     font-size: 2rem;
     font-weight: 700;
     line-height: 2.8rem;
-    color: #f1f1f1;
+    color: var(--text-primary);
   }
 
   .sort {
@@ -53,7 +53,7 @@ const style = css`
     padding: 0;
     border: none;
     background: transparent;
-    color: #f1f1f1;
+    color: var(--text-primary);
     font-size: 1.4rem;
     font-weight: 500;
     cursor: pointer;
@@ -76,7 +76,7 @@ const style = css`
     height: 4rem;
     border-radius: 50%;
     overflow: hidden;
-    background: #272727;
+    background: var(--bg-chip);
   }
 
   .avatar img {
@@ -90,7 +90,7 @@ const style = css`
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #f1f1f1;
+    color: var(--text-primary);
     font-size: 1.6rem;
     font-weight: 500;
   }
@@ -103,7 +103,7 @@ const style = css`
 
   .pinned {
     font-size: 1.2rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 
   .byline {
@@ -115,19 +115,19 @@ const style = css`
   .author {
     font-size: 1.3rem;
     font-weight: 500;
-    color: #f1f1f1;
+    color: var(--text-primary);
   }
 
   .age {
     font-size: 1.2rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 
   .text {
     margin-top: 0.2rem;
     font-size: 1.4rem;
     line-height: 2rem;
-    color: #f1f1f1;
+    color: var(--text-primary);
     white-space: pre-wrap;
     word-break: break-word;
   }
@@ -148,19 +148,19 @@ const style = css`
     border: none;
     border-radius: 50%;
     background: transparent;
-    color: #f1f1f1;
+    color: var(--text-primary);
     cursor: pointer;
     transition: background 0.15s ease;
   }
 
   .action:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--bg-hover);
   }
 
   .like-count {
     margin-left: -0.4rem;
     font-size: 1.2rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 
   .reply {
@@ -169,7 +169,7 @@ const style = css`
     border: none;
     border-radius: 1.6rem;
     background: transparent;
-    color: #f1f1f1;
+    color: var(--text-primary);
     font-size: 1.2rem;
     font-weight: 500;
     cursor: pointer;
@@ -177,14 +177,14 @@ const style = css`
   }
 
   .reply:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--bg-hover);
   }
 
   .replies {
     margin-top: 0.4rem;
     font-size: 1.2rem;
     font-weight: 500;
-    color: #3ea6ff;
+    color: var(--accent);
   }
 
   .show-more {
@@ -193,8 +193,8 @@ const style = css`
     padding: 0 1.6rem;
     border: none;
     border-radius: 1.8rem;
-    background: #272727;
-    color: #f1f1f1;
+    background: var(--bg-chip);
+    color: var(--text-primary);
     font-size: 1.4rem;
     font-weight: 500;
     cursor: pointer;
@@ -202,7 +202,7 @@ const style = css`
   }
 
   .show-more:hover {
-    background: #3f3f3f;
+    background: var(--bg-chip-hover);
   }
 
   .show-more:disabled {
@@ -214,7 +214,7 @@ const style = css`
   .more-error {
     margin: 2.4rem 0 0;
     font-size: 1.4rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 `
 

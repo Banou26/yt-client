@@ -5,30 +5,30 @@ import { useLocation } from 'wouter'
 import { closeSignIn, openSignIn, startEngine } from '../scramjet/client'
 
 const style = css`
-  min-height: calc(100vh - 5.6rem);
+  min-height: calc(100vh - var(--header-height));
 
-  /* Full overlay above the host sign-in frame (z-index 1500) until Google's
+  /* Full overlay above the host sign-in frame (--z-host-frame) until Google's
      login page paints, so the user never stares at a blank dark panel. */
   .loading {
     position: fixed;
-    top: 5.6rem;
+    top: var(--header-height);
     left: 0;
     right: 0;
     bottom: 0;
-    z-index: 1550;
+    z-index: calc(var(--z-host-frame) + 50);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 1.8rem;
-    background: #0f0f0f;
+    background: var(--bg-base);
   }
 
   .spinner {
     width: 3.6rem;
     height: 3.6rem;
-    border: 0.3rem solid #272727;
-    border-top-color: #3ea6ff;
+    border: 0.3rem solid var(--border);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: signin-spin 0.8s linear infinite;
   }
@@ -41,13 +41,13 @@ const style = css`
 
   .status {
     font-size: 1.4rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 
   .error {
     max-width: 42rem;
     font-size: 1.4rem;
-    color: #f28b82;
+    color: var(--danger);
     text-align: center;
   }
 
@@ -61,21 +61,23 @@ const style = css`
     padding: 0 1.6rem;
     border: none;
     border-radius: 1.8rem;
-    background: #f1f1f1;
-    color: #0f0f0f;
+    background: var(--bg-inverse);
+    color: var(--text-inverse);
     font-size: 1.4rem;
     font-weight: 500;
     cursor: pointer;
   }
 
   /* Cancel floats above BOTH the loader and the login frame so the flow is
-     always escapable. */
+     always escapable. It overlays Google's login page, which is white whatever
+     this app's theme is, so it deliberately does NOT track the theme: tracking
+     it would make the one escape hatch near-invisible in light mode. */
   .cancel {
     position: fixed;
     bottom: 2.4rem;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 1600;
+    z-index: calc(var(--z-host-frame) + 100);
     height: 3.6rem;
     padding: 0 1.6rem;
     border: 1px solid #3f3f3f;

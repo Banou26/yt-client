@@ -1,8 +1,9 @@
 import { css } from '@emotion/react'
 import { LogOut } from 'lucide-react'
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useCallback, useRef, useState } from 'preact/hooks'
 
 import { clearSessionCookies, startEngine } from '../scramjet/client'
+import { useDismiss } from './ui/popup'
 
 const style = css`
   position: relative;
@@ -33,8 +34,8 @@ const style = css`
     align-items: center;
     justify-content: center;
     border-radius: 50%;
-    background: #3ea6ff;
-    color: #0f0f0f;
+    background: var(--accent);
+    color: var(--text-inverse);
     font-size: 1.6rem;
     font-weight: 500;
     text-transform: uppercase;
@@ -47,8 +48,8 @@ const style = css`
     min-width: 26rem;
     padding: 0.8rem 0;
     border-radius: 1.2rem;
-    background: #282828;
-    box-shadow: 0 0.4rem 3.2rem rgba(0, 0, 0, 0.4);
+    background: var(--bg-menu);
+    box-shadow: var(--shadow-menu);
   }
 
   .account {
@@ -73,7 +74,7 @@ const style = css`
   .name {
     font-size: 1.6rem;
     font-weight: 400;
-    color: #f1f1f1;
+    color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -81,7 +82,7 @@ const style = css`
 
   .handle {
     font-size: 1.4rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -90,7 +91,7 @@ const style = css`
   .divider {
     height: 1px;
     margin: 0 0 0.8rem;
-    background: rgba(255, 255, 255, 0.2);
+    background: var(--border-subtle);
   }
 
   .sign-out {
@@ -102,7 +103,7 @@ const style = css`
     padding: 0 1.6rem;
     border: none;
     background: transparent;
-    color: #f1f1f1;
+    color: var(--text-primary);
     font-size: 1.4rem;
     text-align: left;
     cursor: pointer;
@@ -110,7 +111,7 @@ const style = css`
   }
 
   .sign-out:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--bg-hover);
   }
 
   .sign-out:disabled {
@@ -121,7 +122,7 @@ const style = css`
   .sign-out-error {
     margin: 0.4rem 1.6rem 0;
     font-size: 1.2rem;
-    color: #f28b82;
+    color: var(--danger);
   }
 `
 
@@ -137,24 +138,8 @@ export const AccountMenu = ({ name, avatar, handle }: { name?: string, avatar?: 
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
 
-  useEffect(() => {
-    if (!open) return
-    const onPointerDown = (event: PointerEvent) => {
-      if (rootRef.current?.contains(event.target as Node)) return
-      setOpen(false)
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      setOpen(false)
-      triggerRef.current?.focus()
-    }
-    document.addEventListener('pointerdown', onPointerDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [open])
+  const onClose = useCallback(() => setOpen(false), [])
+  useDismiss({ open, onClose, rootRef, triggerRef })
 
   const onSignOut = async () => {
     if (signingOut) return

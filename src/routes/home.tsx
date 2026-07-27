@@ -29,7 +29,7 @@ const style = css`
 
   .chips {
     position: sticky;
-    top: 5.6rem;
+    top: var(--header-height);
     z-index: 100;
     display: flex;
     gap: 1.2rem;
@@ -37,7 +37,7 @@ const style = css`
     margin-bottom: 1.2rem;
     overflow-x: auto;
     scrollbar-width: none;
-    background: #0f0f0f;
+    background: var(--bg-base);
   }
 
   .chip {
@@ -46,8 +46,8 @@ const style = css`
     padding: 0 1.2rem;
     border: none;
     border-radius: 0.8rem;
-    background: #272727;
-    color: #f1f1f1;
+    background: var(--bg-chip);
+    color: var(--text-primary);
     font-size: 1.4rem;
     font-weight: 500;
     cursor: pointer;
@@ -55,17 +55,17 @@ const style = css`
   }
 
   .chip:hover {
-    background: #3f3f3f;
+    background: var(--bg-chip-hover);
   }
 
   .chip.active {
-    background: #f1f1f1;
-    color: #0f0f0f;
+    background: var(--bg-inverse);
+    color: var(--text-inverse);
   }
 
   .error {
     padding: 2.4rem 0;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 
   .empty {
@@ -73,7 +73,7 @@ const style = css`
     margin: 4.8rem auto 0;
     padding: 2.4rem;
     border-radius: 1.2rem;
-    background: #1f1f1f;
+    background: var(--bg-subtle);
     text-align: center;
   }
 
@@ -81,13 +81,13 @@ const style = css`
     margin: 0 0 0.8rem;
     font-size: 2rem;
     font-weight: 700;
-    color: #f1f1f1;
+    color: var(--text-primary);
   }
 
   .empty p {
     margin: 0;
     font-size: 1.4rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 `
 
@@ -113,7 +113,7 @@ const HomePage = () => {
         ? (
           <div className='empty'>
             <h2>Try searching to get started</h2>
-            <p>Anonymous sessions start with an empty feed — search for videos to start watching.</p>
+            <p>Anonymous sessions start with an empty feed: search for videos to start watching.</p>
           </div>
         )
         : <VideoGrid videos={data?.home.items ?? []} fetching={fetching && !data} />}

@@ -25,7 +25,7 @@ const logoStyle = css`
   display: flex;
   align-items: flex-start;
   gap: 0.4rem;
-  color: #f1f1f1;
+  color: var(--text-primary);
 
   .mark {
     display: block;
@@ -43,7 +43,7 @@ const logoStyle = css`
   .region {
     font-size: 1rem;
     line-height: 1;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 `
 
@@ -63,13 +63,13 @@ const style = css`
   top: 0;
   left: 0;
   right: 0;
-  height: 5.6rem;
-  z-index: 2000;
+  height: var(--header-height);
+  z-index: var(--z-header);
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 1.6rem;
-  background: #0f0f0f;
+  background: var(--bg-base);
 
   .start {
     display: flex;
@@ -87,13 +87,13 @@ const style = css`
     border: none;
     border-radius: 50%;
     background: transparent;
-    color: #f1f1f1;
+    color: var(--text-primary);
     cursor: pointer;
     transition: background 0.15s ease;
   }
 
   .icon-button:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--bg-hover);
   }
 
   .search {
@@ -110,15 +110,15 @@ const style = css`
     align-items: center;
     min-width: 0;
     height: 4rem;
-    background: #121212;
-    border: 1px solid #303030;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
     border-radius: 4rem 0 0 4rem;
     padding-left: 1.6rem;
     transition: border-color 0.15s ease;
   }
 
   .search-box:focus-within {
-    border-color: #1c62b9;
+    border-color: var(--accent-focus);
     box-shadow: inset 0 0.1rem 0.2rem rgba(0, 0, 0, 0.3);
   }
 
@@ -128,12 +128,12 @@ const style = css`
     background: transparent;
     border: none;
     outline: none;
-    color: #f1f1f1;
+    color: var(--text-primary);
     font-size: 1.6rem;
   }
 
   .search-box input::placeholder {
-    color: #888888;
+    color: var(--text-placeholder);
   }
 
   .search-button {
@@ -143,17 +143,17 @@ const style = css`
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #222222;
-    border: 1px solid #303030;
+    background: var(--bg-input-button);
+    border: 1px solid var(--border);
     border-left: none;
     border-radius: 0 4rem 4rem 0;
-    color: #f1f1f1;
+    color: var(--text-primary);
     cursor: pointer;
     transition: background 0.15s ease;
   }
 
   .search-button:hover {
-    background: #3f3f3f;
+    background: var(--bg-chip-hover);
   }
 
   .mic-button {
@@ -166,14 +166,14 @@ const style = css`
     justify-content: center;
     border: none;
     border-radius: 50%;
-    background: #181818;
-    color: #f1f1f1;
+    background: var(--bg-mic);
+    color: var(--text-primary);
     cursor: pointer;
     transition: background 0.15s ease;
   }
 
   .mic-button:hover {
-    background: #272727;
+    background: var(--bg-mic-hover);
   }
 
   .end {
@@ -188,10 +188,10 @@ const style = css`
     gap: 0.8rem;
     height: 3.6rem;
     padding: 0 1.5rem;
-    border: 1px solid #3f3f3f;
+    border: 1px solid var(--border-strong);
     border-radius: 1.8rem;
     background: transparent;
-    color: #3ea6ff;
+    color: var(--accent);
     font-size: 1.4rem;
     font-weight: 500;
     white-space: nowrap;
@@ -200,7 +200,7 @@ const style = css`
   }
 
   .sign-in:hover {
-    background: rgba(62, 166, 255, 0.15);
+    background: var(--accent-hover);
     border-color: transparent;
   }
 

@@ -218,6 +218,11 @@ const boot = async () => {
     // Least privilege: the login flow needs no permissions, and this frame is
     // the first place arbitrary rewritten Google JS runs on the app origin.
     const element = document.createElement('iframe')
+    // Literal rather than var(--bg-base) on purpose: this element lives in the
+    // scramjet host document, which carries none of the app's :root custom
+    // properties, so a var() reference here would resolve to nothing. It is
+    // only visible for the moment before Google's own (always light) login
+    // page paints over it.
     element.style.cssText = 'position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: #0f0f0f; z-index: 10;'
     document.body.appendChild(element)
     // Untapped frame on the WEBVPN controller — no youtube-frame.js injection,

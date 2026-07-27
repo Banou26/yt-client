@@ -40,7 +40,7 @@ const sectionsStyle = css`
   }
 
   .section + .section {
-    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    border-top: 1px solid var(--border-subtle);
     margin-top: 1.2rem;
     padding-top: 1.2rem;
   }
@@ -49,7 +49,7 @@ const sectionsStyle = css`
     padding: 0.6rem 1.2rem;
     font-size: 1.6rem;
     font-weight: 500;
-    color: #f1f1f1;
+    color: var(--text-primary);
   }
 
   .item {
@@ -59,7 +59,7 @@ const sectionsStyle = css`
     height: 4rem;
     padding: 0 1.2rem;
     border-radius: 1rem;
-    color: #f1f1f1;
+    color: var(--text-primary);
     font-size: 1.4rem;
     font-weight: 400;
     white-space: nowrap;
@@ -71,19 +71,19 @@ const sectionsStyle = css`
   }
 
   .item:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--bg-hover);
   }
 
   .item.active {
-    background: #272727;
+    background: var(--bg-selected);
     font-weight: 500;
   }
 
   .footer {
-    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    border-top: 1px solid var(--border-subtle);
     margin-top: 1.2rem;
     padding: 1.6rem 1.2rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
     font-size: 1.2rem;
     line-height: 1.8rem;
   }
@@ -97,7 +97,7 @@ const sectionsStyle = css`
   }
 
   .copyright {
-    color: #717171;
+    color: var(--text-tertiary);
   }
 `
 
@@ -140,26 +140,26 @@ const GuideSections = () => {
 
 const expandedStyle = css`
   position: fixed;
-  top: 5.6rem;
+  top: var(--header-height);
   bottom: 0;
   left: 0;
-  width: 24rem;
+  width: var(--guide-width);
   padding: 1.2rem;
   overflow-y: auto;
-  background: #0f0f0f;
-  z-index: 1000;
+  background: var(--bg-base);
+  z-index: var(--z-guide);
 `
 
 const miniStyle = css`
   position: fixed;
-  top: 5.6rem;
+  top: var(--header-height);
   bottom: 0;
   left: 0;
-  width: 7.2rem;
+  width: var(--guide-mini-width);
   padding: 0 0.4rem;
   overflow-y: auto;
-  background: #0f0f0f;
-  z-index: 1000;
+  background: var(--bg-base);
+  z-index: var(--z-guide);
 
   .item {
     display: flex;
@@ -168,12 +168,12 @@ const miniStyle = css`
     gap: 0.6rem;
     padding: 1.6rem 0;
     border-radius: 1rem;
-    color: #f1f1f1;
+    color: var(--text-primary);
     transition: background 0.15s ease;
   }
 
   .item:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--bg-hover);
   }
 
   .item .label {
@@ -188,12 +188,12 @@ const miniStyle = css`
 const drawerStyle = css`
   position: fixed;
   inset: 0;
-  z-index: 2100;
+  z-index: var(--z-drawer);
 
   .scrim {
     position: absolute;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--bg-scrim);
   }
 
   .panel {
@@ -201,9 +201,9 @@ const drawerStyle = css`
     top: 0;
     left: 0;
     bottom: 0;
-    width: 24rem;
+    width: var(--guide-width);
     overflow-y: auto;
-    background: #0f0f0f;
+    background: var(--bg-base);
     animation: guide-slide-in 0.2s ease;
   }
 
@@ -223,9 +223,9 @@ const drawerStyle = css`
     display: flex;
     align-items: center;
     gap: 1.6rem;
-    height: 5.6rem;
+    height: var(--header-height);
     padding: 0 1.6rem;
-    background: #0f0f0f;
+    background: var(--bg-base);
     z-index: 1;
   }
 
@@ -239,13 +239,13 @@ const drawerStyle = css`
     border: none;
     border-radius: 50%;
     background: transparent;
-    color: #f1f1f1;
+    color: var(--text-primary);
     cursor: pointer;
     transition: background 0.15s ease;
   }
 
   .icon-button:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--bg-hover);
   }
 
   .panel-sections {

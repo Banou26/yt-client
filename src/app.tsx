@@ -4,6 +4,7 @@ import { Route, Switch, useLocation } from 'wouter'
 
 import Guide from './components/guide'
 import Header from './components/header'
+import ErrorBoundary from './components/ui/error-boundary'
 import ChannelPage from './routes/channel'
 import HomePage from './routes/home'
 import SearchPage from './routes/search'
@@ -14,7 +15,7 @@ const style = css`
   min-height: 100vh;
 
   .content {
-    padding-top: 5.6rem;
+    padding-top: var(--header-height);
   }
 
   .page {
@@ -22,16 +23,16 @@ const style = css`
   }
 
   .page.guide-expanded {
-    margin-left: 24rem;
+    margin-left: var(--guide-width);
   }
 
   .page.guide-mini {
-    margin-left: 7.2rem;
+    margin-left: var(--guide-mini-width);
   }
 
   .not-found {
     padding: 2.4rem 1.6rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 `
 
@@ -95,16 +96,20 @@ export const App = () => {
       <div className='content'>
         {guideVariant ? <Guide variant={guideVariant} /> : undefined}
         <div className={guideVariant ? `page guide-${guideVariant}` : 'page'}>
-          <Switch>
-            <Route path='/' component={HomePage} />
-            <Route path='/search/:query' component={SearchPage} />
-            <Route path='/watch/:videoId' component={WatchPage} />
-            <Route path='/channel/:channelId' component={ChannelPage} />
-            <Route path='/signin' component={SignInPage} />
-            <Route>
-              <p className='not-found'>Not found</p>
-            </Route>
-          </Switch>
+          {/* Keyed on the route so navigating away from a failed page clears
+              the error instead of pinning the whole app to it. */}
+          <ErrorBoundary key={location}>
+            <Switch>
+              <Route path='/' component={HomePage} />
+              <Route path='/search/:query' component={SearchPage} />
+              <Route path='/watch/:videoId' component={WatchPage} />
+              <Route path='/channel/:channelId' component={ChannelPage} />
+              <Route path='/signin' component={SignInPage} />
+              <Route>
+                <p className='not-found'>Not found</p>
+              </Route>
+            </Switch>
+          </ErrorBoundary>
         </div>
       </div>
       {(overlayOnly || narrow) && drawerOpen ? <Guide variant='drawer' onClose={() => setDrawerOpen(false)} /> : undefined}

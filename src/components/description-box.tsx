@@ -5,10 +5,10 @@ const style = css`
   margin-top: 1.2rem;
   padding: 0.8rem 1.2rem;
   border-radius: 1.2rem;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--bg-hover);
   font-size: 1.4rem;
   line-height: 2rem;
-  color: #f1f1f1;
+  color: var(--text-primary);
   transition: background 0.15s ease;
 
   &.collapsed {
@@ -16,7 +16,7 @@ const style = css`
   }
 
   &.collapsed:hover {
-    background: rgba(255, 255, 255, 0.15);
+    background: var(--bg-hover-strong);
   }
 
   .meta {
@@ -43,7 +43,7 @@ const style = css`
     padding: 0;
     border: none;
     background: transparent;
-    color: #f1f1f1;
+    color: var(--text-primary);
     font-size: 1.4rem;
     font-weight: 500;
     cursor: pointer;

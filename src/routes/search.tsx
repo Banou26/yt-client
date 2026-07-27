@@ -42,7 +42,7 @@ const style = css`
   }
 
   .status {
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 
   .results {
@@ -64,7 +64,7 @@ const style = css`
     aspect-ratio: 16 / 9;
     border-radius: 1.2rem;
     overflow: hidden;
-    background: #212121;
+    background: var(--bg-elevated);
   }
 
   .thumb img {
@@ -80,8 +80,8 @@ const style = css`
     bottom: 0.6rem;
     padding: 0.1rem 0.4rem;
     border-radius: 0.4rem;
-    background: rgba(0, 0, 0, 0.8);
-    color: #ffffff;
+    background: var(--bg-badge);
+    color: var(--text-on-media);
     font-size: 1.2rem;
     font-weight: 500;
     line-height: 1.8rem;
@@ -97,7 +97,7 @@ const style = css`
     font-size: 1.8rem;
     font-weight: 400;
     line-height: 2.6rem;
-    color: #f1f1f1;
+    color: var(--text-primary);
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -106,7 +106,7 @@ const style = css`
 
   .meta {
     font-size: 1.2rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 
   .channel {
@@ -116,12 +116,12 @@ const style = css`
     width: fit-content;
     margin: 1.2rem 0;
     font-size: 1.2rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
     transition: color 0.15s ease;
   }
 
   .channel:hover {
-    color: #f1f1f1;
+    color: var(--text-primary);
   }
 
   .avatar {
@@ -130,7 +130,7 @@ const style = css`
     height: 2.4rem;
     border-radius: 50%;
     overflow: hidden;
-    background: #272727;
+    background: var(--bg-chip);
   }
 
   .avatar img {
@@ -146,12 +146,12 @@ const style = css`
     justify-content: center;
     font-size: 1.2rem;
     font-weight: 500;
-    color: #f1f1f1;
+    color: var(--text-primary);
   }
 
   .description {
     font-size: 1.2rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
