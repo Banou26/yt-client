@@ -256,7 +256,44 @@ export const startShakaPlayback = async ({
     diagnosticBridgeId = bridgeId
     document.documentElement.dataset.playerEngine = 'shaka'
     await video.play().catch(() => {})
-    return { player: activePlayer, destroy }
+
+    // Heights come from the SABR session rather than from Shaka: the session is
+    // the side that has to serve the format, so anything it cannot serve must
+    // not be offered.
+    const heights = [...new Set(
+      session.videoFormats
+        .map((format) => format.height)
+        .filter((height): height is number => typeof height === 'number' && height > 0),
+    )].sort((a, b) => b - a)
+
+    // Switching quality is two coordinated moves, and doing only the Shaka half
+    // is what makes the stream die: the frame's SABR adapter keeps advertising
+    // the old format, so segments for the newly selected one abort
+    // (OPERATION_ABORTED) until Shaka gives up.
+    const selectQuality = async (height: number | 'auto') => {
+      if (destroyed) return
+      if (height === 'auto') {
+        activePlayer.configure({ abr: { enabled: true, restrictToElementSize: true } })
+        return
+      }
+      const format = session.videoFormats
+        .filter((candidate) => candidate.height === height)
+        .sort((a, b) => b.bitrate - a.bitrate)[0]
+      if (!format) return
+      await api.selectVideoFormat(session.id, format.key)
+      if (destroyed) return
+      // restrictToElementSize also restricts manual picks, so it has to come off
+      // before selecting a track taller than the rendered element.
+      activePlayer.configure({ abr: { enabled: false, restrictToElementSize: false } })
+      const track = activePlayer.getVariantTracks()
+        .filter((candidate) => candidate.height === height)
+        .sort((a, b) => b.bandwidth - a.bandwidth)[0]
+      // clearBuffer stays false: dropping the buffer aborts every in-flight
+      // segment, and the switch is only meant to take effect going forward.
+      if (track) activePlayer.selectVariantTrack(track, false)
+    }
+
+    return { player: activePlayer, destroy, heights, selectQuality }
   } catch (error) {
     await destroy()
     throw error instanceof shaka.util.Error ? describeShakaError(error) : error

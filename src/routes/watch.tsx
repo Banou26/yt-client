@@ -1,8 +1,8 @@
 import { css } from '@emotion/react'
 import { EllipsisVertical, Share2, ThumbsDown, ThumbsUp } from 'lucide-react'
-import { useEffect, useRef, useState } from 'preact/hooks'
-import { useQuery } from 'urql'
-import { Link } from 'wouter'
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
+import { useMutation, useQuery } from 'urql'
+import { Link, useLocation } from 'wouter'
 
 import Comments from '../components/comments'
 import DescriptionBox from '../components/description-box'
@@ -11,6 +11,17 @@ import { VideoCardCompact, VideoCardCompactSkeleton } from '../components/video-
 import { gql } from '../generated'
 import VideoPlayer from '../player/video-player'
 import { prefetchPlayback } from '../player/prefetch'
+import { showToast } from '../components/ui/toast'
+import { getSettings, updateSettings } from '../settings'
+
+const RATE_VIDEO = gql(`
+  mutation RateVideo($id: ID!, $status: LikeStatus!) {
+    rateVideo(id: $id, status: $status) {
+      id
+      likeStatus
+    }
+  }
+`)
 
 // one /next round trip serves the whole page (title included) — the /player
 // data rides in with the playback path already, so no video(id) query here.
@@ -24,7 +35,8 @@ const WATCH_META_QUERY = gql(`
       likeCountText
       commentCountText
       description
-      channel { id name avatar handle subscriberCountText }
+      likeStatus
+      channel { id name avatar handle subscriberCountText isSubscribed notificationLevel }
       related {
         id
         title
@@ -39,24 +51,54 @@ const WATCH_META_QUERY = gql(`
   }
 `)
 
+/* Grid rather than flex so theater mode is a placement change: the player keeps
+   its DOM position and only spans differently. */
 const style = css`
-  display: flex;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 128rem) 40.2rem;
+  align-items: start;
+  gap: 0 2.4rem;
   padding: 2.4rem;
 
+  .stage {
+    grid-column: 1;
+  }
+
   .primary {
-    flex: 1;
+    grid-column: 1;
     min-width: 0;
-    max-width: 128rem;
   }
 
   .secondary {
-    flex: none;
+    grid-column: 2;
+    grid-row: 1 / span 2;
     display: flex;
     flex-direction: column;
     gap: 0.8rem;
-    width: 40.2rem;
-    margin-left: 2.4rem;
+  }
+
+  &.theater {
+    padding: 0 0 2.4rem;
+  }
+
+  &.theater .stage {
+    grid-column: 1 / -1;
+    background: #000;
+  }
+
+  /* Keeps a tall window from pushing the title below the fold. */
+  &.theater .stage > div {
+    max-height: calc(100vh - var(--header-height) - 8rem);
+    border-radius: 0;
+  }
+
+  &.theater .primary {
+    padding: 2.4rem 0 0 2.4rem;
+  }
+
+  &.theater .secondary {
+    grid-row: 2;
+    padding: 2.4rem 2.4rem 0 0;
   }
 
   .title {
@@ -64,7 +106,7 @@ const style = css`
     font-size: 2rem;
     font-weight: 700;
     line-height: 2.8rem;
-    color: #f1f1f1;
+    color: var(--text-primary);
   }
 
   .owner-row {
@@ -81,7 +123,7 @@ const style = css`
     height: 4rem;
     border-radius: 50%;
     overflow: hidden;
-    background: #272727;
+    background: var(--bg-chip);
   }
 
   .avatar img {
@@ -95,7 +137,7 @@ const style = css`
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #f1f1f1;
+    color: var(--text-primary);
     font-size: 1.6rem;
     font-weight: 500;
   }
@@ -111,7 +153,7 @@ const style = css`
     font-size: 1.6rem;
     font-weight: 500;
     line-height: 2.2rem;
-    color: #f1f1f1;
+    color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -119,7 +161,7 @@ const style = css`
 
   .sub-count {
     font-size: 1.2rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 
   .actions {
@@ -134,7 +176,7 @@ const style = css`
     align-items: stretch;
     height: 3.6rem;
     border-radius: 1.8rem;
-    background: #272727;
+    background: var(--bg-chip);
     overflow: hidden;
   }
 
@@ -144,7 +186,7 @@ const style = css`
     align-items: center;
     border: none;
     background: transparent;
-    color: #f1f1f1;
+    color: var(--text-primary);
     cursor: pointer;
     transition: background 0.15s ease;
   }
@@ -152,7 +194,7 @@ const style = css`
   .like {
     gap: 0.8rem;
     padding: 0 1.2rem 0 1.6rem;
-    border-right: 1px solid rgba(255, 255, 255, 0.2);
+    border-right: 1px solid var(--border-subtle);
     font-size: 1.4rem;
     font-weight: 500;
   }
@@ -163,7 +205,7 @@ const style = css`
 
   .like:hover,
   .dislike:hover {
-    background: #3f3f3f;
+    background: var(--bg-chip-hover);
   }
 
   .pill {
@@ -174,8 +216,8 @@ const style = css`
     padding: 0 1.6rem;
     border: none;
     border-radius: 1.8rem;
-    background: #272727;
-    color: #f1f1f1;
+    background: var(--bg-chip);
+    color: var(--text-primary);
     font-size: 1.4rem;
     font-weight: 500;
     cursor: pointer;
@@ -183,7 +225,7 @@ const style = css`
   }
 
   .pill:hover {
-    background: #3f3f3f;
+    background: var(--bg-chip-hover);
   }
 
   .round {
@@ -195,29 +237,41 @@ const style = css`
     height: 3.6rem;
     border: none;
     border-radius: 50%;
-    background: #272727;
-    color: #f1f1f1;
+    background: var(--bg-chip);
+    color: var(--text-primary);
     cursor: pointer;
     transition: background 0.15s ease;
   }
 
   .round:hover {
-    background: #3f3f3f;
+    background: var(--bg-chip-hover);
   }
 
   .error {
     margin-top: 1.2rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 
   @media (max-width: 1017px) {
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
+
+    .stage,
+    .primary,
+    .secondary,
+    &.theater .stage,
+    &.theater .primary,
+    &.theater .secondary {
+      grid-column: 1;
+      grid-row: auto;
+    }
 
     .secondary {
-      width: auto;
-      max-width: 128rem;
-      align-self: stretch;
-      margin: 2.4rem 0 0;
+      margin-top: 2.4rem;
+    }
+
+    &.theater .primary,
+    &.theater .secondary {
+      padding: 2.4rem 1.2rem 0;
     }
   }
 
@@ -234,14 +288,16 @@ const WatchPage = ({ params }: { params: { videoId: string } }) => {
     query: WATCH_META_QUERY,
     variables: { id: params.videoId }
   })
-  const [liked, setLiked] = useState(false)
-  const [disliked, setDisliked] = useState(false)
+  const [, navigate] = useLocation()
+  const [rateState, rateVideo] = useMutation(RATE_VIDEO)
+  const [theater, setTheater] = useState(() => getSettings().theater)
+  const toggleTheater = useCallback(() => {
+    setTheater((value) => updateSettings({ theater: !value }).theater)
+  }, [])
   const [copied, setCopied] = useState(false)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useEffect(() => {
-    setLiked(false)
-    setDisliked(false)
     setCopied(false)
     clearTimeout(copiedTimer.current)
   }, [params.videoId])
@@ -250,15 +306,23 @@ const WatchPage = ({ params }: { params: { videoId: string } }) => {
   const watch = watchData?.watch
   const channel = watch?.channel
   const related = watch?.related
+  // The rating now comes back with the video rather than living in component
+  // state, so it survives navigation and reflects what the account already did.
+  const liked = watch?.likeStatus === 'LIKE'
+  const disliked = watch?.likeStatus === 'DISLIKE'
 
-  const onLike = () => {
-    setDisliked(false)
-    setLiked(value => !value)
+  const rate = (status: 'LIKE' | 'DISLIKE') => {
+    // Absent (rather than INDIFFERENT) is what a signed-out read looks like.
+    if (!watch?.likeStatus) {
+      navigate('/signin')
+      return
+    }
+    const next = watch.likeStatus === status ? 'INDIFFERENT' : status
+    void rateVideo({ id: params.videoId, status: next }).then((result) => {
+      if (result.error) showToast(result.error.message.replace(/^\[\w+]\s*/, ''))
+    })
   }
-  const onDislike = () => {
-    setLiked(false)
-    setDisliked(value => !value)
-  }
+
   const onShare = () => {
     navigator.clipboard.writeText(location.href).catch(() => {})
     setCopied(true)
@@ -267,9 +331,19 @@ const WatchPage = ({ params }: { params: { videoId: string } }) => {
   }
 
   return (
-    <main css={style}>
+    <main css={style} className={theater ? 'theater' : undefined}>
+      {/* The player stays in one place in the DOM across theater toggles: moving
+          it to another parent would remount it and restart playback. Only the
+          grid placement of .stage changes. */}
+      <div className='stage'>
+        <VideoPlayer
+          key={`player:${params.videoId}`}
+          videoId={params.videoId}
+          theater={theater}
+          onTheater={toggleTheater}
+        />
+      </div>
       <div className='primary'>
-        <VideoPlayer key={`player:${params.videoId}`} videoId={params.videoId} />
         {watch?.title ? <h1 className='title'>{watch.title}</h1> : undefined}
         {watchError && !watch ? <p className='error'>{watchError.message}</p> : undefined}
         {channel
@@ -290,14 +364,32 @@ const WatchPage = ({ params }: { params: { videoId: string } }) => {
                   ? <div className='sub-count'>{channel.subscriberCountText}</div>
                   : undefined}
               </div>
-              <SubscribeButton key={params.videoId} />
+              <SubscribeButton
+                channelId={channel.id}
+                subscribed={channel.isSubscribed}
+                notificationLevel={channel.notificationLevel}
+              />
               <div className='actions'>
                 <div className='like-pill'>
-                  <button type='button' className='like' aria-label='Like' aria-pressed={liked} onClick={onLike}>
+                  <button
+                    type='button'
+                    className='like'
+                    aria-label='Like'
+                    aria-pressed={liked}
+                    disabled={rateState.fetching}
+                    onClick={() => rate('LIKE')}
+                  >
                     <ThumbsUp size={20} strokeWidth={1.5} fill={liked ? 'currentColor' : 'none'} />
                     {watch?.likeCountText ? <span>{watch.likeCountText}</span> : undefined}
                   </button>
-                  <button type='button' className='dislike' aria-label='Dislike' aria-pressed={disliked} onClick={onDislike}>
+                  <button
+                    type='button'
+                    className='dislike'
+                    aria-label='Dislike'
+                    aria-pressed={disliked}
+                    disabled={rateState.fetching}
+                    onClick={() => rate('DISLIKE')}
+                  >
                     <ThumbsDown size={20} strokeWidth={1.5} fill={disliked ? 'currentColor' : 'none'} />
                   </button>
                 </div>

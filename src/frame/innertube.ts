@@ -330,10 +330,21 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
     if (!format.has_audio || format.has_video) return true
     return !format.xtags && !format.is_drc && !format.is_dubbed && !format.is_auto_dubbed && !format.is_descriptive
   }) as unknown as YoutubeFormat[]
-  const allowedFormats = new Set(rawFormats.map((format) => format.itag))
+  const playbackFormats = rawFormats.map(playbackFormat).filter((format) => format !== undefined)
+  // The manifest must advertise EXACTLY the formats the SABR session can serve,
+  // so it is filtered by format KEY rather than by itag. Filtering by itag is
+  // not enough: a DRC or dubbed audio track shares itag 251 with the plain one
+  // and differs only in xtags, so it passed the itag filter into the manifest
+  // while being excluded from the session's format list. Auto ABR never chose
+  // it, but any manual variant switch could, and then every segment request for
+  // it failed with "unknown audio format 251:...".
+  const allowedKeys = new Set(playbackFormats.map((format) => format.key))
   const [manifest, decipheredUrl] = await Promise.all([
     info.toDash({
-      format_filter: (format: YoutubeFormat) => !allowedFormats.has(format.itag),
+      format_filter: (format: YoutubeFormat) => {
+        const key = FormatKeyUtils.fromFormat(buildSabrFormat(format as never))
+        return !key || !allowedKeys.has(key)
+      },
       manifest_options: { is_sabr: true, include_thumbnails: false },
     } as never),
     client.session.player!.decipher(streaming.server_abr_streaming_url),
@@ -361,7 +372,7 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
     streamingUrl: url.toString(),
     ustreamerConfig,
     formats: rawFormats.map((format) => buildSabrFormat(format as never)),
-    playbackFormats: rawFormats.map(playbackFormat).filter((format) => format !== undefined),
+    playbackFormats,
     clientInfo: {
       clientName: Number((Constants.CLIENT_NAME_IDS as Record<string, string>)[context.client.clientName]),
       clientVersion: context.client.clientVersion,
