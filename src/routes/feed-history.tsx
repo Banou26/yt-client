@@ -27,6 +27,7 @@ const WATCH_HISTORY_QUERY = gql(`
           viewCount
           publishedText
           isLive
+          isShort
           progressPercent
           channel { id name avatar }
         }

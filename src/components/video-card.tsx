@@ -29,6 +29,7 @@ export type VideoCardData =
   >
   & {
     isLive?: boolean | null
+    isShort?: boolean | null
     channel?: (Pick<Channel, 'id' | 'name'> & Partial<Pick<Channel, 'avatar'>>) | null
   }
 
@@ -324,6 +325,13 @@ const style = css`
     background: var(--bg-elevated);
   }
 
+  /* Shorts are vertical, and a 16/9 box would letterbox one into a slot mostly
+     made of background. The card keeps its grid column and only the thumbnail
+     changes shape, so the surrounding layout is untouched. */
+  &.short .thumb {
+    aspect-ratio: 9 / 16;
+  }
+
   .thumb img {
     display: block;
     width: 100%;
@@ -485,8 +493,9 @@ export const VideoCard = (
   const meta = formatMeta(video.viewCount, video.publishedText)
   const progress = resumePercent(video.progressPercent)
   const prefetch = usePrefetchOnIntent(video.id)
+  const classes = [variant, video.isShort ? 'short' : undefined].filter(Boolean).join(' ')
   return (
-    <article css={style} className={variant} {...prefetch}>
+    <article css={style} className={classes || undefined} {...prefetch}>
       <Link href={watchHref} className='thumb' tabIndex={-1} aria-hidden='true'>
         {video.thumbnail ? <img src={video.thumbnail} alt='' loading='lazy' /> : undefined}
         {video.isLive

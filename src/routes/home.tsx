@@ -21,6 +21,7 @@ const HOME_FEED_QUERY = gql(`
         viewCount
         publishedText
         isLive
+        isShort
         progressPercent
         channel { id name avatar }
       }

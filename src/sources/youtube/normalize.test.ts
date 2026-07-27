@@ -1,8 +1,37 @@
 import { describe, expect, it } from 'vitest'
 
-import { normalizeChannel, normalizeCommentThread, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizePlaylistPanelVideo, normalizeSearchChannel, normalizeSession, normalizeVideoDetails, normalizeWatchMeta, normalizeWatchPlaylist } from './normalize'
+import { normalizeChannel, normalizeCommentThread, normalizeFeedVideo, normalizeShortsLockup, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizePlaylistPanelVideo, normalizeSearchChannel, normalizeSession, normalizeVideoDetails, normalizeWatchMeta, normalizeWatchPlaylist } from './normalize'
 
 describe('youtube normalization', () => {
+  it('keeps the shorts that every feed used to drop', () => {
+    // ShortsLockupView carries NEITHER video_id NOR id, so normalizeFeedVideo
+    // returned undefined for every Short and each one fell out of home,
+    // subscriptions and channel feeds without a trace.
+    expect(normalizeShortsLockup({
+      entity_id: 'shorts-entity',
+      on_tap_endpoint: { payload: { videoId: 'realId' } },
+      thumbnail: [{ url: 'small', width: 120 }, { url: 'large', width: 480 }],
+      overlay_metadata: { primary_text: { text: 'A Short' }, secondary_text: { text: '1.2M views' } },
+    })).toEqual({
+      // The tap endpoint wins: entity_id is not a video id and would not play.
+      id: 'realId',
+      title: 'A Short',
+      thumbnail: 'large',
+      viewCount: '1.2M views',
+      isShort: true,
+      badges: [],
+    })
+  })
+
+  it('falls back to the entity id and drops a short with no title', () => {
+    expect(normalizeShortsLockup({
+      entity_id: 'shorts-entity',
+      overlay_metadata: { primary_text: { text: 'A Short' } },
+    })?.id).toBe('shorts-entity')
+    expect(normalizeShortsLockup({ entity_id: 'shorts-entity' })).toBeUndefined()
+    expect(normalizeShortsLockup(undefined)).toBeUndefined()
+  })
+
   it('reads a search channel off the shape normalizeChannel cannot take', () => {
     // A search Channel keeps its id at the top level and its name on an Author.
     // normalizeChannel wants a browse response's metadata.external_id and

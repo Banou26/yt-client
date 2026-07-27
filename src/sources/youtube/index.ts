@@ -2,7 +2,7 @@ import type { Source, SourceChannel, SourceChannelPage, SourceChannelTab, Source
 
 import { Innertube } from 'youtubei.js/web'
 
-import { normalizeChannel, normalizeCommentThread, normalizeFeedChannel, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizeSearchChannel, normalizeSession, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
+import { normalizeChannel, normalizeCommentThread, normalizeFeedChannel, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizeSearchChannel, normalizeSession, normalizeShortsLockup, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
 
 type Feed = {
   videos: Iterable<unknown>
@@ -187,6 +187,10 @@ const pageItems = (feed: Feed) => {
   }
   for (const node of feed.videos) add(normalizeFeedVideo(node))
   for (const node of feed.memo?.get('LockupView') ?? []) add(normalizeLockupVideo(node))
+  // Shorts are in `feed.videos` too, but they carry neither `video_id` nor
+  // `id`, so the first pass returns undefined for every one of them and drops
+  // it. Read from the memo instead, which is where the node kind is named.
+  for (const node of feed.memo?.get('ShortsLockupView') ?? []) add(normalizeShortsLockup(node))
   return items
 }
 

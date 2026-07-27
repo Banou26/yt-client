@@ -451,6 +451,37 @@ export const normalizeFeedVideo = (input: unknown): SourceVideo | undefined => {
   }
 }
 
+// A live gap rather than a missing feature: Feed.videos includes
+// ShortsLockupView, but that node carries NEITHER `video_id` nor `id`, so
+// normalizeFeedVideo returned undefined for every Short and each one was
+// silently dropped from home, subscriptions and channel feeds. The id lives on
+// the tap endpoint (a reel watch endpoint), with entity_id as the fallback.
+export const normalizeShortsLockup = (input: unknown): SourceVideo | undefined => {
+  const node = input as {
+    entity_id?: string
+    thumbnail?: Thumbnail[]
+    on_tap_endpoint?: { payload?: { videoId?: string } }
+    overlay_metadata?: { primary_text?: Text, secondary_text?: Text }
+    accessibility_text?: string
+    badge?: { label?: string, text?: string }
+  } | undefined
+  const id = node?.on_tap_endpoint?.payload?.videoId ?? node?.entity_id
+  // The overlay title is the only title a Short carries; the accessibility text
+  // is a whole sentence ('Title, 1.2M views') and is used only as a last resort.
+  const title = presentText(node?.overlay_metadata?.primary_text) ?? node?.accessibility_text
+  if (!id || !title) return undefined
+  return {
+    id,
+    title,
+    thumbnail: thumbnail(node?.thumbnail),
+    // Shorts carry no length anywhere on this node, and inventing one would put
+    // a duration badge on a card that should not have one.
+    viewCount: presentText(node?.overlay_metadata?.secondary_text),
+    isShort: true,
+    badges: badgeTexts(node?.badge ? [node.badge] : undefined),
+  }
+}
+
 export const normalizeVideoDetails = (input: unknown): SourceVideo | undefined => {
   const video = input as VideoDetails
   if (!video.id || !video.title) return undefined

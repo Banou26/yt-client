@@ -37,6 +37,7 @@ const CHANNEL_VIEW_QUERY = gql(`
           viewCount
           publishedText
           isLive
+          isShort
           isUpcoming
           badges
         }
