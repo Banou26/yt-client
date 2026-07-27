@@ -1,3 +1,5 @@
+import type { ComponentChildren } from 'preact'
+
 import type { VideoCardData, WatchContext } from './video-card'
 
 import { css } from '@emotion/react'
@@ -30,16 +32,32 @@ const NEXT_PAGE_SKELETONS = 4
    both. `context` is forwarded rather than paged: it is the same for every card
    in one grid, whereas a per-row index is not, so a list that needs indices
    builds its own rows and passes context per card. */
+/* One row on a wide screen. The shelf sits under the first row the way it does
+   on youtube.com, rather than at the very top where it would push the grid down
+   before the reader has seen a single video. */
+const SHELF_AFTER = 4
+
 export const VideoGrid = (
-  { videos, fetching = false, variant, context }: {
+  { videos, fetching = false, variant, context, shelf }: {
     videos: VideoCardData[]
     fetching?: boolean
     variant?: 'channel'
     context?: WatchContext
+    /* A full-width band dropped into the grid after the first row, which is
+       where youtube.com puts the Shorts shelf. Rendered INSIDE the grid rather
+       than above it so the rows above and below stay one continuous grid and
+       keep their column alignment. */
+    shelf?: ComponentChildren
   }
 ) => (
   <div css={style} className={variant}>
-    {videos.map(video => <VideoCard key={video.id} video={video} variant={variant} context={context} />)}
+    {videos.slice(0, SHELF_AFTER).map(video => (
+      <VideoCard key={video.id} video={video} variant={variant} context={context} />
+    ))}
+    {shelf}
+    {videos.slice(SHELF_AFTER).map(video => (
+      <VideoCard key={video.id} video={video} variant={variant} context={context} />
+    ))}
     {/* A page loading under existing cards gets trailing placeholders only:
         replacing the whole grid with skeletons would rip the rows the reader is
         looking at out from under the scroll position. */}

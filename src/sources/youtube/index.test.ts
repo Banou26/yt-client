@@ -476,13 +476,16 @@ describe('youtube source', () => {
     })
     const home = await source.home()
     expect(home.cursor).toBeTruthy()
-    // Two different rejections, both of which have to hold. Search keeps its own
-    // registry now (its pages are a union, not a video list), so a home cursor
-    // is not merely the wrong KIND there, it does not exist at all.
+    // Two different rejections, both of which have to hold. Search and home each
+    // keep their own registry now (their pages are not plain video lists), so a
+    // home cursor is not merely the wrong KIND there, it does not exist at all.
     await expect(source.search('query', undefined, home.cursor)).rejects.toThrow('unknown continuation')
-    // Within one registry the kind is what separates feeds, and that check is
-    // the one that stops a home cursor from paging the subscriptions feed.
-    await expect(source.subscriptions(home.cursor)).rejects.toThrow('belongs to home')
+    await expect(source.subscriptions(home.cursor)).rejects.toThrow('unknown continuation')
+    // Within ONE registry the kind is what separates feeds: a channel cursor
+    // must not page the subscriptions feed even though both are video pages.
+    const channel = await source.channel('c')
+    expect(channel.videos.cursor).toBeTruthy()
+    await expect(source.subscriptions(channel.videos.cursor)).rejects.toThrow('belongs to channel')
   })
 
   it('lets a failed continuation be retried instead of caching the failure', async () => {

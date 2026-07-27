@@ -7,6 +7,7 @@ import { useQuery } from 'urql'
 
 import { useDocumentTitle } from '../app'
 import { FeedSentinel, useInfiniteFeed } from '../components/use-infinite-feed'
+import { ShortsShelf } from '../components/shorts-shelf'
 import { VideoGrid } from '../components/video-grid'
 import { gql } from '../generated'
 
@@ -24,6 +25,12 @@ const HOME_FEED_QUERY = gql(`
         isShort
         progressPercent
         channel { id name avatar }
+      }
+      shorts {
+        id
+        title
+        thumbnail
+        viewCount
       }
       chips {
         id
@@ -184,6 +191,13 @@ const HomePage = () => {
   const page = operation?.variables.chip === chip ? data?.home : undefined
   // Within one filter the same hold means the live page can repeat one already
   // consumed, which useInfiniteFeed dedupes by id.
+  // Every page can carry a Shorts shelf, so they accumulate alongside the grid
+  // rather than being read off the first page only. Deduped the same way, since
+  // a repeated page would otherwise repeat its shelf.
+  const shorts = useInfiniteFeed({
+    pages: page ? [...pages, page].map(entry => ({ items: entry.shorts, cursor: entry.cursor })) : [],
+    key: short => short.id,
+  }).items
   const { items, cursor } = useInfiniteFeed({
     pages: page ? [...pages, page] : pages,
     key: video => video.id
@@ -300,7 +314,7 @@ const HomePage = () => {
             </div>
           )
           : <p className='notice'>No videos under this filter.</p>
-        : <VideoGrid videos={items} fetching={fetching && items.length === 0} />}
+        : <VideoGrid videos={items} shelf={<ShortsShelf shorts={shorts} />} fetching={fetching && items.length === 0} />}
       {error && items.length > 0 ? <p className='notice'>Couldn’t load more videos.</p> : undefined}
       {fetching && items.length > 0 ? <p className='notice'>Loading more…</p> : undefined}
       <FeedSentinel onVisible={onMore} disabled={fetching || !cursor || Boolean(error)} />

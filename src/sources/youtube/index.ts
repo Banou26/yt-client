@@ -1,4 +1,4 @@
-import type { Source, SourceChannel, SourceChannelPage, SourceChannelTab, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourcePlaylistListPage, SourcePlaylistPage, SourcePlaylistPrivacy, SourceSearchFeature, SourceSearchFilters, SourceSearchPage, SourceSearchResult, SourceNotificationPage, SourcePostPage, SourceSectionedVideoPage, SourceVideo, SourceVideoPage } from '../types'
+import type { Source, SourceChannel, SourceChannelPage, SourceChannelTab, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourcePlaylistListPage, SourcePlaylistPage, SourcePlaylistPrivacy, SourceSearchFeature, SourceSearchFilters, SourceSearchPage, SourceSearchResult, SourceHomePage, SourceNotificationPage, SourcePostPage, SourceSectionedVideoPage, SourceVideo, SourceVideoPage } from '../types'
 
 import { Innertube } from 'youtubei.js/web'
 
@@ -218,7 +218,31 @@ export type YoutubeSourceOptions = {
   signedIn?: () => boolean
 }
 
-const pageItems = (feed: Feed) => {
+// Shorts read off the memo, where the node kind is named. They carry neither
+// `video_id` nor `id`, so the ordinary video pass returns undefined for every
+// one of them.
+const shortsItems = (feed: Feed) => {
+  const seen = new Set<string>()
+  const items: SourceVideo[] = []
+  for (const node of feed.memo?.get('ShortsLockupView') ?? []) {
+    const short = normalizeShortsLockup(node)
+    if (short && !seen.has(short.id)) {
+      seen.add(short.id)
+      items.push(short)
+    }
+  }
+  return items
+}
+
+/**
+ * The videos on a page.
+ *
+ * `includeShorts` is false for a feed that renders its own Shorts shelf: the
+ * home grid puts them in a carousel row, so leaving them in the flat list too
+ * would show every short twice. A channel's Shorts TAB is the opposite case,
+ * where the shorts are the grid.
+ */
+const pageItems = (feed: Feed, { includeShorts = true }: { includeShorts?: boolean } = {}) => {
   // youtubei.js's `videos` getter surfaces legacy Video/GridVideo nodes but NOT
   // LockupView, and a modern feed (the signed-in home grid, channel Videos tab)
   // MIXES the two. Merging rather than either/or is essential: a single stray
@@ -234,10 +258,7 @@ const pageItems = (feed: Feed) => {
   }
   for (const node of feed.videos) add(normalizeFeedVideo(node))
   for (const node of feed.memo?.get('LockupView') ?? []) add(normalizeLockupVideo(node))
-  // Shorts are in `feed.videos` too, but they carry neither `video_id` nor
-  // `id`, so the first pass returns undefined for every one of them and drops
-  // it. Read from the memo instead, which is where the node kind is named.
-  for (const node of feed.memo?.get('ShortsLockupView') ?? []) add(normalizeShortsLockup(node))
+  if (includeShorts) for (const short of shortsItems(feed)) add(short)
   return items
 }
 
@@ -497,6 +518,7 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
   const playlistContinuations = createContinuations<SourcePlaylistPage>()
   const playlistListContinuations = createContinuations<SourcePlaylistListPage>()
   const searchContinuations = createContinuations<SourceSearchPage>()
+  const homeContinuations = createContinuations<SourceHomePage>()
   const postContinuations = createContinuations<SourcePostPage>()
   const commentActions = createActionRegistry()
   const notificationContinuations = createContinuations<SourceNotificationPage>()
@@ -538,6 +560,20 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
   // to a Playlist whose `title` is non-null, so the last read of each playlist
   // is kept to fill the fields the write did not touch.
   const knownPlaylists = new Map<string, SourcePlaylist>()
+
+  /* The home grid renders its shorts as a carousel row rather than inline, so
+     they come back on their own list. Every later page can carry another shelf,
+     which is why this is not just a property of the first page. */
+  const homePage = (kind: string, feed: Feed): SourceHomePage => {
+    const result: SourceHomePage = {
+      items: pageItems(feed, { includeShorts: false }),
+      shorts: shortsItems(feed),
+    }
+    if (feed.has_continuation) {
+      result.cursor = homeContinuations.register(kind, async () => homePage(kind, await feed.getContinuation()))
+    }
+    return result
+  }
 
   const page = (kind: string, feed: Feed): SourceVideoPage => {
     const result: SourceVideoPage = { items: pageItems(feed) }
@@ -815,8 +851,10 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
     home: async (chip, cursor) => {
       const kind = chip ? `home:${chip}` : 'home'
       if (cursor) {
-        const next = await videoContinuations.resolve(kind, cursor)
-        return { items: next.items, chips: [], cursor: next.cursor }
+        const next = await homeContinuations.resolve(kind, cursor)
+        // Chips belong to the first page: a continuation carries none, and
+        // echoing an empty list would make the rail vanish mid-scroll.
+        return { items: next.items, shorts: next.shorts, chips: [], cursor: next.cursor }
       }
       const feed = await (await client).getHomeFeed()
       const chips = filterChipsOf(feed)
@@ -824,9 +862,10 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
       // chip other than All is actually selected.
       const filter = chip ? chips.find((candidate) => chipId(candidate) === chip) : undefined
       const filtered = filter && feed.applyFilter ? await feed.applyFilter(filter) : feed
-      const result = page(kind, filtered)
+      const result = homePage(kind, filtered)
       return {
         items: result.items,
+        shorts: result.shorts,
         // Chips come from the unfiltered response: the filtered one echoes back
         // a reduced set that would make the rail collapse after one click.
         chips: chips.flatMap((candidate) => {

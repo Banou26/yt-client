@@ -86,6 +86,9 @@ type FeedChip {
 
 type HomeFeed {
   items: [Video!]!
+  # The Shorts shelf, kept out of `items` because the grid renders it as its own
+  # carousel row. Every page can carry one, not just the first.
+  shorts: [Video!]!
   chips: [FeedChip!]!
   cursor: String
 }

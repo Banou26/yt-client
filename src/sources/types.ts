@@ -62,10 +62,17 @@ export type SourceFeedChip = {
   selected: boolean
 }
 
-export type SourceHomeFeed = {
+// The paged half of the home feed. Shorts are separate from `items` because
+// the grid renders them as their own carousel row, and a page beyond the first
+// can carry another shelf.
+export type SourceHomePage = {
   items: SourceVideo[]
-  chips: SourceFeedChip[]
+  shorts: SourceVideo[]
   cursor?: string
+}
+
+export type SourceHomeFeed = SourceHomePage & {
+  chips: SourceFeedChip[]
 }
 
 export type SourceSearchUploadDate = 'ALL' | 'TODAY' | 'WEEK' | 'MONTH' | 'YEAR'
