@@ -6,8 +6,11 @@ import { Constants, Innertube, Platform, Types, UniversalCache, Utils, YT } from
 import type { PlaybackFormat } from './protocol'
 
 import { mintPoToken, recoverPoTokenSession, warmPoTokenSession } from './botguard'
+import type { Storyboard } from './storyboard'
+
 import { egressFetch } from './egress'
 import { isPlayableFormat } from './formats'
+import { parseStoryboards } from './storyboard'
 import { GVS_ORIGIN_KEY, VISITOR_DATA_KEY } from './identity'
 
 export { GVS_ORIGIN_KEY }
@@ -286,6 +289,7 @@ export type SabrSource = {
   ustreamerConfig: string
   formats: SabrFormat[]
   playbackFormats: PlaybackFormat[]
+  storyboards: Storyboard[]
   clientInfo: Record<string, unknown>
   mint(): Promise<string>
   recoverMint(): Promise<void>
@@ -371,6 +375,11 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
     ustreamerConfig,
     formats: rawFormats.map((format) => buildSabrFormat(format as never)),
     playbackFormats,
+    // VideoInfo does not surface the storyboard spec, so it is read straight
+    // off the raw player response.
+    storyboards: parseStoryboards((raw as {
+      storyboards?: { playerStoryboardSpecRenderer?: { spec?: string } }
+    }).storyboards?.playerStoryboardSpecRenderer?.spec),
     clientInfo: {
       clientName: Number((Constants.CLIENT_NAME_IDS as Record<string, string>)[context.client.clientName]),
       clientVersion: context.client.clientVersion,

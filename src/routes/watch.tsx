@@ -86,8 +86,11 @@ const style = css`
     background: #000;
   }
 
-  /* Keeps a tall window from pushing the title below the fold. */
-  &.theater .stage > div {
+  /* Keeps a tall window from pushing the title below the fold. Excluded in
+     fullscreen: this selector out-specifies the player's own :fullscreen rule,
+     so without :not() it would cap the height of a fullscreened player and
+     letterbox it inside a correctly sized container. */
+  &.theater .stage > div:not(:fullscreen) {
     max-height: calc(100vh - var(--header-height) - 8rem);
     border-radius: 0;
   }

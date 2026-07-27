@@ -61,7 +61,8 @@ const api = {
   },
   openPlayback: async (videoId, maxHeight) => {
     const id = `playback:${++sessionId}`
-    const player = createSabrSession(await getSabrSource(videoId), maxHeight)
+    const source = await getSabrSource(videoId)
+    const player = createSabrSession(source, maxHeight)
     sessions.set(id, {
       videoId,
       maxHeight,
@@ -80,6 +81,7 @@ const api = {
       audioFormats: player.audioFormats,
       selectedVideoKey: player.videoFormat.key,
       selectedAudioKey: player.audioFormat.key,
+      storyboards: source.storyboards,
     }
   },
   requestSegment: async (request, progress: (phase: string) => void = () => {}) => {

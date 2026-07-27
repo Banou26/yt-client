@@ -1,10 +1,13 @@
 import type shaka from 'shaka-player'
 
 import { css } from '@emotion/react'
-import { Check, Maximize, Minimize, Pause, Play, Settings, SkipForward, Volume1, Volume2, VolumeX } from 'lucide-react'
+import { Check, Maximize, Minimize, Pause, PictureInPicture2, Play, Settings, SkipForward, Volume1, Volume2, VolumeX } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 
+import type { Storyboard } from '../frame/protocol'
 import type { PlayerState } from './use-player-state'
+
+import { bestStoryboard, storyboardFrame } from '../frame/storyboard'
 
 import { MenuItem, Popup, useDismiss } from '../components/ui/popup'
 import { updateSettings } from '../settings'
@@ -94,6 +97,29 @@ const style = css`
     transform: translateY(-50%) scale(1);
   }
 
+  .preview {
+    position: absolute;
+    bottom: 100%;
+    margin-bottom: 0.8rem;
+    transform: translateX(-50%);
+    pointer-events: none;
+    text-align: center;
+  }
+
+  .preview-frame {
+    border: 2px solid #ffffff;
+    border-radius: 0.4rem;
+    background-color: #000;
+    background-repeat: no-repeat;
+  }
+
+  .preview-time {
+    margin-top: 0.4rem;
+    font-size: 1.3rem;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 1px 3px #000;
+  }
+
   .bar {
     display: flex;
     align-items: center;
@@ -169,6 +195,7 @@ type ControlsProps = {
   player: shaka.Player | undefined
   state: PlayerState
   heights: number[]
+  storyboards: Storyboard[]
   quality: 'auto' | number
   onQuality: (value: 'auto' | number) => void
   theater: boolean
@@ -178,10 +205,12 @@ type ControlsProps = {
 }
 
 export const PlayerControls = (
-  { video, state, heights, quality, onQuality, theater, onTheater, onNext, visible }: ControlsProps,
+  { video, state, heights, storyboards, quality, onQuality, theater, onTheater, onNext, visible }: ControlsProps,
 ) => {
   const [scrubbing, setScrubbing] = useState(false)
   const [preview, setPreview] = useState<number | undefined>(undefined)
+  const [hover, setHover] = useState<{ time: number, ratio: number } | undefined>(undefined)
+  const [pip, setPip] = useState(false)
   const [menu, setMenu] = useState<'root' | 'quality' | 'speed' | undefined>(undefined)
   const railRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -197,6 +226,19 @@ export const PlayerControls = (
     onChange()
     return () => document.removeEventListener('fullscreenchange', onChange)
   }, [])
+
+  // PiP can also be entered and left from the browser's own UI, so the button
+  // state is driven by the element's events rather than by our own clicks.
+  useEffect(() => {
+    const sync = () => setPip(document.pictureInPictureElement === video)
+    video.addEventListener('enterpictureinpicture', sync)
+    video.addEventListener('leavepictureinpicture', sync)
+    sync()
+    return () => {
+      video.removeEventListener('enterpictureinpicture', sync)
+      video.removeEventListener('leavepictureinpicture', sync)
+    }
+  }, [video])
 
   const duration = state.duration
   const position = preview ?? state.currentTime
@@ -220,7 +262,17 @@ export const PlayerControls = (
     setPreview(timeAt(event.clientX))
   }
 
+  // Hover tracking is separate from scrubbing so the preview follows the
+  // pointer before any button is pressed, which is when people actually use it.
   const onPointerMove = (event: PointerEvent) => {
+    const rail = railRef.current
+    if (rail && duration > 0) {
+      const box = rail.getBoundingClientRect()
+      setHover({
+        time: timeAt(event.clientX),
+        ratio: Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)),
+      })
+    }
     if (!scrubbing) return
     setPreview(timeAt(event.clientX))
   }
@@ -261,6 +313,21 @@ export const PlayerControls = (
     else void document.exitFullscreen().catch(() => {})
   }
 
+  const togglePip = () => {
+    if (document.pictureInPictureElement) {
+      void document.exitPictureInPicture().catch(() => {})
+      return
+    }
+    void video.requestPictureInPicture().catch(() => {})
+  }
+
+  // Hidden rather than disabled where the browser cannot do it at all (Firefox
+  // exposes no API, and a video can opt out).
+  const pipSupported = document.pictureInPictureEnabled === true && !video.disablePictureInPicture
+
+  const board = bestStoryboard(storyboards)
+  const frame = board && hover ? storyboardFrame(board, hover.time) : undefined
+
   const VolumeIcon = state.muted || state.volume === 0 ? VolumeX : state.volume < 0.5 ? Volume1 : Volume2
   // The decoded height is what is actually on screen, which is more honest than
   // whichever variant Shaka currently has selected.
@@ -281,12 +348,33 @@ export const PlayerControls = (
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onPointerLeave={() => setHover(undefined)}
       >
         <div className='rail' ref={railRef}>
           <div className='buffered' style={{ width: `${buffered * 100}%` }} />
           <div className='played' style={{ width: `${played * 100}%` }} />
           <div className='knob' style={{ left: `${played * 100}%` }} />
         </div>
+        {hover
+          ? (
+            <div className='preview' style={{ left: `${hover.ratio * 100}%` }}>
+              {frame
+                ? (
+                  <div
+                    className='preview-frame'
+                    style={{
+                      width: `${frame.width}px`,
+                      height: `${frame.height}px`,
+                      backgroundImage: `url("${frame.url}")`,
+                      backgroundPosition: `-${frame.x}px -${frame.y}px`,
+                    }}
+                  />
+                )
+                : undefined}
+              <div className='preview-time'>{clock(hover.time)}</div>
+            </div>
+          )
+          : undefined}
       </div>
       <div className='bar'>
         <button type='button' className='control' aria-label={state.paused ? 'Play' : 'Pause'} onClick={() => (state.paused ? void video.play().catch(() => {}) : video.pause())}>
@@ -377,6 +465,19 @@ export const PlayerControls = (
                 )
                 : undefined}
         </div>
+        {pipSupported
+          ? (
+            <button
+              type='button'
+              className='control'
+              aria-label={pip ? 'Exit picture in picture' : 'Picture in picture'}
+              aria-pressed={pip}
+              onClick={togglePip}
+            >
+              <PictureInPicture2 size={24} strokeWidth={1.8} />
+            </button>
+          )
+          : undefined}
         <button type='button' className='control' aria-label='Theater mode' aria-pressed={theater} onClick={onTheater}>
           {/* Two nested rectangles read as "wide screen" without pulling in an icon set variant. */}
           <svg width='24' height='24' viewBox='0 0 24 24' aria-hidden='true' fill='none' stroke='currentColor' strokeWidth='1.8'>

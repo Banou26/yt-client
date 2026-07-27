@@ -1,5 +1,7 @@
 import type shaka from 'shaka-player'
 
+import type { Storyboard } from '../frame/protocol'
+
 import { css } from '@emotion/react'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 
@@ -17,9 +19,21 @@ const playerStyle = css`
   background: #000;
   position: relative;
 
+  /* Fullscreen has to beat BOTH the 16/9 aspect-ratio box and the max-height
+     that theater mode puts on this element, or the video is letterboxed inside
+     a correctly-fullscreened container. Sizing off the viewport rather than
+     100%/100% also survives whatever the ancestor grid was doing. */
   &:fullscreen {
-    border-radius: 0;
+    width: 100vw;
+    height: 100vh;
+    max-width: none;
+    max-height: none;
     aspect-ratio: auto;
+    border-radius: 0;
+  }
+
+  &:fullscreen video {
+    width: 100%;
     height: 100%;
   }
 
@@ -87,6 +101,7 @@ const VideoPlayer = (
   const [status, setStatus] = useState('Loading player')
   const [player, setPlayer] = useState<shaka.Player | undefined>(undefined)
   const [heights, setHeights] = useState<number[]>([])
+  const [storyboards, setStoryboards] = useState<Storyboard[]>([])
   const [quality, setQuality] = useState<'auto' | number>(() => getSettings().quality)
   const selectQualityRef = useRef<((height: number | 'auto') => Promise<void>) | undefined>(undefined)
   const [active, setActive] = useState(true)
@@ -97,6 +112,14 @@ const VideoPlayer = (
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
+    // Applied to the fresh element BEFORE playback starts, so the autoplay
+    // attempt happens at the viewer's real volume. Doing it after startup meant
+    // play() was attempted at the default volume of 1, and the browser's
+    // block-then-mute fallback made a restored volume look like it was lost.
+    const audio = getSettings()
+    video.volume = audio.volume
+    video.muted = audio.muted
+    video.playbackRate = audio.playbackRate
     const abort = new AbortController()
     let controller: Awaited<ReturnType<typeof startShakaPlayback>> | undefined
     let retryTimer: ReturnType<typeof setTimeout> | undefined
@@ -138,6 +161,7 @@ const VideoPlayer = (
       setStatus('')
       setPlayer(controller.player)
       setHeights(controller.heights)
+      setStoryboards(controller.storyboards)
       selectQualityRef.current = controller.selectQuality
       // A stored preference has to be reapplied per video, once this session's
       // formats exist, or every new video silently reverts to auto.
@@ -151,20 +175,10 @@ const VideoPlayer = (
       clearTimeout(retryTimer)
       setPlayer(undefined)
       setHeights([])
+      setStoryboards([])
       void controller?.destroy()
     }
   }, [attempt, videoId])
-
-  // Volume and rate are remembered across videos and sessions. The element is
-  // fresh on every attempt, so they are reapplied rather than read back.
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video || !player) return
-    const settings = getSettings()
-    video.volume = settings.volume
-    video.muted = settings.muted
-    video.playbackRate = settings.playbackRate
-  }, [player])
 
   const applyQuality = useCallback((value: 'auto' | number) => {
     setQuality(value)
@@ -277,6 +291,7 @@ const VideoPlayer = (
             player={player}
             state={state}
             heights={heights}
+            storyboards={storyboards}
             quality={quality}
             onQuality={applyQuality}
             theater={theater}

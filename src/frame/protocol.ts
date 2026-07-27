@@ -1,7 +1,11 @@
 import type { Exhaustive, SourceApi } from '../sources/types'
 import type { TransportResponse } from '../scramjet/protocol'
 
+import type { Storyboard } from './storyboard'
+
 import { SOURCE_METHODS } from '../sources/types'
+
+export type { Storyboard, StoryboardFrame } from './storyboard'
 
 export type PlaybackFormat = {
   key: string
@@ -33,6 +37,9 @@ export type PlaybackSession = {
   audioFormats: PlaybackFormat[]
   selectedVideoKey: string
   selectedAudioKey: string
+  // Scrubber hover previews. The sheets live on i.ytimg.com, which the app
+  // realm already loads thumbnails from, so only the spec crosses the boundary.
+  storyboards: Storyboard[]
 }
 
 export type SegmentRequest = {

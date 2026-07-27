@@ -11,6 +11,10 @@ type Bridge = {
   video: HTMLVideoElement
 }
 
+// Kept in front of the playhead when a quality upgrade clears the buffer, so
+// the swap is visible without a stall.
+const SAFE_MARGIN_SECONDS = 1
+
 const bridges = new Map<string, Bridge>()
 let schemeInstalled = false
 let diagnosticBridgeId: string | undefined
@@ -255,7 +259,19 @@ export const startShakaPlayback = async ({
     if (signal.aborted) throw signal.reason
     diagnosticBridgeId = bridgeId
     document.documentElement.dataset.playerEngine = 'shaka'
-    await video.play().catch(() => {})
+    // Autoplay with sound is blocked until the origin has enough media
+    // engagement, and the rejection arrives AFTER the element is already set up.
+    // Falling back to muted playback is what every player does, but the mute is
+    // the browser's choice, not the viewer's, so it is never written back to
+    // settings: the stored volume survives and one click restores sound.
+    try {
+      await video.play()
+    } catch {
+      if (!video.muted) {
+        video.muted = true
+        await video.play().catch(() => {})
+      }
+    }
 
     // Heights come from the SABR session rather than from Shaka: the session is
     // the side that has to serve the format, so anything it cannot serve must
@@ -288,12 +304,19 @@ export const startShakaPlayback = async ({
       const track = activePlayer.getVariantTracks()
         .filter((candidate) => candidate.height === height)
         .sort((a, b) => b.bandwidth - a.bandwidth)[0]
-      // clearBuffer stays false: dropping the buffer aborts every in-flight
-      // segment, and the switch is only meant to take effect going forward.
-      if (track) activePlayer.selectVariantTrack(track, false)
+      if (!track) return
+      // Going UP, the already-buffered lower quality is exactly what the viewer
+      // asked to stop seeing, so it is dropped and refetched: keeping it would
+      // leave them staring at the old quality for the whole 30s buffer. Going
+      // DOWN, the buffer is better than what was asked for, so it is kept and
+      // the change simply applies to what comes next. SAFE_MARGIN leaves a
+      // second of already-decoded video in front of the playhead so the swap
+      // does not stall playback while the first new segment lands.
+      const upgrade = (video.videoHeight || 0) > 0 && height > video.videoHeight
+      activePlayer.selectVariantTrack(track, upgrade, upgrade ? SAFE_MARGIN_SECONDS : 0)
     }
 
-    return { player: activePlayer, destroy, heights, selectQuality }
+    return { player: activePlayer, destroy, heights, selectQuality, storyboards: session.storyboards }
   } catch (error) {
     await destroy()
     throw error instanceof shaka.util.Error ? describeShakaError(error) : error
