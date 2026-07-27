@@ -1,6 +1,7 @@
-import type { SourceApi } from './types'
+import type { SourceApi, SourceMethod } from './types'
 
 import { startEngine } from '../scramjet/client'
+import { SOURCE_CURSOR_ARGUMENT, SOURCE_METHODS, SOURCE_REPLAY } from './types'
 
 let resolveSource: (source: SourceApi) => void = () => {}
 let source = new Promise<SourceApi>((resolve) => {
@@ -31,12 +32,22 @@ const callSource = async <Result>(call: (api: SourceApi) => Promise<Result>, ret
   }
 }
 
-export const sourceApi = {
-  home: async (cursor?: string) => callSource((api) => api.home(cursor), cursor === undefined),
-  search: async (query: string, cursor?: string) => callSource((api) => api.search(query, cursor), cursor === undefined),
-  video: async (id: string) => callSource((api) => api.video(id)),
-  channel: async (id: string, cursor?: string) => callSource((api) => api.channel(id, cursor), cursor === undefined),
-  watch: async (id: string) => callSource((api) => api.watch(id)),
-  comments: async (videoId: string, cursor?: string) => callSource((api) => api.comments(videoId, cursor), cursor === undefined),
-  session: async () => callSource((api) => api.session()),
-} satisfies SourceApi
+const cursorArgument = SOURCE_CURSOR_ARGUMENT as Partial<Record<SourceMethod, number>>
+
+// Every method is the same guarded forward, so the surface is assembled from the
+// shared name list. Whether a failed call may be replayed against the rebuilt
+// engine comes from SOURCE_REPLAY rather than from a default, so a write can
+// never be replayed into a duplicate like or subscribe.
+const replayable = (method: SourceMethod, args: unknown[]) => {
+  const policy = SOURCE_REPLAY[method]
+  if (policy !== 'unless-cursor') return policy === 'always'
+  const cursor = cursorArgument[method]
+  return cursor === undefined || args[cursor] === undefined
+}
+
+export const sourceApi = Object.fromEntries(
+  SOURCE_METHODS.map((method) => [method, (...args: unknown[]) => callSource(
+    (api) => (api[method] as (...call: unknown[]) => Promise<unknown>)(...args),
+    replayable(method, args),
+  )]),
+) as SourceApi

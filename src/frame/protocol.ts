@@ -1,5 +1,7 @@
-import type { SourceApi } from '../sources/types'
+import type { Exhaustive, SourceApi } from '../sources/types'
 import type { TransportResponse } from '../scramjet/protocol'
+
+import { SOURCE_METHODS } from '../sources/types'
 
 export type PlaybackFormat = {
   key: string
@@ -74,6 +76,31 @@ export type FrameApi = SourceApi & {
   closePlayback(sessionId: string): Promise<void>
   resetIdentity(): Promise<void>
 }
+
+// Both ends of the port forward by method name, so the list has to exist at
+// runtime. A method added to `FrameApi` but not listed here fails
+// `FrameMethodsAreExhaustive`.
+export const FRAME_METHODS = [
+  ...SOURCE_METHODS,
+  'prefetchPlayback',
+  'openPlayback',
+  'requestSegment',
+  'cancelSegment',
+  'selectVideoFormat',
+  'closePlayback',
+  'resetIdentity',
+] as const satisfies readonly (keyof FrameApi)[]
+
+export type FrameMethod = (typeof FRAME_METHODS)[number]
+
+export type FrameMethodsAreExhaustive = Exhaustive<Exclude<keyof FrameApi, FrameMethod>>
+
+const frameMethods: ReadonlySet<string> = new Set(FRAME_METHODS)
+
+// The port carries whatever the peer realm posts: only dispatch names that are
+// actually part of the API surface.
+export const isFrameMethod = (value: unknown): value is FrameMethod =>
+  typeof value === 'string' && frameMethods.has(value)
 
 export type FrameRequest = {
   [Method in keyof FrameApi]: {

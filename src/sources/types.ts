@@ -1,3 +1,7 @@
+export type SourceLikeStatus = 'LIKE' | 'DISLIKE' | 'INDIFFERENT'
+
+export type SourceNotificationLevel = 'ALL' | 'PERSONALIZED' | 'NONE'
+
 export type SourceChannel = {
   id: string
   name: string
@@ -7,6 +11,8 @@ export type SourceChannel = {
   videoCountText?: string
   banner?: string
   description?: string
+  isSubscribed?: boolean
+  notificationLevel?: SourceNotificationLevel
 }
 
 export type SourceVideo = {
@@ -40,6 +46,7 @@ export type SourceWatchMeta = {
   likeCountText?: string
   commentCountText?: string
   description?: string
+  likeStatus?: SourceLikeStatus
   channel?: SourceChannel
   related: SourceVideo[]
 }
@@ -77,6 +84,71 @@ export type Source = {
   watch(id: string): Promise<SourceWatchMeta | undefined>
   comments(videoId: string, cursor?: string): Promise<SourceCommentPage>
   session(): Promise<SourceSession>
+  // Writes resolve to the affected entity so the normalized cache can merge the
+  // new state. Only identity and the changed fields are meaningful; the rest is
+  // filled with placeholders because the write does not refetch the entity.
+  rateVideo(id: string, status: SourceLikeStatus): Promise<SourceWatchMeta>
+  setSubscribed(channelId: string, subscribed: boolean): Promise<SourceChannel>
+  setNotificationLevel(channelId: string, level: SourceNotificationLevel): Promise<SourceChannel>
 }
 
 export type SourceApi = Omit<Source, 'id'>
+
+// The realm boundaries (app -> frame RPC, GraphQL worker -> source) forward
+// calls by name, so they need the method list at runtime. Adding a method to
+// `Source` without listing it here fails `SourceMethodsAreExhaustive` below.
+export const SOURCE_METHODS = [
+  'home',
+  'search',
+  'video',
+  'channel',
+  'watch',
+  'comments',
+  'session',
+  'rateVideo',
+  'setSubscribed',
+  'setNotificationLevel',
+] as const satisfies readonly (keyof SourceApi)[]
+
+export type SourceMethod = (typeof SOURCE_METHODS)[number]
+
+// Shared with the frame protocol, which guards its own method list the same way.
+export type Exhaustive<Unlisted extends never> = Unlisted
+
+// Resolves to `never` while the list is complete; otherwise the unlisted method
+// name breaks the constraint and the compiler reports it by name.
+export type SourceMethodsAreExhaustive = Exhaustive<Exclude<keyof SourceApi, SourceMethod>>
+
+// Continuation cursors are keys into an in-memory Map inside the frame, so they
+// cannot survive an engine restart. The index marks which argument carries one:
+// a call that passes it must fail rather than silently replay from the start.
+export const SOURCE_CURSOR_ARGUMENT = {
+  home: 0,
+  search: 1,
+  channel: 1,
+  comments: 1,
+} as const satisfies Partial<Record<SourceMethod, number>>
+
+// When the engine dies mid-call, src/sources/runtime.ts rebuilds it and decides
+// whether to replay the call. Only an idempotent read is safe to replay:
+//
+//   always        pure read, replaying it just costs a round trip
+//   unless-cursor pure read, but a cursored page cannot be replayed because the
+//                 cursor belonged to the frame that died
+//   never         a write, replaying it would like or subscribe twice
+//
+// `satisfies Record<SourceMethod, ...>` makes the classification mandatory, so a
+// method added later cannot quietly inherit a permissive default. Every write
+// method added for mutations MUST be 'never'.
+export const SOURCE_REPLAY = {
+  home: 'unless-cursor',
+  search: 'unless-cursor',
+  video: 'always',
+  channel: 'unless-cursor',
+  watch: 'always',
+  comments: 'unless-cursor',
+  session: 'always',
+  rateVideo: 'never',
+  setSubscribed: 'never',
+  setNotificationLevel: 'never',
+} as const satisfies Record<SourceMethod, 'always' | 'unless-cursor' | 'never'>

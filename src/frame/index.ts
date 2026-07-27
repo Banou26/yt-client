@@ -4,9 +4,11 @@ import { createYoutubeSource } from '../sources/youtube'
 import { catalogInnertube, getSabrSource, hasSessionCookie, prefetchInitialPlayerResponse } from './innertube'
 import { createSabrSession, isSabrSessionRefreshError } from './sabr'
 import { resetIdentity } from './identity'
-import { FRAME_CONNECT } from './protocol'
+import { FRAME_CONNECT, isFrameMethod } from './protocol'
 
-const source = createYoutubeSource({
+// `id` is source metadata rather than part of the RPC surface. The rest of the
+// source forwards to the app unchanged.
+const { id: _sourceId, ...sourceApi } = createYoutubeSource({
   fetch: globalThis.fetch.bind(globalThis),
   createClient: () => catalogInnertube,
   signedIn: hasSessionCookie,
@@ -50,13 +52,7 @@ const refreshSession = async (entry: PlaybackEntry) => {
 }
 
 const api = {
-  home: source.home,
-  search: source.search,
-  video: source.video,
-  channel: source.channel,
-  watch: source.watch,
-  comments: source.comments,
-  session: source.session,
+  ...sourceApi,
   resetIdentity,
   prefetchPlayback: async (videoId) => {
     // Kick (and memoize) the watch-page fetch now; openPlayback reuses it. Do
@@ -160,23 +156,16 @@ const api = {
   },
 } satisfies FrameApi
 
-const dispatch = (request: FrameRequest) => {
-  switch (request.method) {
-    case 'home': return api.home(...request.args)
-    case 'search': return api.search(...request.args)
-    case 'video': return api.video(...request.args)
-    case 'channel': return api.channel(...request.args)
-    case 'watch': return api.watch(...request.args)
-    case 'comments': return api.comments(...request.args)
-    case 'session': return api.session(...request.args)
-    case 'resetIdentity': return api.resetIdentity(...request.args)
-    case 'prefetchPlayback': return api.prefetchPlayback(...request.args)
-    case 'openPlayback': return api.openPlayback(...request.args)
-    case 'requestSegment': return api.requestSegment(...request.args)
-    case 'cancelSegment': return api.cancelSegment(...request.args)
-    case 'selectVideoFormat': return api.selectVideoFormat(...request.args)
-    case 'closePlayback': return api.closePlayback(...request.args)
-  }
+// Async so an unknown method rejects the RPC instead of throwing synchronously
+// into the message listener.
+const dispatch = async (request: FrameRequest, progress: (phase: string) => void) => {
+  // Segments alone take the progress callback: their RPC heartbeat is what
+  // keeps the app's inactivity deadline from firing mid-download.
+  if (request.method === 'requestSegment') return api.requestSegment(request.args[0], progress)
+  // The port carries whatever the app realm posts, so the name is checked
+  // against the API surface before it is used as an index.
+  if (!isFrameMethod(request.method)) throw new Error(`yt-client: unknown frame method ${String(request.method)}`)
+  return (api[request.method] as (...args: unknown[]) => Promise<unknown>)(...request.args)
 }
 
 type FrameWindow = Window & {
@@ -192,10 +181,7 @@ const connect = (port: MessagePort) => {
         port.postMessage({ id: request.id, progress: phase } satisfies FrameProgress)
       } catch {}
     }
-    const response = request.method === 'requestSegment'
-      ? api.requestSegment(request.args[0], progress)
-      : dispatch(request)
-    void response.then(
+    void dispatch(request, progress).then(
       (result) => {
         document.documentElement.dataset.frameApi = `${request.method}:done`
         const segment = result as SegmentEnvelope

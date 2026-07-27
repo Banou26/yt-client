@@ -13,6 +13,7 @@ const config = {
       },
       config: {
         useTypeImports: true,
+        enumsAsTypes: true,
       },
     },
     './src/generated/resolvers.ts': {
@@ -20,6 +21,12 @@ const config = {
       config: {
         contextType: '../worker/yoga#ServerContext',
         useTypeImports: true,
+        // String-literal unions rather than TS enums, so the hand-written
+        // Source types in src/sources/types.ts stay structurally compatible
+        // with the generated ones (a TS enum member is not assignable from its
+        // own string value, which breaks `satisfies Resolvers` for every field
+        // that touches an enum). It also keeps the enum out of the bundle.
+        enumsAsTypes: true,
       },
     },
   },

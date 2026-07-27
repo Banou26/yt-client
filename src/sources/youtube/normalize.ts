@@ -1,4 +1,4 @@
-import type { SourceChannel, SourceComment, SourceSession, SourceVideo, SourceWatchMeta } from '../types'
+import type { SourceChannel, SourceComment, SourceLikeStatus, SourceNotificationLevel, SourceSession, SourceVideo, SourceWatchMeta } from '../types'
 
 type Thumbnail = {
   url?: string
@@ -75,6 +75,10 @@ type ChannelDetails = {
     description?: string
     avatar?: Thumbnail[]
     thumbnail?: Thumbnail[]
+  }
+  subscribe_button?: {
+    subscribed?: boolean
+    notification_preference_button?: { current_state_id?: string | number }
   }
 }
 
@@ -168,6 +172,23 @@ const approximateCount = (value: string | undefined) => {
 
 const handleFromUrl = (url: string | undefined) => url?.match(/\/(@[^/?#]+)/)?.[1]
 
+const LIKE_STATUSES: SourceLikeStatus[] = ['LIKE', 'DISLIKE', 'INDIFFERENT']
+
+const likeStatus = (value: unknown): SourceLikeStatus | undefined =>
+  LIKE_STATUSES.find((status) => status === value)
+
+const NOTIFICATION_LEVELS: SourceNotificationLevel[] = ['ALL', 'PERSONALIZED', 'NONE']
+
+// The toggle reports its state as a style id like
+// 'STATE_SUBSCRIBE_NOTIFICATION_PREFERENCE_PERSONALIZED'; only the tail is
+// meaningful and the vocabulary changes, so an unknown value reads as absent
+// rather than as NONE (which the bell would render as "notifications off").
+const notificationLevel = (value: unknown): SourceNotificationLevel | undefined => {
+  if (typeof value !== 'string') return undefined
+  const upper = value.toUpperCase()
+  return NOTIFICATION_LEVELS.find((level) => upper.endsWith(level))
+}
+
 const metadataTexts = (metadata: MetadataParts | undefined) =>
   metadata?.metadata_rows
     ?.flatMap((row) => row.metadata_parts ?? [])
@@ -195,6 +216,8 @@ export const normalizeChannel = (input: unknown, fallbackId?: string): SourceCha
     videoCountText: text(header?.videos_count) ?? details[1],
     banner: thumbnail(header?.banner) ?? thumbnail(view?.banner?.image),
     description: channel.metadata?.description ?? text(view?.description?.description),
+    isSubscribed: channel.subscribe_button?.subscribed,
+    notificationLevel: notificationLevel(channel.subscribe_button?.notification_preference_button?.current_state_id),
   }
 }
 
@@ -295,7 +318,19 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
     short_like_count?: string
   } | undefined
   const likeLegacy = first('SegmentedLikeDislikeButton') as {
-    like_button?: { like_count?: number, short_like_count?: string }
+    like_button?: { like_count?: number, short_like_count?: string, is_toggled?: boolean }
+    dislike_button?: { is_toggled?: boolean }
+  } | undefined
+  const likeButtonView = first('LikeButtonView') as {
+    like_status_entity?: { like_status?: string }
+    like_status?: string
+  } | undefined
+  const subscribeButton = first('SubscribeButton') as {
+    subscribed?: boolean
+    notification_preference_button?: {
+      current_state_id?: string | number
+      states?: { state_id?: string | number, id?: string | number }[]
+    }
   } | undefined
   const commentsHeader = first('CommentsEntryPointHeader') as {
     comment_count?: Text
@@ -311,6 +346,14 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
     ...(memo.get('CompactVideo') ?? []).map(normalizeFeedVideo),
     ...(memo.get('LockupView') ?? []).map(normalizeLockupVideo),
   ].filter((video) => video !== undefined)
+  // The modern LikeButtonView carries the signed-in state directly; the legacy
+  // segmented button only exposes it as a pair of toggles. Without this a user
+  // who already liked a video sees an unlit button and un-likes it by clicking.
+  const status = likeStatus(likeButtonView?.like_status_entity?.like_status ?? likeButtonView?.like_status)
+    ?? (likeLegacy?.like_button?.is_toggled === true
+      ? 'LIKE'
+      : likeLegacy?.dislike_button?.is_toggled === true ? 'DISLIKE' : undefined)
+  const bell = subscribeButton?.notification_preference_button
   return {
     id,
     title: text(primary?.title),
@@ -319,6 +362,7 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
     likeCountText: likeCount,
     commentCountText: text(commentsHeader?.comment_count),
     description: text(secondary?.description),
+    likeStatus: status,
     channel: author?.id && author.name
       ? {
           id: author.id,
@@ -326,6 +370,10 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
           avatar: thumbnail(author.thumbnails),
           handle: handleFromUrl(author.url),
           subscriberCountText: text(owner?.subscriber_count),
+          isSubscribed: subscribeButton?.subscribed,
+          notificationLevel: notificationLevel(
+            bell?.current_state_id ?? bell?.states?.find((state) => state.id === bell.current_state_id)?.state_id,
+          ),
         }
       : undefined,
     related,

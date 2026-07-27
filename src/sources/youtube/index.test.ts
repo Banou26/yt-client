@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createYoutubeSource } from '.'
+import { SOURCE_CURSOR_ARGUMENT, SOURCE_REPLAY } from '../types'
 
 type FakeFeed = {
   videos: { video_id: string, title: { text: string } }[]
@@ -26,42 +27,97 @@ const comments = (id: string, next?: () => Promise<FakeComments>): FakeComments 
   getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
 })
 
-const createFakeClient = () => ({
-  getHomeFeed: async () => feed('first', async () => feed('second')),
-  search: async () => feed('search'),
-  getBasicInfo: async () => ({ basic_info: undefined }),
-  getChannel: async () => ({ ...feed('channel'), metadata: { external_id: 'c', title: 'Channel' } }),
-  getComments: async () => comments('top', async () => comments('next')),
-  account: {
-    getInfo: async (): Promise<unknown> => ({
-      contents: {
-        account_name: { text: 'Banou' },
-        account_photo: [{ url: 'avatar' }],
-        channel_handle: { text: '@banou' },
+const createFakeClient = () => {
+  // Writes are verified by what reached the wire, so every outbound call is
+  // recorded: the point of these tests is which endpoint fired, not the reply.
+  const calls: string[] = []
+  return {
+    calls,
+    getHomeFeed: async () => feed('first', async () => feed('second')),
+    search: async () => feed('search'),
+    getBasicInfo: async () => ({ basic_info: undefined }),
+    getChannel: async () => ({ ...feed('channel'), metadata: { external_id: 'c', title: 'Channel' } }),
+    getComments: async () => comments('top', async () => comments('next')),
+    session: { logged_in: true },
+    interact: {
+      subscribe: async (channelId: string) => void calls.push(`subscribe:${channelId}`),
+      unsubscribe: async (channelId: string) => void calls.push(`unsubscribe:${channelId}`),
+      setNotificationPreferences: async (channelId: string, type: string) =>
+        void calls.push(`notifications:${channelId}:${type}`),
+    },
+    account: {
+      getInfo: async (): Promise<unknown> => ({
+        contents: {
+          account_name: { text: 'Banou' },
+          account_photo: [{ url: 'avatar' }],
+          channel_handle: { text: '@banou' },
+        },
+      }),
+    },
+    actions: {
+      execute: async (endpoint: string) => {
+        calls.push(endpoint)
+        return {
+          contents_memo: new Map<string, unknown[]>([
+            ['VideoPrimaryInfo', [{ view_count: { view_count: { text: '42 views' } } }]],
+          ]),
+        }
       },
-    }),
-  },
-  actions: {
-    execute: async () => ({
-      contents_memo: new Map<string, unknown[]>([
-        ['VideoPrimaryInfo', [{ view_count: { view_count: { text: '42 views' } } }]],
-      ]),
-    }),
-  },
-})
+    },
+  }
+}
 
 describe('youtube source', () => {
-  it('keeps continuations opaque and one-shot', async () => {
+  it('keeps continuations opaque and replayable', async () => {
+    const client = createFakeClient()
+    let continuationCalls = 0
+    client.getHomeFeed = async () => feed('first', async () => {
+      continuationCalls += 1
+      return feed('second')
+    })
     const source = createYoutubeSource({
       fetch: globalThis.fetch,
-      createClient: async () => createFakeClient(),
+      createClient: async () => client,
     })
     const first = await source.home()
     expect(first.items[0]?.id).toBe('first')
     expect(first.cursor).toBeTruthy()
     const second = await source.home(first.cursor)
     expect(second.items[0]?.id).toBe('second')
-    await expect(source.home(first.cursor)).rejects.toThrow('unknown continuation')
+    // urql re-executes a query on remount and on back-navigation. Replaying a
+    // cursor must return the same page rather than throwing, and must not cost
+    // a second round trip.
+    const replay = await source.home(first.cursor)
+    expect(replay.items[0]?.id).toBe('second')
+    expect(continuationCalls).toBe(1)
+    await expect(source.home('youtube:home:999')).rejects.toThrow('unknown continuation')
+  })
+
+  it('refuses a cursor issued for a different feed', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    const home = await source.home()
+    expect(home.cursor).toBeTruthy()
+    await expect(source.search('query', home.cursor)).rejects.toThrow('belongs to home')
+  })
+
+  it('lets a failed continuation be retried instead of caching the failure', async () => {
+    const client = createFakeClient()
+    let attempts = 0
+    client.getHomeFeed = async () => feed('first', async () => {
+      attempts += 1
+      if (attempts === 1) throw new Error('network blip')
+      return feed('second')
+    })
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => client,
+    })
+    const first = await source.home()
+    await expect(source.home(first.cursor)).rejects.toThrow('network blip')
+    await expect(source.home(first.cursor)).resolves.toMatchObject({ items: [{ id: 'second' }] })
   })
 
   it('fetches watch metadata through a single /next call', async () => {
@@ -76,7 +132,7 @@ describe('youtube source', () => {
     })
   })
 
-  it('pages comments with one-shot cursors', async () => {
+  it('pages comments with cursors scoped to their video', async () => {
     const source = createYoutubeSource({
       fetch: globalThis.fetch,
       createClient: async () => createFakeClient(),
@@ -87,7 +143,10 @@ describe('youtube source', () => {
     const second = await source.comments('abc', first.cursor)
     expect(second.items[0]?.id).toBe('next')
     expect(second.cursor).toBeUndefined()
-    await expect(source.comments('abc', first.cursor)).rejects.toThrow('unknown continuation')
+    await expect(source.comments('abc', first.cursor)).resolves.toMatchObject({ items: [{ id: 'next' }] })
+    // Comment cursors are scoped to their video, so the same cursor must not
+    // page a different video's comments.
+    await expect(source.comments('other', first.cursor)).rejects.toThrow('belongs to comments:abc')
   })
 
   it('reports a signed-out session without hitting the account API', async () => {
@@ -117,6 +176,89 @@ describe('youtube source', () => {
       avatar: 'avatar',
       handle: '@banou',
     })
+  })
+
+  // src/sources/runtime.ts decides whether a failed call may be replayed against
+  // a rebuilt engine by reading the cursor out of SOURCE_CURSOR_ARGUMENT BY
+  // POSITION. Nothing in the type system ties that index to the real signature,
+  // so reordering a parameter would silently start replaying continuations,
+  // which reads to the user as a feed that jumps back to page one. These cases
+  // pin the position: the leading arguments listed here must be exactly the
+  // arguments that come before the cursor.
+  const CURSOR_CASES: Record<keyof typeof SOURCE_CURSOR_ARGUMENT, string[]> = {
+    home: [],
+    search: ['query'],
+    channel: ['c'],
+    comments: ['abc'],
+  }
+
+  for (const [method, leading] of Object.entries(CURSOR_CASES)) {
+    it(`reads the ${method} cursor from the argument runtime.ts retries on`, async () => {
+      expect(SOURCE_CURSOR_ARGUMENT[method as keyof typeof SOURCE_CURSOR_ARGUMENT]).toBe(leading.length)
+      const source = createYoutubeSource({
+        fetch: globalThis.fetch,
+        createClient: async () => createFakeClient(),
+      })
+      const call = source[method as keyof typeof CURSOR_CASES] as (...args: unknown[]) => Promise<unknown>
+      // The first page has to exist before a continuation can be rejected as
+      // unknown (channel continuations also require the channel to be loaded).
+      await call(...leading)
+      await expect(call(...leading, 'youtube:bogus')).rejects.toThrow('unknown continuation')
+    })
+  }
+
+  it('rates a video on the WEB client rather than through the TV-context manager', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await expect(source.rateVideo('abc', 'LIKE')).resolves.toMatchObject({ id: 'abc', likeStatus: 'LIKE' })
+    await source.rateVideo('abc', 'DISLIKE')
+    await source.rateVideo('abc', 'INDIFFERENT')
+    expect(client.calls).toEqual(['/like/like', '/like/dislike', '/like/removelike'])
+  })
+
+  it('returns the channel with its new subscription state', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await expect(source.setSubscribed('c', true)).resolves.toMatchObject({ id: 'c', isSubscribed: true })
+    await expect(source.setSubscribed('c', false)).resolves.toMatchObject({ id: 'c', isSubscribed: false })
+    await expect(source.setNotificationLevel('c', 'ALL')).resolves.toMatchObject({ id: 'c', notificationLevel: 'ALL' })
+    expect(client.calls).toEqual(['subscribe:c', 'unsubscribe:c', 'notifications:c:ALL'])
+  })
+
+  it('keeps a loaded channel in step with a subscription write', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await source.channel('c')
+    const updated = await source.setSubscribed('c', true)
+    // The name survives from the cached read, so the write does not hand back a
+    // channel stripped of everything it already knew.
+    expect(updated).toMatchObject({ id: 'c', name: 'Channel', isSubscribed: true })
+  })
+
+  it('refuses writes when signed out instead of emitting an opaque innertube error', async () => {
+    const client = createFakeClient()
+    client.session.logged_in = false
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await expect(source.rateVideo('abc', 'LIKE')).rejects.toThrow('sign in to rate a video')
+    await expect(source.setSubscribed('c', true)).rejects.toThrow('sign in to change a subscription')
+    expect(client.calls).toEqual([])
+  })
+
+  it('covers every cursored method declared to runtime.ts', () => {
+    expect(Object.keys(CURSOR_CASES).sort()).toEqual(Object.keys(SOURCE_CURSOR_ARGUMENT).sort())
+  })
+
+  it('only lets a cursored read opt out of replay through a cursor argument', () => {
+    // A method classified 'unless-cursor' decides replay by reading one
+    // argument position, so it has to have one. Without this, the policy
+    // silently degrades to 'always' and a paged feed restarts at page one.
+    for (const [method, policy] of Object.entries(SOURCE_REPLAY)) {
+      if (policy === 'unless-cursor') {
+        expect(SOURCE_CURSOR_ARGUMENT).toHaveProperty(method)
+      } else {
+        expect(SOURCE_CURSOR_ARGUMENT).not.toHaveProperty(method)
+      }
+    }
   })
 
   it('stays signed in when the account lookup fails', async () => {

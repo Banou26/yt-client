@@ -1,6 +1,7 @@
-import type { FrameApi, FrameProgress, FrameRequest, FrameResponse } from '../frame/protocol'
+import type { FrameApi, FrameMethod, FrameProgress, FrameRequest, FrameResponse } from '../frame/protocol'
 import type { HostControlEvent, HostControlRequest } from './protocol'
 
+import { FRAME_METHODS } from '../frame/protocol'
 import { CLEAR_COOKIES, CLOSE_SIGNIN, COOKIES_CLEARED, ENGINE_READY, OPEN_SIGNIN, SIGNIN_LOADED, SIGNIN_STATUS } from './protocol'
 
 let engine: Promise<FrameApi> | undefined
@@ -18,16 +19,18 @@ let controlRequestId = 0
 const CONTROL_TIMEOUT_MS = 15_000
 const clearPending = new Map<number, { resolve: () => void, reject: (error: Error) => void }>()
 
+type PendingCall = {
+  method: FrameMethod
+  startedAt: number
+  timeout?: ReturnType<typeof setTimeout>
+  resolve(value: unknown): void
+  reject(reason?: unknown): void
+}
+
 const createFrameApi = (port: MessagePort, onFatal: (error: Error) => void) => {
   let requestId = 0
   let closed = false
-  const pending = new Map<number, {
-    method: keyof FrameApi
-    startedAt: number
-    timeout?: ReturnType<typeof setTimeout>
-    resolve(value: unknown): void
-    reject(reason?: unknown): void
-  }>()
+  const pending = new Map<number, PendingCall>()
   const close = (error: Error) => {
     if (closed) return
     closed = true
@@ -42,7 +45,7 @@ const createFrameApi = (port: MessagePort, onFatal: (error: Error) => void) => {
     close(error)
     onFatal(error)
   }
-  const armTimeout = (id: number, request: typeof pending extends Map<number, infer Value> ? Value : never) => {
+  const armTimeout = (id: number, request: PendingCall) => {
     clearTimeout(request.timeout)
     const timeoutMs = request.method === 'requestSegment' ? 20_000 : 90_000
     request.timeout = setTimeout(() => {
@@ -71,10 +74,7 @@ const createFrameApi = (port: MessagePort, onFatal: (error: Error) => void) => {
   port.addEventListener('messageerror', () => fail(new Error('yt-client: frame API message failed')))
   port.start()
 
-  const call = <Method extends keyof FrameApi>(
-    method: Method,
-    ...args: Parameters<FrameApi[Method]>
-  ) => new Promise<Awaited<ReturnType<FrameApi[Method]>>>((resolve, reject) => {
+  const call = (method: FrameMethod, args: unknown[]) => new Promise<unknown>((resolve, reject) => {
     if (closed) {
       reject(new Error('yt-client: frame API is closed'))
       return
@@ -84,12 +84,7 @@ const createFrameApi = (port: MessagePort, onFatal: (error: Error) => void) => {
     document.documentElement.dataset.frameRequest = method
     document.documentElement.dataset.frameRequestId = String(id)
     document.documentElement.dataset.frameRequestStartedAt = String(Math.round(startedAt))
-    const request = {
-      method,
-      startedAt,
-      resolve: (value: unknown) => resolve(value as Awaited<ReturnType<FrameApi[Method]>>),
-      reject,
-    }
+    const request = { method, startedAt, resolve, reject }
     pending.set(id, request)
     armTimeout(id, request)
     try {
@@ -100,22 +95,11 @@ const createFrameApi = (port: MessagePort, onFatal: (error: Error) => void) => {
   })
 
   return {
-    api: {
-      home: (cursor) => call('home', cursor),
-      search: (query, cursor) => call('search', query, cursor),
-      video: (id) => call('video', id),
-      channel: (id, cursor) => call('channel', id, cursor),
-      watch: (id) => call('watch', id),
-      comments: (videoId, cursor) => call('comments', videoId, cursor),
-      prefetchPlayback: (videoId) => call('prefetchPlayback', videoId),
-      openPlayback: (videoId, maxHeight) => call('openPlayback', videoId, maxHeight),
-      requestSegment: (request) => call('requestSegment', request),
-      cancelSegment: (sessionId, requestId) => call('cancelSegment', sessionId, requestId),
-      selectVideoFormat: (sessionId, formatKey) => call('selectVideoFormat', sessionId, formatKey),
-      closePlayback: (sessionId) => call('closePlayback', sessionId),
-      session: () => call('session'),
-      resetIdentity: () => call('resetIdentity'),
-    } satisfies FrameApi,
+    // Every method forwards identically, so the surface is assembled from the
+    // shared name list: a new frame method needs no edit here.
+    api: Object.fromEntries(
+      FRAME_METHODS.map((method) => [method, (...args: unknown[]) => call(method, args)]),
+    ) as FrameApi,
     close,
   }
 }
@@ -124,9 +108,9 @@ const showHostFrame = () => {
   if (!engineFrame) return
   engineFrame.hidden = false
   // An iframe is a replaced element: inset offsets don't stretch it (it falls
-  // back to the intrinsic 300x150), so size it explicitly. 5.6rem tracks the
-  // header height under font scaling.
-  engineFrame.style.cssText = 'position: fixed; top: 5.6rem; left: 0; width: 100vw; height: calc(100vh - 5.6rem); border: 0; z-index: 1500; background: #0f0f0f;'
+  // back to the intrinsic 300x150), so size it explicitly. The header-height
+  // token keeps it in step with the real header under font scaling.
+  engineFrame.style.cssText = 'position: fixed; top: var(--header-height); left: 0; width: 100vw; height: calc(100vh - var(--header-height)); border: 0; z-index: var(--z-host-frame); background: var(--bg-base);'
 }
 
 const hideHostFrame = () => {

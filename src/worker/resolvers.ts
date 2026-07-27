@@ -10,4 +10,9 @@ export const resolvers = {
     comments: (_, { videoId, cursor }, context) => context.source.comments(videoId, cursor ?? undefined),
     session: (_, _args, context) => context.source.session(),
   },
+  Mutation: {
+    rateVideo: (_, { id, status }, context) => context.source.rateVideo(id, status),
+    setSubscribed: (_, { channelId, subscribed }, context) => context.source.setSubscribed(channelId, subscribed),
+    setNotificationLevel: (_, { channelId, level }, context) => context.source.setNotificationLevel(channelId, level),
+  },
 } satisfies Resolvers

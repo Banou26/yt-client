@@ -1,3 +1,15 @@
+enum LikeStatus {
+  LIKE
+  DISLIKE
+  INDIFFERENT
+}
+
+enum NotificationLevel {
+  ALL
+  PERSONALIZED
+  NONE
+}
+
 type Channel {
   id: ID!
   name: String!
@@ -7,6 +19,8 @@ type Channel {
   videoCountText: String
   banner: String
   description: String
+  isSubscribed: Boolean
+  notificationLevel: NotificationLevel
 }
 
 type Video {
@@ -40,6 +54,7 @@ type WatchMeta {
   likeCountText: String
   commentCountText: String
   description: String
+  likeStatus: LikeStatus
   channel: Channel
   related: [Video!]!
 }
@@ -76,4 +91,17 @@ type Query {
   watch(id: ID!): WatchMeta
   comments(videoId: ID!, cursor: String): CommentPage!
   session: Session!
+}
+
+# Writes return the affected entity rather than a Boolean so the normalized
+# cache can merge the new state into every view already rendering it: liking on
+# the watch page updates the same video wherever else it is on screen.
+#
+# The returned entity carries ONLY the identity and the fields the write
+# changed. A mutation document must not select anything else off it (the rest is
+# not fetched back, and a non-null field like Channel.name would then fail).
+type Mutation {
+  rateVideo(id: ID!, status: LikeStatus!): WatchMeta!
+  setSubscribed(channelId: ID!, subscribed: Boolean!): Channel!
+  setNotificationLevel(channelId: ID!, level: NotificationLevel!): Channel!
 }

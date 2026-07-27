@@ -17,6 +17,8 @@ const CHANNEL_VIEW_QUERY = gql(`
         videoCountText
         banner
         description
+        isSubscribed
+        notificationLevel
       }
       videos {
         items {
@@ -47,7 +49,7 @@ const style = css`
     aspect-ratio: 6.2 / 1;
     border-radius: 1.2rem;
     object-fit: cover;
-    background: #212121;
+    background: var(--bg-elevated);
   }
 
   .header {
@@ -63,7 +65,7 @@ const style = css`
     height: 16rem;
     border-radius: 50%;
     overflow: hidden;
-    background: #272727;
+    background: var(--bg-chip);
   }
 
   .avatar img {
@@ -79,7 +81,7 @@ const style = css`
     justify-content: center;
     font-size: 6.4rem;
     font-weight: 500;
-    color: #f1f1f1;
+    color: var(--text-primary);
   }
 
   .info {
@@ -91,19 +93,19 @@ const style = css`
     font-size: 3.6rem;
     font-weight: 700;
     line-height: 5rem;
-    color: #f1f1f1;
+    color: var(--text-primary);
   }
 
   .meta {
     margin-top: 0.4rem;
     font-size: 1.4rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 
   .description {
     margin-top: 0.8rem;
     font-size: 1.4rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
     display: -webkit-box;
     -webkit-line-clamp: 1;
     -webkit-box-orient: vertical;
@@ -118,7 +120,7 @@ const style = css`
     display: flex;
     gap: 2.4rem;
     margin-top: 2.4rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .tab {
@@ -127,7 +129,7 @@ const style = css`
     border: none;
     border-bottom: 0.2rem solid transparent;
     background: transparent;
-    color: #aaaaaa;
+    color: var(--text-secondary);
     font-size: 1.5rem;
     font-weight: 500;
     cursor: pointer;
@@ -135,12 +137,12 @@ const style = css`
   }
 
   .tab:hover {
-    color: #f1f1f1;
+    color: var(--text-primary);
   }
 
   .tab.active {
-    color: #f1f1f1;
-    border-bottom-color: #f1f1f1;
+    color: var(--text-primary);
+    border-bottom-color: var(--text-primary);
   }
 
   .videos {
@@ -149,7 +151,7 @@ const style = css`
 
   .status {
     margin-top: 2.4rem;
-    color: #aaaaaa;
+    color: var(--text-secondary);
   }
 
   @media (max-width: 768px) {
@@ -201,7 +203,11 @@ export const ChannelPage = ({ params }: { params: { channelId: string } }) => {
               {meta ? <p className='meta'>{meta}</p> : undefined}
               {channel.description ? <p className='description'>{channel.description}</p> : undefined}
               <div className='subscribe-row'>
-                <SubscribeButton />
+                <SubscribeButton
+                  channelId={channel.id}
+                  subscribed={channel.isSubscribed}
+                  notificationLevel={channel.notificationLevel}
+                />
               </div>
             </div>
           </header>
