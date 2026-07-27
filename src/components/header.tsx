@@ -1,4 +1,4 @@
-import type { TargetedSubmitEvent } from 'preact'
+import type { TargetedEvent, TargetedKeyboardEvent, TargetedSubmitEvent } from 'preact'
 
 import { css } from '@emotion/react'
 import { CircleUserRound, EllipsisVertical, Menu, Mic, Search } from 'lucide-react'
@@ -8,6 +8,18 @@ import { Link, useLocation, useSearch } from 'wouter'
 
 import { gql } from '../generated'
 import { AccountMenu } from './account-menu'
+
+// Suggestions are display text with no entity and no continuation, so a failed
+// call degrades to an empty list at the source rather than surfacing here.
+const SEARCH_SUGGESTIONS_QUERY = gql(`
+  query SearchSuggestions($query: String!) {
+    searchSuggestions(query: $query)
+  }
+`)
+
+// Long enough that a fast typist issues one call rather than one per character,
+// short enough that a pause still feels answered.
+const SUGGEST_DEBOUNCE_MS = 200
 
 const HEADER_SESSION_QUERY = gql(`
   query HeaderSession {
@@ -105,6 +117,9 @@ const style = css`
 
   .search-box {
     flex: 1;
+    /* Anchors the suggestion list, which hangs below the box rather than
+       participating in the header's own row layout. */
+    position: relative;
     display: flex;
     align-items: center;
     min-width: 0;
@@ -114,6 +129,37 @@ const style = css`
     border-radius: 4rem 0 0 4rem;
     padding-left: 1.6rem;
     transition: border-color 0.15s ease;
+  }
+
+  .suggestions {
+    position: absolute;
+    top: calc(100% + 0.4rem);
+    left: -1.6rem;
+    right: -1px;
+    z-index: var(--z-popup);
+    margin: 0;
+    padding: 0.8rem 0;
+    list-style: none;
+    border-radius: 1.2rem;
+    background: var(--bg-menu);
+    box-shadow: 0 4px 32px rgba(0, 0, 0, 0.3);
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+
+  .suggestion {
+    display: flex;
+    align-items: center;
+    gap: 1.2rem;
+    padding: 0.6rem 1.6rem;
+    color: var(--text-primary);
+    font-size: 1.6rem;
+    cursor: pointer;
+  }
+
+  .suggestion:hover,
+  .suggestion.active {
+    background: var(--bg-hover);
   }
 
   .search-box:focus-within {
@@ -218,6 +264,10 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
   const [, navigate] = useLocation()
   const search = useSearch()
   const inputRef = useRef<HTMLInputElement>(null)
+  const [typed, setTyped] = useState<string | undefined>(undefined)
+  const [debounced, setDebounced] = useState('')
+  const [suggestOpen, setSuggestOpen] = useState(false)
+  const [activeSuggestion, setActiveSuggestion] = useState(-1)
   // Defer the session probe until the engine is ready so its accounts_list call
   // never competes with the latency-critical watch/player boot.
   const [engineReady, setEngineReady] = useState(() => document.documentElement.dataset.engine === 'ready')
@@ -249,14 +299,62 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  // Every keystroke that reaches the source is a tunneled round trip at roughly
+  // 0.9s, and src/scramjet/client.ts has no cancellation path for a non-segment
+  // call, so the debounce is load-bearing rather than a nicety: without it a
+  // fast typist queues a request per character and they all still complete.
+  useEffect(() => {
+    if (typed === undefined) return
+    const timer = setTimeout(() => setDebounced(typed.trim()), SUGGEST_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [typed])
+
+  const [{ data: suggestData }] = useQuery({
+    query: SEARCH_SUGGESTIONS_QUERY,
+    variables: { query: debounced },
+    pause: !engineReady || debounced.length === 0 || !suggestOpen,
+  })
+  const suggestions = suggestOpen ? suggestData?.searchSuggestions ?? [] : []
+
   // Only /results carries search_query, so reading it off whatever the current
   // location is keeps the box filled there and empty everywhere else.
   const currentQuery = new URLSearchParams(search).get('search_query') ?? undefined
 
+  const submitQuery = (query: string) => {
+    const trimmed = query.trim()
+    if (!trimmed) return
+    setSuggestOpen(false)
+    setActiveSuggestion(-1)
+    setTyped(undefined)
+    navigate(`/results?search_query=${encodeURIComponent(trimmed)}`)
+  }
+
+  // Arrow keys move a highlight without committing, matching youtube.com: the
+  // box shows the highlighted suggestion so Enter is never a surprise, and
+  // Escape steps back to what was actually typed rather than closing the box.
+  const onSearchKeyDown = (event: TargetedKeyboardEvent<HTMLInputElement>) => {
+    if (suggestions.length === 0) return
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const step = event.key === 'ArrowDown' ? 1 : -1
+      const next = activeSuggestion + step
+      const wrapped = next < -1 ? suggestions.length - 1 : next >= suggestions.length ? -1 : next
+      setActiveSuggestion(wrapped)
+      if (inputRef.current) inputRef.current.value = wrapped === -1 ? typed ?? '' : suggestions[wrapped] ?? ''
+      return
+    }
+    if (event.key === 'Escape' && activeSuggestion !== -1) {
+      event.preventDefault()
+      setActiveSuggestion(-1)
+      if (inputRef.current) inputRef.current.value = typed ?? ''
+      return
+    }
+    if (event.key === 'Escape') setSuggestOpen(false)
+  }
+
   const onSubmit = (event: TargetedSubmitEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const query = inputRef.current?.value.trim()
-    if (query) navigate(`/results?search_query=${encodeURIComponent(query)}`)
+    submitQuery(inputRef.current?.value ?? '')
   }
 
   return (
@@ -273,12 +371,52 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
             key={currentQuery ?? ''}
             ref={inputRef}
             name='search_query'
-            type='search'
+            /* `type='search'` renders a native clear affordance that steals the
+               Escape key from the listbox, so the combobox uses a text input. */
+            type='text'
             placeholder='Search'
             aria-label='Search'
             defaultValue={currentQuery}
             autoComplete='off'
+            role='combobox'
+            aria-expanded={suggestions.length > 0}
+            aria-controls='search-suggestions'
+            aria-autocomplete='list'
+            aria-activedescendant={activeSuggestion === -1 ? undefined : `suggestion-${activeSuggestion}`}
+            onInput={(event: TargetedEvent<HTMLInputElement>) => {
+              setTyped(event.currentTarget.value)
+              setSuggestOpen(true)
+              setActiveSuggestion(-1)
+            }}
+            onFocus={() => setSuggestOpen(true)}
+            /* A blur that lands on a suggestion would close the list before the
+               click resolves, so the commit runs on pointerdown below and this
+               only has to outlive the pointer. */
+            onBlur={() => setTimeout(() => setSuggestOpen(false), 120)}
+            onKeyDown={onSearchKeyDown}
           />
+          {suggestions.length > 0
+            ? (
+              <ul className='suggestions' id='search-suggestions' role='listbox'>
+                {suggestions.map((suggestion, index) => (
+                  <li
+                    key={suggestion}
+                    id={`suggestion-${index}`}
+                    role='option'
+                    aria-selected={index === activeSuggestion}
+                    className={index === activeSuggestion ? 'suggestion active' : 'suggestion'}
+                    onPointerDown={(event: TargetedEvent<HTMLLIElement>) => {
+                      event.preventDefault()
+                      submitQuery(suggestion)
+                    }}
+                  >
+                    <Search size={16} strokeWidth={1.5} />
+                    {suggestion}
+                  </li>
+                ))}
+              </ul>
+            )
+            : undefined}
         </div>
         <button type='submit' className='search-button' aria-label='Search'>
           <Search size={24} strokeWidth={1.5} />
