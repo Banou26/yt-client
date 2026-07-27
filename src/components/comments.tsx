@@ -1,7 +1,7 @@
-import type { CommentSort, CommentsQuery } from '../generated/graphql'
+import type { CommentRepliesQuery, CommentSort, CommentsQuery } from '../generated/graphql'
 
 import { css } from '@emotion/react'
-import { ListFilter, ThumbsDown, ThumbsUp } from 'lucide-react'
+import { ChevronDown, ChevronUp, ListFilter, ThumbsDown, ThumbsUp } from 'lucide-react'
 import { useState } from 'preact/hooks'
 import { useQuery } from 'urql'
 import { Link } from 'wouter'
@@ -12,6 +12,7 @@ import { Menu, MenuItem } from './ui/menu'
 import { useInfiniteFeed } from './use-infinite-feed'
 
 type CommentPage = CommentsQuery['comments']
+type RepliesPage = CommentRepliesQuery['commentReplies']
 
 const COMMENTS_QUERY = gql(`
   query Comments($videoId: ID!, $sort: CommentSort, $cursor: String) {
@@ -23,6 +24,7 @@ const COMMENTS_QUERY = gql(`
         publishedText
         likeCountText
         replyCount
+        repliesCursor
         isPinned
         isHearted
         isCreator
@@ -223,6 +225,60 @@ const style = css`
     cursor: default;
   }
 
+  .replies-block {
+    margin-top: 0.4rem;
+  }
+
+  /* A disclosure rather than a label: it was inert text before, which read as a
+     count that ought to be clickable and was not. */
+  .replies {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    height: 3.2rem;
+    padding: 0 1.2rem;
+    border: none;
+    border-radius: 1.6rem;
+    background: transparent;
+    color: var(--accent);
+    font-size: 1.4rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  .replies:hover {
+    background: var(--accent-hover);
+  }
+
+  .reply-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1.6rem;
+    margin-top: 0.8rem;
+    /* Indented to the depth of the parent's avatar column, so a reply reads as
+       hanging off the comment above it rather than as a sibling. */
+    padding-left: 2.4rem;
+  }
+
+  .reply {
+    display: flex;
+    gap: 1.2rem;
+  }
+
+  .reply .avatar {
+    width: 2.4rem;
+    height: 2.4rem;
+    font-size: 1.1rem;
+  }
+
+  .name.creator {
+    padding: 0.2rem 0.6rem;
+    border-radius: 1rem;
+    background: var(--bg-inverse);
+    color: var(--text-inverse);
+  }
+
   .disabled-notice,
   .more-error {
     margin: 2.4rem 0 0;
@@ -230,6 +286,113 @@ const style = css`
     color: var(--text-secondary);
   }
 `
+
+const REPLIES_QUERY = gql(`
+  query CommentReplies($cursor: String!) {
+    commentReplies(cursor: $cursor) {
+      items {
+        id
+        text
+        runs { text url videoId startSeconds browseId }
+        publishedText
+        likeCountText
+        isHearted
+        isCreator
+        isMember
+        author { id name avatar isVerified }
+      }
+      cursor
+    }
+  }
+`)
+
+/**
+ * One thread's replies, collapsed until asked for.
+ *
+ * Mounted only when the comment actually has replies, and the query is paused
+ * until the row is expanded: a page of comments is dozens of threads, and
+ * fetching every one of them eagerly would be dozens of tunneled round trips
+ * for rows nobody opened.
+ */
+const Replies = (
+  { cursor, count, videoId }: { cursor: string, count?: number | null, videoId: string },
+) => {
+  const [open, setOpen] = useState(false)
+  const [loaded, setLoaded] = useState<RepliesPage[]>([])
+  const [{ data, error, fetching }] = useQuery({
+    query: REPLIES_QUERY,
+    variables: { cursor: loaded[loaded.length - 1]?.cursor ?? cursor },
+    pause: !open,
+  })
+  const page = data?.commentReplies
+  const { items, cursor: next } = useInfiniteFeed({
+    pages: page ? [...loaded, page] : loaded,
+    key: reply => reply.id,
+  })
+  const label = count === 1 ? '1 reply' : `${count ?? ''} replies`.trim()
+
+  return (
+    <div className='replies-block'>
+      <button
+        type='button'
+        className='replies'
+        aria-expanded={open}
+        onClick={() => setOpen(value => !value)}
+      >
+        {open ? <ChevronUp size={16} strokeWidth={2} /> : <ChevronDown size={16} strokeWidth={2} />}
+        {label}
+      </button>
+      {open
+        ? (
+          <div className='reply-list'>
+            {items.map(reply => (
+              <div className='reply' key={reply.id}>
+                {reply.author
+                  ? (
+                    <Link
+                      href={`/channel/${reply.author.id}`}
+                      className={reply.author.avatar ? 'avatar' : 'avatar fallback'}
+                      aria-label={reply.author.name}
+                    >
+                      {reply.author.avatar
+                        ? <img src={reply.author.avatar} alt='' loading='lazy' />
+                        : reply.author.name.slice(0, 1).toUpperCase()}
+                    </Link>
+                  )
+                  : <span className='avatar fallback'>?</span>}
+                <div className='body'>
+                  <div className='byline'>
+                    {reply.author
+                      ? <span className={reply.isCreator ? 'name creator' : 'name'}>{reply.author.name}</span>
+                      : undefined}
+                    {reply.publishedText ? <span className='age'>{reply.publishedText}</span> : undefined}
+                  </div>
+                  {reply.runs.length > 0
+                    ? <RichText className='text' runs={reply.runs} videoId={videoId} />
+                    : <div className='text'>{reply.text}</div>}
+                  {reply.likeCountText ? <div className='age'>{reply.likeCountText}</div> : undefined}
+                </div>
+              </div>
+            ))}
+            {fetching ? <div className='age'>Loading replies…</div> : undefined}
+            {error && items.length === 0 ? <div className='age'>Could not load replies.</div> : undefined}
+            {next && !fetching
+              ? (
+                <button
+                  type='button'
+                  className='replies'
+                  onClick={() => setLoaded(loaded[loaded.length - 1] === page ? loaded : [...loaded, page!])}
+                >
+                  Show more replies
+                </button>
+              )
+              : undefined}
+          </div>
+        )
+        : undefined}
+    </div>
+  )
+}
 
 export const Comments = ({ videoId, commentCountText }: { videoId: string, commentCountText?: string | null }) => {
   const [sort, setSort] = useState<CommentSort>('TOP')
@@ -330,9 +493,11 @@ export const Comments = ({ videoId, commentCountText }: { videoId: string, comme
                 </button>
                 <button type='button' className='reply'>Reply</button>
               </div>
-              {comment.replyCount
-                ? <div className='replies'>{comment.replyCount === 1 ? '1 reply' : `${comment.replyCount} replies`}</div>
-                : undefined}
+              {comment.repliesCursor
+                ? <Replies cursor={comment.repliesCursor} count={comment.replyCount} videoId={videoId} />
+                : comment.replyCount
+                  ? <div className='replies'>{comment.replyCount === 1 ? '1 reply' : `${comment.replyCount} replies`}</div>
+                  : undefined}
             </div>
           </div>
         ))}

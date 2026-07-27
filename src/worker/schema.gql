@@ -298,6 +298,8 @@ type Comment {
   replyCount: Int
   isPinned: Boolean
   isHearted: Boolean
+  # Present only when the comment has replies. Pass it to `commentReplies`.
+  repliesCursor: String
 }
 
 type CommentPage {
@@ -404,6 +406,9 @@ type Query {
   # A cursor is bound to the sort that minted it: switching order has to start a
   # new feed rather than page the previous ordering's results.
   comments(videoId: ID!, sort: CommentSort, cursor: String): CommentPage!
+  # Replies to one comment. The cursor comes from `Comment.repliesCursor` and
+  # names its thread, so no video or comment id is needed alongside it.
+  commentReplies(cursor: String!): CommentPage!
   # Signed-in only, like `subscriptions` and `history`: the library aggregation
   # browse is refused before the network call when signed out.
   playlists(cursor: String): PlaylistListPage!

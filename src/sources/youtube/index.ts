@@ -2,7 +2,7 @@ import type { Source, SourceChannel, SourceChannelPage, SourceChannelTab, Source
 
 import { Innertube } from 'youtubei.js/web'
 
-import { normalizeChannel, normalizeCommentThread, normalizeFeedChannel, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizeChannelAbout, normalizeCommunityPost, normalizeSearchChannel, normalizeSession, normalizeShortsLockup, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
+import { normalizeChannel, normalizeCommentThread, normalizeCommentView, normalizeFeedChannel, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizeChannelAbout, normalizeCommunityPost, normalizeSearchChannel, normalizeSession, normalizeShortsLockup, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
 
 type Feed = {
   videos: Iterable<unknown>
@@ -89,6 +89,22 @@ type ChannelFeed = Feed & {
 // rather than `videos`, which pageItems never reads.
 type PostsFeed = Feed & {
   posts?: Iterable<unknown>
+}
+
+// The two shapes the replies path needs off the raw nodes. They stay here
+// rather than in normalize.ts because they are LIVE nodes: `endpoint.call`
+// reaches back into the client, which a pure normalizer must not do.
+type ContinuationNode = {
+  endpoint?: { call(actions: unknown, args: { parse: true }): Promise<unknown> }
+  button?: { endpoint?: { call(actions: unknown, args: { parse: true }): Promise<unknown> } }
+}
+
+type CommentThreadNode = {
+  comment_replies_data?: { contents?: Iterable<unknown> } | null
+}
+
+type ContinuationResponse = {
+  on_response_received_endpoints_memo?: Map<string, unknown[]>
 }
 
 type CommentsFeed = {
@@ -246,7 +262,12 @@ const createContinuations = <Page>() => {
     return entry.result
   }
 
-  return { register, resolve }
+  // The kind a cursor was minted under. Needed by the one caller that receives
+  // a cursor WITHOUT knowing its feed: a replies cursor names its own thread,
+  // so commentReplies has no id argument to rebuild the kind from.
+  const kindOf = (cursor: string) => entries.get(cursor)?.kind
+
+  return { register, resolve, kindOf }
 }
 
 // youtubei.js Text instances stringify through toString; feed nodes hand back
@@ -502,9 +523,53 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
     return result
   }
 
+  /* Replies live behind a continuation whose api path is carried ON the
+     endpoint (NavigationEndpoint.call reads metadata.api_url, which comes from
+     the response and is not guessable), so the endpoint has to be captured here
+     while the parsed thread is still in hand. Registering it as an ordinary
+     cursor is what lets commentPage keep discarding the CommentThread objects:
+     the closure holds the one endpoint it needs rather than the whole node.
+
+     Nothing extra is fetched. The parser has already applied the comment entity
+     mutations to on_response_received_endpoints_memo (parser.js:221), so the
+     CommentViews that come back are fully populated. */
+  const repliesPage = (kind: string, memo: Map<string, unknown[]> | undefined): SourceCommentPage => {
+    const result: SourceCommentPage = {
+      items: (memo?.get('CommentView') ?? []).map(normalizeCommentView).filter((comment) => comment !== undefined),
+    }
+    const next = (memo?.get('ContinuationItem') ?? [])[0] as ContinuationNode | undefined
+    // A replies continuation hangs its next page off a "Load more" BUTTON
+    // rather than off the item's own endpoint, which is where the first page
+    // came from.
+    const button = next?.button?.endpoint ?? next?.endpoint
+    if (button) {
+      result.cursor = commentContinuations.register(kind, async () => {
+        const response = await button.call((await client).actions, { parse: true }) as ContinuationResponse
+        return repliesPage(kind, response.on_response_received_endpoints_memo)
+      })
+    }
+    return result
+  }
+
   const commentPage = (kind: string, comments: CommentsFeed): SourceCommentPage => {
     const result: SourceCommentPage = {
-      items: [...comments.contents].map(normalizeCommentThread).filter((comment) => comment !== undefined),
+      items: [...comments.contents].flatMap((node) => {
+        const comment = normalizeCommentThread(node)
+        if (!comment) return []
+        const thread = node as CommentThreadNode
+        const continuation = [...(thread.comment_replies_data?.contents ?? [])]
+          .find((item) => (item as ContinuationNode).endpoint !== undefined) as ContinuationNode | undefined
+        if (!continuation?.endpoint) return [comment]
+        const repliesKind = `replies:${comment.id}`
+        const endpoint = continuation.endpoint
+        return [{
+          ...comment,
+          repliesCursor: commentContinuations.register(repliesKind, async () => {
+            const response = await endpoint.call((await client).actions, { parse: true }) as ContinuationResponse
+            return repliesPage(repliesKind, response.on_response_received_endpoints_memo)
+          }),
+        }]
+      }),
       // The header count is exact, unlike the rounded teaser /next carries on
       // WatchMeta, which the UI had to read with a regex.
       countText: text(comments.header?.comments_count) ?? text(comments.header?.count),
@@ -723,6 +788,19 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
       }),
       id,
     ),
+    // No videoId or comment id argument: the cursor was minted for exactly one
+    // thread and already names it.
+    commentReplies: async (cursor) => {
+      const kind = commentContinuations.kindOf(cursor)
+      // A cursor that exists but belongs to a comment LIST is a different
+      // mistake from one that does not exist at all, and only the first is
+      // worth its own message: an unknown cursor is reported by resolve() with
+      // the same wording every other feed uses.
+      if (kind !== undefined && !kind.startsWith('replies:')) {
+        throw new Error(`youtube: continuation ${cursor} belongs to ${kind}, not a reply thread`)
+      }
+      return commentContinuations.resolve(kind ?? 'replies:unknown', cursor)
+    },
     comments: async (videoId, sort, cursor) => {
       // The sort is part of the kind: a cursor minted under Top cannot page
       // Newest, and the two orderings interleave into nonsense if it does.

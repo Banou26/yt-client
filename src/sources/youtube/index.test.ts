@@ -503,7 +503,11 @@ describe('youtube source', () => {
   // which reads to the user as a feed that jumps back to page one. These cases
   // pin the position: the leading arguments listed here must be exactly the
   // arguments that come before the cursor.
-  const CURSOR_CASES: Record<keyof typeof SOURCE_CURSOR_ARGUMENT, string[]> = {
+  /* commentReplies is deliberately absent: this table encodes "leading
+     arguments, then the cursor", and its ONLY argument is the cursor. There is
+     no first-page call to make before one can be rejected, so it gets its own
+     test below rather than a fake entry here. */
+  const CURSOR_CASES: Record<Exclude<keyof typeof SOURCE_CURSOR_ARGUMENT, 'commentReplies'>, string[]> = {
     home: [undefined as unknown as string],
     subscriptions: [],
     history: [],
@@ -821,7 +825,26 @@ describe('youtube source', () => {
   })
 
   it('covers every cursored method declared to runtime.ts', () => {
-    expect(Object.keys(CURSOR_CASES).sort()).toEqual(Object.keys(SOURCE_CURSOR_ARGUMENT).sort())
+    // The exclusion is listed rather than assumed, so a method dropped from the
+    // table by accident still fails here. commentReplies is covered by its own
+    // test: its only argument is the cursor, so there are no leading arguments
+    // for the table to pin and no first-page call to make first.
+    const covered = [...Object.keys(CURSOR_CASES), 'commentReplies']
+    expect(covered.sort()).toEqual(Object.keys(SOURCE_CURSOR_ARGUMENT).sort())
+  })
+
+  it('takes only a replies cursor, and says so when handed another feed\'s', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    // Unknown cursors report the same way every other feed reports them.
+    await expect(source.commentReplies('youtube:bogus')).rejects.toThrow('unknown continuation')
+    // A REAL cursor from the comment list is a different mistake: replies and
+    // the list they hang off page different things through one registry.
+    const list = await source.comments('abc')
+    expect(list.cursor).toBeTruthy()
+    await expect(source.commentReplies(list.cursor!)).rejects.toThrow('not a reply thread')
   })
 
   it('only lets a cursored read opt out of replay through a cursor argument', () => {

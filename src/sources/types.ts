@@ -204,6 +204,9 @@ export type SourceComment = {
   isDisliked?: boolean
   isCreator?: boolean
   isMember?: boolean
+  // A cursor into the same registry every other page uses, minted only for a
+  // comment that actually has replies. Opaque to the caller, like all cursors.
+  repliesCursor?: string
 }
 
 export type SourceCommentSort = 'TOP' | 'NEWEST'
@@ -288,6 +291,11 @@ export type Source = {
   // A cursor is bound to the sort that minted it: switching order has to start
   // a new feed rather than page the previous ordering's results.
   comments(videoId: string, sort?: SourceCommentSort, cursor?: string): Promise<SourceCommentPage>
+  // Replies page through the same cursor mechanism as everything else: the
+  // cursor comes off SourceComment.repliesCursor and its own page carries the
+  // next one. There is no videoId argument because the cursor already names
+  // exactly which thread it belongs to.
+  commentReplies(cursor: string): Promise<SourceCommentPage>
   // The library aggregation is signed-in only; a single playlist is not, so a
   // public one opens anonymously.
   playlists(cursor?: string): Promise<SourcePlaylistListPage>
@@ -334,6 +342,7 @@ export const SOURCE_METHODS = [
   'communityPosts',
   'watch',
   'comments',
+  'commentReplies',
   'playlists',
   'playlist',
   'session',
@@ -372,6 +381,7 @@ export const SOURCE_CURSOR_ARGUMENT = {
   search: 2,
   channel: 4,
   comments: 2,
+  commentReplies: 0,
   communityPosts: 1,
   playlists: 0,
   playlist: 1,
@@ -401,6 +411,7 @@ export const SOURCE_REPLAY = {
   communityPosts: 'unless-cursor',
   watch: 'always',
   comments: 'unless-cursor',
+  commentReplies: 'unless-cursor',
   playlists: 'unless-cursor',
   playlist: 'unless-cursor',
   session: 'always',
