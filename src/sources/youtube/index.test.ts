@@ -15,6 +15,19 @@ type FakeComments = {
   getContinuation(): Promise<FakeComments>
 }
 
+type FakePlaylist = {
+  info: { title: string, total_items: string }
+  memo: Map<string, unknown[]>
+  has_continuation: boolean
+  getContinuation(): Promise<FakePlaylist>
+}
+
+type FakePlaylists = {
+  playlists: unknown[]
+  has_continuation: boolean
+  getContinuation(): Promise<FakePlaylists>
+}
+
 const feed = (id: string, next?: () => Promise<FakeFeed>): FakeFeed => ({
   videos: [{ video_id: id, title: { text: id } }],
   has_continuation: Boolean(next),
@@ -27,17 +40,43 @@ const comments = (id: string, next?: () => Promise<FakeComments>): FakeComments 
   getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
 })
 
+// The playlist rows live in the memo rather than behind the `items` getter,
+// which throws on any node outside its union.
+const playlist = (id: string, next?: () => Promise<FakePlaylist>): FakePlaylist => ({
+  info: { title: 'My playlist', total_items: '2 videos' },
+  memo: new Map<string, unknown[]>([['PlaylistVideo', [
+    { id, title: { text: id }, index: { text: '1' }, set_video_id: `set-${id}` },
+  ]]]),
+  has_continuation: Boolean(next),
+  getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
+})
+
+const playlists = (id: string, next?: () => Promise<FakePlaylists>): FakePlaylists => ({
+  playlists: [{ id, title: { text: id }, video_count: { text: '3 videos' } }],
+  has_continuation: Boolean(next),
+  getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
+})
+
+type FakeCall = { endpoint: string, args?: Record<string, unknown> }
+
 const createFakeClient = () => {
   // Writes are verified by what reached the wire, so every outbound call is
   // recorded: the point of these tests is which endpoint fired, not the reply.
   const calls: string[] = []
+  // The endpoint alone is not enough for a playlist edit: every one of them
+  // POSTs to browse/edit_playlist and differs only in the body, which is also
+  // where youtubei.js's own casing defects live.
+  const payloads: FakeCall[] = []
   return {
     calls,
+    payloads,
     getHomeFeed: async () => feed('first', async () => feed('second')),
     search: async () => feed('search'),
     getBasicInfo: async () => ({ basic_info: undefined }),
     getChannel: async () => ({ ...feed('channel'), metadata: { external_id: 'c', title: 'Channel' } }),
     getComments: async () => comments('top', async () => comments('next')),
+    getPlaylists: async () => playlists('PLone', async () => playlists('PLtwo')),
+    getPlaylist: async (id: string) => playlist(`${id}-first`, async () => playlist(`${id}-second`)),
     getSubscriptionsFeed: async () => feed('sub'),
     getHistory: async () => ({
       ...feed('watched'),
@@ -67,12 +106,36 @@ const createFakeClient = () => {
       }),
     },
     actions: {
-      execute: async (endpoint: string) => {
+      execute: async (endpoint: string, args?: Record<string, unknown>) => {
         calls.push(endpoint)
+        payloads.push({ endpoint, args })
+        const memo: [string, unknown[]][] = [
+          ['VideoPrimaryInfo', [{ view_count: { view_count: { text: '42 views' } } }]],
+        ]
+        // The queue panel only comes back when /next was asked for one, and it
+        // rides on the same TwoColumnWatchNextResults the memo already holds.
+        if (args?.playlistId) {
+          memo.push(['TwoColumnWatchNextResults', [{
+            playlist: {
+              id: args.playlistId,
+              title: 'Queue',
+              author: { name: 'Owner' },
+              contents: [
+                { video_id: 'q1', title: { text: 'First' }, thumbnail: [{ url: 'q1.jpg', width: 320 }], duration: { seconds: 61 } },
+                { primary: { video_id: 'q2', title: { text: 'Second' } } },
+                { playlist_video: {} },
+              ],
+              current_index: args.playlistIndex ?? 0,
+              is_infinite: false,
+            },
+          }]])
+        }
         return {
-          contents_memo: new Map<string, unknown[]>([
-            ['VideoPrimaryInfo', [{ view_count: { view_count: { text: '42 views' } } }]],
-          ]),
+          success: true,
+          // `playlistId` is optional on the wire: playlist/create is the only
+          // call here that returns one, and it is never validated upstream.
+          data: { playlistId: 'PLnew' } as { playlistId?: string },
+          contents_memo: new Map<string, unknown[]>(memo),
         }
       },
     },
@@ -161,6 +224,61 @@ describe('youtube source', () => {
     await expect(source.comments('other', first.cursor)).rejects.toThrow('belongs to comments:abc')
   })
 
+  it('pages a playlist with cursors scoped to that playlist', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    const first = await source.playlist('PL1')
+    expect(first.items[0]?.video.id).toBe('PL1-first')
+    expect(first.items[0]?.setVideoId).toBe('set-PL1-first')
+    expect(first.items[0]?.index).toBe(1)
+    const second = await source.playlist('PL1', first.cursor)
+    expect(second.items[0]?.video.id).toBe('PL1-second')
+    // A continuation response carries no header, so the playlist has to be the
+    // one read from the first page rather than an entity stripped of its title.
+    expect(second.playlist).toEqual(first.playlist)
+    await expect(source.playlist('PL2', first.cursor)).rejects.toThrow('belongs to playlist:PL1')
+  })
+
+  it('reads playlist details off the first page and covers it with the first row', async () => {
+    const client = createFakeClient()
+    client.getPlaylist = async (id: string) => ({
+      ...playlist(id),
+      memo: new Map<string, unknown[]>([['PlaylistVideo', [
+        { id: 'row', title: { text: 'Row' }, thumbnails: [{ url: 'cover', width: 640 }] },
+      ]]]),
+    })
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    // The playlist id is nowhere in the response, so it can only come from the
+    // id the caller browsed with.
+    await expect(source.playlist('PL1')).resolves.toMatchObject({
+      playlist: { id: 'PL1', title: 'My playlist', videoCountText: '2 videos', thumbnail: 'cover' },
+    })
+  })
+
+  it('opens a playlist signed out and gates only the playlist library', async () => {
+    const client = createFakeClient()
+    client.session.logged_in = false
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await expect(source.playlists()).rejects.toThrow('sign in to see your playlists')
+    await expect(source.playlist('PL1')).resolves.toMatchObject({ playlist: { id: 'PL1' } })
+  })
+
+  it('pages the playlist library', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    const first = await source.playlists()
+    expect(first.items).toEqual([
+      { id: 'PLone', title: 'PLone', thumbnail: undefined, videoCountText: '3 videos', channel: undefined },
+    ])
+    const second = await source.playlists(first.cursor)
+    expect(second.items[0]?.id).toBe('PLtwo')
+    expect(second.cursor).toBeUndefined()
+  })
+
   it('reports a signed-out session without hitting the account API', async () => {
     const client = createFakeClient()
     let called = false
@@ -204,6 +322,8 @@ describe('youtube source', () => {
     search: ['query'],
     channel: ['c'],
     comments: ['abc'],
+    playlists: [],
+    playlist: ['PL1'],
   }
 
   for (const [method, leading] of Object.entries(CURSOR_CASES)) {
@@ -228,6 +348,177 @@ describe('youtube source', () => {
     await source.rateVideo('abc', 'DISLIKE')
     await source.rateVideo('abc', 'INDIFFERENT')
     expect(client.calls).toEqual(['/like/like', '/like/dislike', '/like/removelike'])
+  })
+
+  it('carries playlist context into the /next call and reads the queue back', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    const meta = await source.watch('abc', 'PL1', 0)
+    // `playlistIndex` is the key /next reads. `index` is only an alias inside
+    // youtubei.js's WatchNextEndpoint.buildRequest, which execute never runs, so
+    // sending it would ship a key InnerTube ignores and silently start the
+    // queue at the wrong row.
+    expect(client.payloads[0]?.args).toMatchObject({ videoId: 'abc', playlistId: 'PL1', playlistIndex: 0 })
+    expect(client.payloads[0]?.args).not.toHaveProperty('index')
+    expect(meta?.playlist).toMatchObject({ id: 'PL1', title: 'Queue', author: 'Owner', currentIndex: 0, isInfinite: false })
+    // A wrapper's `primary` is unwrapped, and the mix teaser tail, which
+    // carries no video at all, drops out instead of becoming an empty row.
+    expect(meta?.playlist?.items.map((video) => video.id)).toEqual(['q1', 'q2'])
+    expect(meta?.playlist?.items[0]).toMatchObject({ thumbnail: 'q1.jpg', durationSeconds: 61 })
+  })
+
+  it('leaves the playlist keys off a watch with no playlist context', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    const meta = await source.watch('abc')
+    expect(client.payloads[0]?.args).not.toHaveProperty('playlistId')
+    expect(client.payloads[0]?.args).not.toHaveProperty('playlistIndex')
+    expect(meta?.playlist).toBeUndefined()
+  })
+
+  it('edits playlist rows through one endpoint, addressing entries by set video id', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await source.addToPlaylist('PL1', ['a', 'b'])
+    await source.removeFromPlaylist('PL1', ['set-a'])
+    await source.movePlaylistItem('PL1', 'set-b', 'set-a')
+    await source.movePlaylistItem('PL1', 'set-b')
+    expect(client.calls).toEqual(Array.from({ length: 4 }, () => 'browse/edit_playlist'))
+    expect(client.payloads.map((call) => call.args)).toEqual([
+      {
+        playlistId: 'PL1',
+        actions: [
+          { action: 'ACTION_ADD_VIDEO', addedVideoId: 'a' },
+          { action: 'ACTION_ADD_VIDEO', addedVideoId: 'b' },
+        ],
+      },
+      { playlistId: 'PL1', actions: [{ action: 'ACTION_REMOVE_VIDEO', setVideoId: 'set-a' }] },
+      {
+        playlistId: 'PL1',
+        actions: [{ action: 'ACTION_MOVE_VIDEO_AFTER', setVideoId: 'set-b', movedSetVideoIdPredecessor: 'set-a' }],
+      },
+      // No predecessor asks for the first position, so the key is omitted
+      // rather than sent as an empty target.
+      { playlistId: 'PL1', actions: [{ action: 'ACTION_MOVE_VIDEO_AFTER', setVideoId: 'set-b' }] },
+    ])
+  })
+
+  it('renames through a payload that actually carries the playlist id', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await expect(source.renamePlaylist('PL1', 'New name')).resolves.toMatchObject({ id: 'PL1', title: 'New name' })
+    // youtubei.js's setName writes the id as snake_case `playlist_id`, which
+    // PlaylistEditEndpoint drops on its way to the wire, so the rename ships
+    // with no target at all. The id has to go out as camelCase `playlistId`.
+    expect(client.payloads[0]).toEqual({
+      endpoint: 'browse/edit_playlist',
+      args: { playlistId: 'PL1', actions: [{ action: 'ACTION_SET_PLAYLIST_NAME', playlistName: 'New name' }] },
+    })
+  })
+
+  it('sets a description and a privacy through the same edit endpoint', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await expect(source.setPlaylistDescription('PL1', 'About')).resolves.toMatchObject({ id: 'PL1', description: 'About' })
+    await expect(source.setPlaylistPrivacy('PL1', 'UNLISTED')).resolves.toMatchObject({ id: 'PL1', privacy: 'UNLISTED' })
+    expect(client.payloads.map((call) => call.args?.actions)).toEqual([
+      [{ action: 'ACTION_SET_PLAYLIST_DESCRIPTION', playlistDescription: 'About' }],
+      [{ action: 'ACTION_SET_PLAYLIST_PRIVACY', playlistPrivacy: 'UNLISTED' }],
+    ])
+  })
+
+  it('creates a playlist through the endpoint so privacy and description survive', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    // The manager's create() sends only a title and video ids; the endpoint it
+    // calls copies privacyStatus and description too, and creation is the one
+    // attested way to set privacy in this version.
+    await expect(source.createPlaylist('Mix', ['a'], 'PRIVATE', 'Notes')).resolves.toEqual({
+      id: 'PLnew',
+      title: 'Mix',
+      description: 'Notes',
+      privacy: 'PRIVATE',
+    })
+    expect(client.payloads[0]).toEqual({
+      endpoint: 'playlist/create',
+      args: { title: 'Mix', videoIds: ['a'], privacyStatus: 'PRIVATE', description: 'Notes' },
+    })
+  })
+
+  it('refuses a created playlist whose id did not come back', async () => {
+    const client = createFakeClient()
+    client.actions.execute = async () => ({
+      success: true,
+      data: {} as { playlistId?: string },
+      contents_memo: new Map<string, unknown[]>(),
+    })
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    // The id is the only server-generated value in the write path and it is
+    // optional on the wire. Without it the entity has no cache key, so the
+    // caller has to reread the library rather than merge a stub.
+    await expect(source.createPlaylist('Mix')).rejects.toThrow('its id did not come back')
+  })
+
+  it('deletes through the path youtubei.js cannot reach', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    // client.playlist.delete throws before the network in 17.0.1: it builds a
+    // raw key with no registered endpoint class, so no api_url is ever found.
+    await expect(source.deletePlaylist('PL1')).resolves.toBe('PL1')
+    expect(client.payloads[0]).toEqual({ endpoint: 'playlist/delete', args: { playlistId: 'PL1' } })
+  })
+
+  it('carries a read playlist forward into what a write resolves to', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await source.playlist('PL1')
+    // Playlist.title is non-null in the schema and no edit endpoint hands a
+    // playlist back, so a write on an already-read playlist has to resolve with
+    // the title it knows rather than blanking the cached entity.
+    await expect(source.addToPlaylist('PL1', ['a'])).resolves.toMatchObject({ id: 'PL1', title: 'My playlist' })
+  })
+
+  it('does not POST an edit for an empty selection', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await source.addToPlaylist('PL1', [])
+    await source.removeFromPlaylist('PL1', [])
+    expect(client.payloads).toEqual([])
+  })
+
+  it('refuses playlist writes when signed out', async () => {
+    const client = createFakeClient()
+    client.session.logged_in = false
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    // browse/edit_playlist carries no browseId, and youtubei.js only runs its
+    // signed-in precheck for payloads that have one, so nothing upstream would
+    // stop these.
+    await expect(source.addToPlaylist('PL1', ['a'])).rejects.toThrow('sign in to save to a playlist')
+    await expect(source.removeFromPlaylist('PL1', ['set-a'])).rejects.toThrow('sign in to change a playlist')
+    await expect(source.renamePlaylist('PL1', 'x')).rejects.toThrow('sign in to rename a playlist')
+    await expect(source.setPlaylistDescription('PL1', 'x')).rejects.toThrow('sign in to change a playlist description')
+    await expect(source.setPlaylistPrivacy('PL1', 'PRIVATE')).rejects.toThrow('sign in to change a playlist privacy')
+    await expect(source.movePlaylistItem('PL1', 'set-a')).rejects.toThrow('sign in to reorder a playlist')
+    await expect(source.createPlaylist('Mix')).rejects.toThrow('sign in to create a playlist')
+    await expect(source.deletePlaylist('PL1')).rejects.toThrow('sign in to delete a playlist')
+    expect(client.payloads).toEqual([])
+  })
+
+  it('classifies every playlist write as non-replayable', () => {
+    // runtime.ts replays a failed call against a rebuilt engine unless the
+    // policy forbids it. A replayed edit adds the same video twice, or leaves a
+    // second playlist behind with the same title.
+    const writes = [
+      'addToPlaylist',
+      'removeFromPlaylist',
+      'createPlaylist',
+      'deletePlaylist',
+      'renamePlaylist',
+      'setPlaylistDescription',
+      'setPlaylistPrivacy',
+      'movePlaylistItem',
+    ] as const
+    for (const method of writes) expect(SOURCE_REPLAY[method]).toBe('never')
   })
 
   it('returns the channel with its new subscription state', async () => {

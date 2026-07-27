@@ -8,8 +8,10 @@ import Header from './components/header'
 import ErrorBoundary from './components/ui/error-boundary'
 import ChannelPage from './routes/channel'
 import FeedHistoryPage from './routes/feed-history'
+import FeedPlaylistsPage from './routes/feed-playlists'
 import FeedSubscriptionsPage from './routes/feed-subscriptions'
 import HomePage from './routes/home'
+import PlaylistPage from './routes/playlist'
 import SearchPage from './routes/search'
 import SignInPage from './routes/signin'
 import WatchPage from './routes/watch'
@@ -175,8 +177,12 @@ export const App = () => {
               <Route path='/' component={HomePage} />
               <Route path='/results' component={SearchPage} />
               <Route path='/watch' component={WatchPage} />
+              {/* No path param: the playlist and the position live in the query
+                  string, matching youtube.com. */}
+              <Route path='/playlist' component={PlaylistPage} />
               <Route path='/feed/subscriptions' component={FeedSubscriptionsPage} />
               <Route path='/feed/history' component={FeedHistoryPage} />
+              <Route path='/feed/playlists' component={FeedPlaylistsPage} />
               <Route path='/channel/:channelId' component={ChannelPage} />
               <Route path='/signin' component={SignInPage} />
               <Route path='/search/:query' component={LegacySearchRedirect} />

@@ -7,6 +7,7 @@ import { useLocation } from 'wouter'
 import type { NotificationLevel } from '../generated/graphql'
 
 import { gql } from '../generated'
+import { readable } from './format'
 import { MenuItem, Popup, useDismiss } from './ui/popup'
 import { showToast } from './ui/toast'
 
@@ -81,10 +82,6 @@ const LEVELS: { level: NotificationLevel, label: string, Icon: typeof Bell }[] =
   { level: 'PERSONALIZED', label: 'Personalized', Icon: Bell },
   { level: 'NONE', label: 'None', Icon: BellOff },
 ]
-
-// urql prefixes a GraphQL error message with its kind; the user only needs the
-// sentence the source wrote.
-const readable = (message: string) => message.replace(/^\[\w+]\s*/, '')
 
 export const SubscribeButton = (
   { channelId, subscribed, notificationLevel }: {

@@ -7,6 +7,7 @@ import { useQuery } from 'urql'
 import { useLocation } from 'wouter'
 
 import { useDocumentTitle } from '../app'
+import { readable } from '../components/format'
 import { FeedSentinel, useInfiniteFeed } from '../components/use-infinite-feed'
 import { VideoGrid } from '../components/video-grid'
 import { gql } from '../generated'
@@ -32,10 +33,6 @@ const SUBSCRIPTIONS_FEED_QUERY = gql(`
 `)
 
 type SubscriptionsPage = SubscriptionsFeedQuery['subscriptions']
-
-// urql prefixes a GraphQL error message with its kind; the user only needs the
-// sentence the source wrote.
-const readable = (message: string) => message.replace(/^\[\w+]\s*/, '')
 
 const style = css`
   padding: 2.4rem 1.6rem;

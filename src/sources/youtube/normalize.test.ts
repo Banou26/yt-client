@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { normalizeChannel, normalizeCommentThread, normalizeFeedVideo, normalizeLockupVideo, normalizeSession, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
+import { normalizeChannel, normalizeCommentThread, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizePlaylistPanelVideo, normalizeSession, normalizeVideoDetails, normalizeWatchMeta, normalizeWatchPlaylist } from './normalize'
 
 describe('youtube normalization', () => {
   it('normalizes feed videos', () => {
@@ -161,6 +161,187 @@ describe('youtube normalization', () => {
     })).toBeUndefined()
   })
 
+  it('normalizes a short lockup as a video and still refuses a collection', () => {
+    // One renderer fronts every kind of content. A Short plays through /watch
+    // like any other video, so rejecting by an explicit non-video list rather
+    // than by "not VIDEO" keeps it in the feed.
+    expect(normalizeLockupVideo({
+      content_id: 'abc',
+      content_type: 'SHORT',
+      metadata: { title: { text: 'A short' } },
+    })).toMatchObject({ id: 'abc', title: 'A short' })
+    expect(normalizeLockupVideo({
+      content_id: 'UC123',
+      content_type: 'CHANNEL',
+      metadata: { title: { text: 'A channel' } },
+    })).toBeUndefined()
+  })
+
+  it('normalizes a playlist lockup through its collection thumbnail', () => {
+    expect(normalizePlaylistLockup({
+      content_id: 'PL123',
+      content_type: 'PLAYLIST',
+      content_image: {
+        // The count badge hangs off primary_thumbnail, one hop deeper than on a
+        // video lockup, and reading content_image.overlays here would silently
+        // yield nothing.
+        primary_thumbnail: {
+          image: [{ url: 'cover', width: 640 }],
+          overlays: [{ badges: [{ text: '50 videos' }] }],
+        },
+      },
+      metadata: {
+        title: { text: 'Watch later' },
+        image: {
+          avatar: { image: [{ url: 'avatar', width: 68 }] },
+          renderer_context: { command_context: { on_tap: { payload: { browseId: 'UC123' } } } },
+        },
+        metadata: {
+          metadata_rows: [{ metadata_parts: [{ text: { text: 'Channel' } }] }],
+        },
+      },
+    })).toEqual({
+      id: 'PL123',
+      title: 'Watch later',
+      thumbnail: 'cover',
+      videoCountText: '50 videos',
+      channel: { id: 'UC123', name: 'Channel', avatar: 'avatar' },
+    })
+  })
+
+  it('drops lockups that are not playlists', () => {
+    expect(normalizePlaylistLockup({
+      content_id: 'abc',
+      content_type: 'VIDEO',
+      metadata: { title: { text: 'A video' } },
+    })).toBeUndefined()
+    expect(normalizePlaylistLockup({ content_type: 'PLAYLIST', metadata: {} })).toBeUndefined()
+    expect(normalizePlaylistLockup({})).toBeUndefined()
+  })
+
+  it('normalizes a grid playlist', () => {
+    expect(normalizeGridPlaylist({
+      id: 'PL123',
+      title: { text: 'Mixes' },
+      thumbnails: [
+        { url: 'small', width: 120 },
+        { url: 'large', width: 640 },
+      ],
+      video_count: { text: '12 videos' },
+      author: { id: 'UC123', name: 'Channel', thumbnails: [{ url: 'avatar', width: 68 }] },
+    })).toEqual({
+      id: 'PL123',
+      title: 'Mixes',
+      thumbnail: 'large',
+      videoCountText: '12 videos',
+      channel: { id: 'UC123', name: 'Channel', avatar: 'avatar' },
+    })
+  })
+
+  it('reads a legacy playlist byline that is a Text rather than an Author', () => {
+    expect(normalizeGridPlaylist({
+      id: 'PL123',
+      title: { text: 'Mixes' },
+      video_count_short: { text: '12' },
+      author: { text: 'Channel', endpoint: { payload: { browseId: 'UC123' } } },
+    })).toMatchObject({
+      videoCountText: '12',
+      channel: { id: 'UC123', name: 'Channel' },
+    })
+  })
+
+  it('drops playlist nodes without an id or a title', () => {
+    expect(normalizeGridPlaylist({ title: { text: 'Untitled' } })).toBeUndefined()
+    expect(normalizeGridPlaylist({ id: 'PL123', title: { toString: () => 'N/A' } })).toBeUndefined()
+    expect(normalizeGridPlaylist({})).toBeUndefined()
+  })
+
+  it('normalizes a playlist row with the slot id its edits need', () => {
+    expect(normalizePlaylistItem({
+      id: 'abc',
+      title: { text: 'Row title' },
+      index: { text: '3' },
+      set_video_id: 'slot-1',
+      video_info: { text: '1.2M views • 3 years ago' },
+      duration: { text: '10:00', seconds: 600 },
+      thumbnails: [{ url: 'thumb', width: 640 }],
+      author: { id: 'UC123', name: 'Channel' },
+    })).toEqual({
+      video: {
+        id: 'abc',
+        title: 'Row title',
+        thumbnail: 'thumb',
+        durationSeconds: 600,
+        viewCount: '1.2M views',
+        publishedText: '3 years ago',
+        channel: { id: 'UC123', name: 'Channel' },
+      },
+      setVideoId: 'slot-1',
+      index: 3,
+    })
+  })
+
+  it("drops a playlist row's placeholder author", () => {
+    // The row builds an Author unconditionally and fills both id and name with
+    // the literal 'N/A' when it carries no byline, which would otherwise render
+    // as a real channel behind a dead link.
+    expect(normalizePlaylistItem({
+      id: 'abc',
+      title: { text: 'Row title' },
+      author: { id: 'N/A', name: 'N/A' },
+    })?.video.channel).toBeUndefined()
+  })
+
+  it('drops playlist rows that are not entries of the playlist', () => {
+    expect(normalizePlaylistItem({
+      id: 'abc',
+      title: { text: 'Recommended' },
+      style: 'PLAYLIST_VIDEO_RENDERER_STYLE_RECOMMENDED_VIDEO',
+    })).toBeUndefined()
+    expect(normalizePlaylistItem({ title: { text: 'No id' } })).toBeUndefined()
+    expect(normalizePlaylistItem({})).toBeUndefined()
+  })
+
+  it('normalizes playlist details against the id the caller browsed with', () => {
+    expect(normalizePlaylistDetails({
+      info: {
+        title: 'My playlist',
+        description: 'What it holds',
+        author: { id: 'UC123', name: 'Channel', thumbnails: [{ url: 'avatar', width: 88 }] },
+        thumbnails: [{ url: 'cover', width: 640 }],
+        total_items: '25 videos',
+        views: '1,204 views',
+        last_updated: 'Updated today',
+        privacy: 'UNLISTED',
+        is_editable: true,
+        can_delete: true,
+        can_reorder: true,
+      },
+    }, 'PL123')).toEqual({
+      id: 'PL123',
+      title: 'My playlist',
+      description: 'What it holds',
+      thumbnail: 'cover',
+      videoCountText: '25 videos',
+      viewCountText: '1,204 views',
+      updatedText: 'Updated today',
+      privacy: 'UNLISTED',
+      isEditable: true,
+      canDelete: true,
+      canReorder: true,
+      channel: { id: 'UC123', name: 'Channel', avatar: 'avatar' },
+    })
+  })
+
+  it('treats absent playlist stats as absent rather than as the text N/A', () => {
+    // A continuation page has no header and no sidebar, so every stat
+    // stringifies to 'N/A' and the id is nowhere in the response at all.
+    expect(normalizePlaylistDetails({
+      info: { total_items: 'N/A', views: 'N/A', last_updated: 'N/A' },
+    }, 'PL123')).toEqual({ id: 'PL123', title: 'PL123' })
+    expect(normalizePlaylistDetails({}, 'PL123')).toEqual({ id: 'PL123', title: 'PL123' })
+  })
+
   it('normalizes watch metadata from a /next response memo', () => {
     const memo = new Map<string, unknown[]>([
       ['VideoPrimaryInfo', [{
@@ -213,6 +394,72 @@ describe('youtube normalization', () => {
         { id: 'rel2', title: 'Related two' },
       ],
     })
+  })
+
+  it('normalizes a queue row off its singular thumbnail field', () => {
+    // The field is named `thumbnail` but holds the whole array, so the feed
+    // normalizer's `thumbnails` read would find nothing here. The duration is
+    // already in seconds rather than a length badge.
+    expect(normalizePlaylistPanelVideo({
+      video_id: 'q1',
+      title: { text: 'Queue row' },
+      thumbnail: [{ url: 'small', width: 120 }, { url: 'large', width: 480 }],
+      duration: { text: '1:01', seconds: 61 },
+      author: 'Owner',
+      set_video_id: 'set-q1',
+    })).toEqual({ id: 'q1', title: 'Queue row', thumbnail: 'large', durationSeconds: 61 })
+  })
+
+  it('unwraps a queue row and drops the rows that carry no video', () => {
+    expect(normalizePlaylistPanelVideo({ primary: { video_id: 'q2', title: { text: 'Wrapped' } } }))
+      .toEqual({ id: 'q2', title: 'Wrapped', thumbnail: undefined, durationSeconds: undefined })
+    // The mix teaser tail has no video id at all.
+    expect(normalizePlaylistPanelVideo({ playlist_video: {} })).toBeUndefined()
+    // A missing length parses to NaN upstream rather than to an absent value.
+    expect(normalizePlaylistPanelVideo({
+      video_id: 'q3',
+      title: { text: 'No length' },
+      duration: { text: 'N/A', seconds: Number.NaN },
+    })).toMatchObject({ id: 'q3', durationSeconds: undefined })
+  })
+
+  it('reads the queue panel off the watch response container', () => {
+    expect(normalizeWatchMeta({
+      contents_memo: new Map([
+        ['TwoColumnWatchNextResults', [{
+          playlist: {
+            id: 'PL1',
+            title: 'My queue',
+            // A real playlist bylines with an Author, which has a `name` and no
+            // toString: stringifying it would give '[object Object]'.
+            author: { id: 'UC1', name: 'Owner' },
+            contents: [{ video_id: 'q1', title: { text: 'First' } }],
+            current_index: 0,
+            is_infinite: false,
+          },
+        }]],
+      ]),
+    }, 'q1')?.playlist).toEqual({
+      id: 'PL1',
+      title: 'My queue',
+      author: 'Owner',
+      items: [{ id: 'q1', title: 'First', thumbnail: undefined, durationSeconds: undefined }],
+      // 0-based, so position zero has to survive the guard.
+      currentIndex: 0,
+      isInfinite: false,
+    })
+  })
+
+  it('takes a mix byline off its Text node and reports the queue as infinite', () => {
+    expect(normalizeWatchPlaylist({
+      id: 'RD1',
+      title: 'Mix',
+      author: { text: 'YouTube' },
+      is_infinite: true,
+    })).toEqual({ id: 'RD1', title: 'Mix', author: 'YouTube', items: [], currentIndex: undefined, isInfinite: true })
+    // No panel at all is the ordinary case: a watch outside a playlist.
+    expect(normalizeWatchPlaylist(undefined)).toBeUndefined()
+    expect(normalizeWatchPlaylist({})).toBeUndefined()
   })
 
   it('returns undefined watch metadata without parsed contents', () => {

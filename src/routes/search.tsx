@@ -8,6 +8,7 @@ import { Link, useSearch } from 'wouter'
 import { useDocumentTitle } from '../app'
 import { formatDuration, formatMeta } from '../components/format'
 import { FeedSentinel, useInfiniteFeed } from '../components/use-infinite-feed'
+import { watchHrefFor } from '../components/video-card'
 import { gql } from '../generated'
 
 type ResultsPage = SearchResultsQuery['search']
@@ -217,7 +218,7 @@ const SearchPage = () => {
       {fetching && items.length === 0 ? <p className='status'>Searching…</p> : undefined}
       <div className='results'>
         {items.map(video => {
-          const watchHref = `/watch?v=${video.id}`
+          const watchHref = watchHrefFor(video.id)
           const duration = formatDuration(video.durationSeconds)
           const meta = formatMeta(video.viewCount, video.publishedText)
           const snippet = video.descriptionSnippet ?? video.description

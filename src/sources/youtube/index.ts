@@ -1,8 +1,8 @@
-import type { Source, SourceChannel, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourceSectionedVideoPage, SourceVideo, SourceVideoPage } from '../types'
+import type { Source, SourceChannel, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourcePlaylistListPage, SourcePlaylistPage, SourcePlaylistPrivacy, SourceSectionedVideoPage, SourceVideo, SourceVideoPage } from '../types'
 
 import { Innertube } from 'youtubei.js/web'
 
-import { normalizeChannel, normalizeCommentThread, normalizeFeedChannel, normalizeFeedVideo, normalizeLockupVideo, normalizeSession, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
+import { normalizeChannel, normalizeCommentThread, normalizeFeedChannel, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizeSession, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
 
 type Feed = {
   videos: Iterable<unknown>
@@ -45,6 +45,46 @@ type CommentsFeed = {
   getContinuation(): Promise<CommentsFeed>
 }
 
+// The library aggregation is a plain Feed, so the playlists it holds come off
+// the `playlists` getter rather than `videos`.
+type PlaylistsFeed = {
+  playlists?: Iterable<unknown>
+  has_continuation: boolean
+  getContinuation(): Promise<PlaylistsFeed>
+}
+
+// A single playlist exposes its rows through `items`, but that getter casts
+// every node the page carries and THROWS on anything outside its expected
+// union: one stray recommended video detonates the whole list. The memo is read
+// directly instead, which is the same set without the cast.
+type PlaylistFeed = {
+  info?: unknown
+  memo?: Map<string, unknown[]>
+  has_continuation: boolean
+  getContinuation(): Promise<PlaylistFeed>
+}
+
+// One edit endpoint backs every playlist mutation; the action name selects
+// which fields of this union are read. `browse/edit_playlist` forwards the
+// array verbatim, so an action it does not know is silently ignored rather than
+// rejected.
+type PlaylistEditAction = {
+  action: string
+  addedVideoId?: string
+  setVideoId?: string
+  movedSetVideoIdPredecessor?: string
+  playlistName?: string
+  playlistDescription?: string
+  playlistPrivacy?: SourcePlaylistPrivacy
+}
+
+// Without `parse: true` an action resolves to youtubei.js's Axios-shaped
+// wrapper around the UNPARSED response, so `data` is raw InnerTube JSON.
+type ApiResponse = {
+  success?: boolean
+  data?: { playlistId?: string }
+}
+
 export type YoutubeClient = {
   getHomeFeed(): Promise<HomeFeedResponse>
   getSubscriptionsFeed(): Promise<SectionedFeed>
@@ -54,6 +94,8 @@ export type YoutubeClient = {
   getBasicInfo(id: string): Promise<{ basic_info?: unknown }>
   getChannel(id: string): Promise<ChannelFeed>
   getComments(videoId: string): Promise<CommentsFeed>
+  getPlaylists(): Promise<PlaylistsFeed>
+  getPlaylist(id: string): Promise<PlaylistFeed>
   account: {
     getInfo(): Promise<unknown>
   }
@@ -66,8 +108,15 @@ export type YoutubeClient = {
     logged_in: boolean
   }
   actions: {
-    execute(endpoint: '/next', args: { videoId: string, racyCheckOk: boolean, contentCheckOk: boolean, parse: true }): Promise<unknown>
+    // `playlistId` and `playlistIndex` are the keys /next actually reads.
+    // youtubei.js's own WatchNextEndpoint also accepts `index` as an alias, but
+    // that alias only exists inside its buildRequest, which execute never runs:
+    // a raw `index` key would go out untouched and be ignored.
+    execute(endpoint: '/next', args: { videoId: string, racyCheckOk: boolean, contentCheckOk: boolean, playlistId?: string, playlistIndex?: number, parse: true }): Promise<unknown>
     execute(endpoint: '/like/like' | '/like/dislike' | '/like/removelike', args: { target: { videoId: string } }): Promise<unknown>
+    execute(endpoint: 'browse/edit_playlist', args: { playlistId: string, actions: PlaylistEditAction[] }): Promise<ApiResponse>
+    execute(endpoint: 'playlist/create', args: { title: string, videoIds: string[], privacyStatus?: SourcePlaylistPrivacy, description?: string }): Promise<ApiResponse>
+    execute(endpoint: 'playlist/delete', args: { playlistId: string }): Promise<ApiResponse>
   }
 }
 
@@ -82,7 +131,7 @@ const pageItems = (feed: Feed) => {
   // LockupView, and a modern feed (the signed-in home grid, channel Videos tab)
   // MIXES the two. Merging rather than either/or is essential: a single stray
   // legacy video used to short-circuit the LockupView branch and hide the whole
-  // grid — the signed-in home then showed just that one video.
+  // grid: the signed-in home then showed just that one video.
   const seen = new Set<string>()
   const items: SourceVideo[] = []
   const add = (video: SourceVideo | undefined) => {
@@ -190,7 +239,13 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
   const videoContinuations = createContinuations<SourceVideoPage>()
   const sectionContinuations = createContinuations<SourceSectionedVideoPage>()
   const commentContinuations = createContinuations<SourceCommentPage>()
+  const playlistContinuations = createContinuations<SourcePlaylistPage>()
+  const playlistListContinuations = createContinuations<SourcePlaylistListPage>()
   const channels = new Map<string, SourceChannel>()
+  // A playlist write never refetches the playlist, and every mutation resolves
+  // to a Playlist whose `title` is non-null, so the last read of each playlist
+  // is kept to fill the fields the write did not touch.
+  const knownPlaylists = new Map<string, SourcePlaylist>()
 
   const page = (kind: string, feed: Feed): SourceVideoPage => {
     const result: SourceVideoPage = { items: pageItems(feed) }
@@ -231,6 +286,82 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
       result.cursor = commentContinuations.register(
         `comments:${videoId}`,
         async () => commentPage(videoId, await comments.getContinuation()),
+      )
+    }
+    return result
+  }
+
+  // Rows come straight out of the memo. The `items` getter casts the page's
+  // whole video set in one go and throws on anything outside its union, so a
+  // single recommended-video rail on the page loses the entire list. Only
+  // PlaylistVideo is accepted: it is the one renderer carrying set_video_id,
+  // which every later edit of the playlist needs.
+  const playlistItems = (feed: PlaylistFeed) =>
+    (feed.memo?.get('PlaylistVideo') ?? [])
+      .map(normalizePlaylistItem)
+      .filter((item) => item !== undefined)
+
+  // The playlist entity is threaded through every page rather than re-read: a
+  // continuation response carries no header and no sidebar, so reading its
+  // `info` would hand back a playlist stripped of its title and stats.
+  const playlistPage = (id: string, playlist: SourcePlaylist, feed: PlaylistFeed, items: SourcePlaylistItem[]): SourcePlaylistPage => {
+    const result: SourcePlaylistPage = { playlist, items }
+    if (feed.has_continuation) {
+      result.cursor = playlistContinuations.register(`playlist:${id}`, async () => {
+        const next = await feed.getContinuation()
+        return playlistPage(id, playlist, next, playlistItems(next))
+      })
+    }
+    return result
+  }
+
+  const rememberPlaylist = (playlist: SourcePlaylist) => {
+    knownPlaylists.set(playlist.id, playlist)
+    return playlist
+  }
+
+  // The entity a write resolves to. Only the changed fields are real; the rest
+  // is whatever the last read of this playlist held, because none of the edit
+  // endpoints hands back a parseable playlist (they answer with an undocumented
+  // raw `actions` array). `title` falls back to '' the way setSubscribed fills
+  // Channel.name: the schema forbids null there, and the mutation document is
+  // not supposed to select it unless the write set it.
+  const writtenPlaylist = (id: string, changed: Partial<SourcePlaylist>): SourcePlaylist => {
+    const known = knownPlaylists.get(id)
+    const next: SourcePlaylist = { ...known, id, title: known?.title ?? '', ...changed }
+    // Only refresh what was already cached: a write must not mint a stub that a
+    // later read of the library would then be merged into.
+    if (known) knownPlaylists.set(id, next)
+    return next
+  }
+
+  // Every playlist edit is the same POST with a different action. youtubei.js's
+  // PlaylistManager wraps some of these, but its wrappers pay a browse (plus a
+  // continuation per extra page) to translate video ids into set video ids, and
+  // one of them ships a broken body, so the endpoint is called directly.
+  const editPlaylist = async (id: string, reason: string, actions: PlaylistEditAction[]) => {
+    const active = await client
+    // `browse/edit_playlist` carries no browseId, and youtubei.js only runs its
+    // signed-in precheck for payloads that have one, so an anonymous edit would
+    // otherwise go out and come back as an opaque failure.
+    requireSignIn(active, reason)
+    await active.actions.execute('browse/edit_playlist', { playlistId: id, actions })
+  }
+
+  // The aggregation mixes modern lockups with legacy Playlist/GridPlaylist
+  // nodes, and its lockup filter also admits albums and podcasts, which
+  // normalizePlaylistLockup drops.
+  const playlistListPage = (feed: PlaylistsFeed): SourcePlaylistListPage => {
+    const result: SourcePlaylistListPage = {
+      items: [...(feed.playlists ?? [])]
+        .map((node) => normalizePlaylistLockup(node) ?? normalizeGridPlaylist(node))
+        .filter((playlist) => playlist !== undefined)
+        .map(rememberPlaylist),
+    }
+    if (feed.has_continuation) {
+      result.cursor = playlistListContinuations.register(
+        'playlists',
+        async () => playlistListPage(await feed.getContinuation()),
       )
     }
     return result
@@ -305,12 +436,18 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
       return { channel, videos: page(`channel:${id}`, videos) }
     },
     // A single /next call carries everything the watch page needs on top of
-    // playback (which fetches /player separately): one tunneled round trip.
-    watch: async (id) => normalizeWatchMeta(
+    // playback (which fetches /player separately): one tunneled round trip. In
+    // playlist context that same response also brings the queue panel back, so
+    // opening a video inside a playlist costs no extra request.
+    watch: async (id, playlistId, playlistIndex) => normalizeWatchMeta(
       await (await client).actions.execute('/next', {
         videoId: id,
         racyCheckOk: true,
         contentCheckOk: true,
+        // Omitted rather than sent as undefined: JSON.stringify would drop the
+        // key anyway, but a 0 index is meaningful and must survive.
+        ...(playlistId ? { playlistId } : {}),
+        ...(playlistIndex === undefined ? {} : { playlistIndex }),
         parse: true,
       }),
       id,
@@ -321,12 +458,35 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
         return commentPage(videoId, await (await client).getComments(videoId))
       } catch (error) {
         // videos with comments turned off make youtubei.js throw
-        // "Comments page did not have any content." — an expected state, not a failure.
+        // "Comments page did not have any content.", an expected state, not a failure.
         if (error instanceof Error && /did not have any content/i.test(error.message)) {
           return { items: [], disabled: true }
         }
         throw error
       }
+    },
+    playlists: async (cursor) => {
+      if (cursor) return playlistListContinuations.resolve('playlists', cursor)
+      const active = await client
+      requireSignIn(active, 'see your playlists')
+      return playlistListPage(await active.getPlaylists())
+    },
+    // Deliberately not sign-in gated: a public playlist opens signed out, and a
+    // private one comes back as an upstream error rather than as an empty page.
+    // The cursor kind carries the playlist id so one playlist cannot page
+    // another one's rows.
+    playlist: async (id, cursor) => {
+      if (cursor) return playlistContinuations.resolve(`playlist:${id}`, cursor)
+      const feed = await (await client).getPlaylist(id)
+      const items = playlistItems(feed)
+      const details = normalizePlaylistDetails(feed, id)
+      // The sidebar thumbnail renderer is legacy and often absent, so the first
+      // row stands in as the cover. It has to be resolved before the
+      // continuation closure captures the playlist: page two would otherwise
+      // hand back the same entity with its cover cleared, and the normalized
+      // cache would blank the image mid-scroll.
+      const playlist = rememberPlaylist({ ...details, thumbnail: details.thumbnail ?? items[0]?.video.thumbnail })
+      return playlistPage(id, playlist, feed, items)
     },
     // youtubei.js's InteractionManager issues like/dislike with client: 'TV',
     // but this frame pins a WEB session (a specific WEB clientVersion, a WEB
@@ -377,6 +537,114 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
       const next: SourceChannel = { ...known, id: channelId, name: known?.name ?? '', notificationLevel: level }
       if (known) channels.set(channelId, next)
       return next
+    },
+    addToPlaylist: async (playlistId, videoIds) => {
+      // An empty selection is an ordinary UI state, not an error, and an edit
+      // carrying zero actions is a round trip that changes nothing.
+      if (videoIds.length === 0) return writtenPlaylist(playlistId, {})
+      await editPlaylist(playlistId, 'save to a playlist', videoIds.map((videoId) => ({
+        action: 'ACTION_ADD_VIDEO',
+        addedVideoId: videoId,
+      })))
+      return writtenPlaylist(playlistId, {})
+    },
+    // Entries go out as set video ids, which is what the wire wants anyway.
+    // youtubei.js's removeVideos takes plain video ids and translates them by
+    // browsing the playlist, paging until it has matched as many rows as ids it
+    // was given: an id that is not in the playlist makes it walk every page and
+    // then throw, and a single Shorts lockup on any page throws a ParsingError
+    // before the edit is even attempted (core/managers/PlaylistManager.js:123).
+    removeFromPlaylist: async (playlistId, setVideoIds) => {
+      if (setVideoIds.length === 0) return writtenPlaylist(playlistId, {})
+      await editPlaylist(playlistId, 'change a playlist', setVideoIds.map((setVideoId) => ({
+        action: 'ACTION_REMOVE_VIDEO',
+        setVideoId,
+      })))
+      return writtenPlaylist(playlistId, {})
+    },
+    // youtubei.js's create() can only send a title and video ids, but the
+    // endpoint it calls copies privacyStatus and description too
+    // (parser/classes/endpoints/CreatePlaylistServiceEndpoint.js:17), so the
+    // call is made directly to reach them. There is no edit-side privacy path
+    // in 17.0.1, which makes creation the one attested way to set it.
+    createPlaylist: async (title, videoIds, privacy, description) => {
+      const active = await client
+      requireSignIn(active, 'create a playlist')
+      const response = await active.actions.execute('playlist/create', {
+        title,
+        videoIds: videoIds ?? [],
+        ...(privacy ? { privacyStatus: privacy } : {}),
+        ...(description ? { description } : {}),
+      })
+      if (response.success === false) throw new Error('youtube: creating the playlist failed')
+      // The new id is the only server-generated value in this whole write path
+      // and it is optional on the wire, so it is narrowed rather than trusted:
+      // without it the entity has no cache key and the caller has to reread the
+      // library instead of merging a result.
+      const id = response.data?.playlistId
+      if (!id) throw new Error('youtube: the playlist was created but its id did not come back')
+      return rememberPlaylist({ id, title, description, privacy })
+    },
+    // youtubei.js's delete() throws before it reaches the network here: it
+    // builds the raw key `deletePlaylistServiceEndpoint`
+    // (core/managers/PlaylistManager.js:40), for which parser/nodes.js registers
+    // no class, so the command resolves to undefined and NavigationEndpoint then
+    // finds no api_url. The registered DeletePlaylistEndpoint is broken in its
+    // own right: it guards on `playlistId` and assigns from `sourcePlaylistId`
+    // (parser/classes/endpoints/DeletePlaylistEndpoint.js:15), so it only emits
+    // a body when both keys are passed. Calling the path directly skips both.
+    deletePlaylist: async (id) => {
+      const active = await client
+      requireSignIn(active, 'delete a playlist')
+      await active.actions.execute('playlist/delete', { playlistId: id })
+      knownPlaylists.delete(id)
+      return id
+    },
+    // youtubei.js's setName builds its payload as `{ playlist_id, actions }` in
+    // snake_case (core/managers/PlaylistManager.js:200), but PlaylistEditEndpoint
+    // only copies `actions`, `playlistId` and `params` out of it
+    // (parser/classes/endpoints/PlaylistEditEndpoint.js:13), so the id is
+    // dropped and the POST goes out saying which name to set but not on what.
+    // It is the only snake_case payload in that manager; the endpoint is the
+    // same one every other edit uses, so it is called directly instead.
+    renamePlaylist: async (id, title) => {
+      await editPlaylist(id, 'rename a playlist', [{ action: 'ACTION_SET_PLAYLIST_NAME', playlistName: title }])
+      return writtenPlaylist(id, { title })
+    },
+    setPlaylistDescription: async (id, description) => {
+      await editPlaylist(id, 'change a playlist description', [{
+        action: 'ACTION_SET_PLAYLIST_DESCRIPTION',
+        playlistDescription: description,
+      }])
+      return writtenPlaylist(id, { description })
+    },
+    // The one action name here that youtubei.js 17.0.1 does not attest: the
+    // package has no privacy edit path at all, and grepping it turns up
+    // `privacyStatus` only on the create endpoint. What IS verified is the
+    // transport, since browse/edit_playlist forwards the actions array
+    // untouched, so the shape is right even though the vocabulary is inferred.
+    // An action the server does not recognise is ignored rather than rejected,
+    // which makes this the one write whose optimistic result can outrun the
+    // server. Setting privacy at creation goes through an attested endpoint.
+    setPlaylistPrivacy: async (id, privacy) => {
+      await editPlaylist(id, 'change a playlist privacy', [{
+        action: 'ACTION_SET_PLAYLIST_PRIVACY',
+        playlistPrivacy: privacy,
+      }])
+      return writtenPlaylist(id, { privacy })
+    },
+    // The destination is a predecessor, not an index: the moved entry lands
+    // immediately AFTER `afterSetVideoId`, and omitting it asks for the first
+    // position. youtubei.js's own jsdoc says "before" (core/managers/
+    // PlaylistManager.d.ts:59), which contradicts both the action name and the
+    // field name on the wire; the wire wins.
+    movePlaylistItem: async (playlistId, setVideoId, afterSetVideoId) => {
+      await editPlaylist(playlistId, 'reorder a playlist', [{
+        action: 'ACTION_MOVE_VIDEO_AFTER',
+        setVideoId,
+        ...(afterSetVideoId ? { movedSetVideoIdPredecessor: afterSetVideoId } : {}),
+      }])
+      return writtenPlaylist(playlistId, {})
     },
     // Signed-in state comes from the cookie jar probe; the accounts_list call
     // only decorates it, so its failure must not read back as signed out.

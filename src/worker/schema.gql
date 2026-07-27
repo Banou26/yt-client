@@ -10,6 +10,15 @@ enum NotificationLevel {
   NONE
 }
 
+# The three values the create endpoint accepts. `Playlist.privacy` on the READ
+# side stays a String: it echoes whatever the playlist header carries, and a
+# value outside this set must degrade to text rather than fail the whole query.
+enum PlaylistPrivacy {
+  PUBLIC
+  UNLISTED
+  PRIVATE
+}
+
 type Channel {
   id: ID!
   name: String!
@@ -75,6 +84,25 @@ type ChannelPage {
   videos: VideoPage!
 }
 
+# The queue rail beside the player, present only when /watch was opened inside a
+# playlist. Deliberately NOT a Playlist: `currentIndex` describes the video being
+# watched rather than the playlist, so two videos from one playlist would fight
+# over it if this were normalized on the playlist id. See src/graphql.ts.
+type WatchPlaylist {
+  id: ID!
+  title: String
+  # The owner byline as upstream renders it. A mix is bylined "YouTube" with no
+  # channel behind it, so this is display text rather than a Channel.
+  author: String
+  items: [Video!]!
+  # 0-based, and it is the SERVER's answer rather than the requested one: an
+  # out-of-range playlistIndex comes back corrected here.
+  currentIndex: Int
+  # A mix or radio: the queue is generated as you watch, so `items` is a window
+  # onto it rather than the whole playlist.
+  isInfinite: Boolean
+}
+
 type WatchMeta {
   id: ID!
   title: String
@@ -86,6 +114,8 @@ type WatchMeta {
   likeStatus: LikeStatus
   channel: Channel
   related: [Video!]!
+  # Null unless the watch query passed a playlistId.
+  playlist: WatchPlaylist
 }
 
 type Comment {
@@ -103,6 +133,51 @@ type CommentPage {
   items: [Comment!]!
   cursor: String
   disabled: Boolean
+}
+
+type Playlist {
+  id: ID!
+  title: String!
+  description: String
+  thumbnail: String
+  # Counts arrive as localized strings ("50 videos", "1,204 views"), never as
+  # numbers, so they are carried through as text rather than parsed.
+  videoCountText: String
+  viewCountText: String
+  updatedText: String
+  # PUBLIC / UNLISTED / PRIVATE, but the vocabulary is upstream's and changes,
+  # so it stays a String rather than an enum the client would have to exhaust.
+  privacy: String
+  isEditable: Boolean
+  canDelete: Boolean
+  canReorder: Boolean
+  channel: Channel
+}
+
+# An entry wraps its Video instead of extending it. `setVideoId` identifies the
+# SLOT, not the video, and removing or reordering an entry needs it: the same
+# video can sit in one playlist twice, each occurrence with its own setVideoId.
+type PlaylistItem {
+  video: Video!
+  setVideoId: String
+  # 1-BASED, unlike WatchPlaylist.currentIndex and Query.watch's playlistIndex,
+  # which are 0-based. This one is upstream's own row number and it is what a
+  # `&index=` link addresses, so it travels through the UI unshifted and is
+  # converted only where it reaches the query.
+  index: Int
+}
+
+type PlaylistPage {
+  # Repeated on every page: a continuation response carries no playlist header,
+  # so the source replays the one read from the first page.
+  playlist: Playlist!
+  items: [PlaylistItem!]!
+  cursor: String
+}
+
+type PlaylistListPage {
+  items: [Playlist!]!
+  cursor: String
 }
 
 type Session {
@@ -125,8 +200,18 @@ type Query {
   search(query: String!, cursor: String): VideoPage!
   video(id: ID!): Video
   channel(id: ID!, cursor: String): ChannelPage!
-  watch(id: ID!): WatchMeta
+  # `playlistId` puts the video in a queue: the same /next call then also returns
+  # the playlist panel. `playlistIndex` is 0-based, and the server corrects an
+  # out-of-range one rather than failing, so read the position back off
+  # `playlist.currentIndex` instead of assuming the request was honoured.
+  watch(id: ID!, playlistId: ID, playlistIndex: Int): WatchMeta
   comments(videoId: ID!, cursor: String): CommentPage!
+  # Signed-in only, like `subscriptions` and `history`: the library aggregation
+  # browse is refused before the network call when signed out.
+  playlists(cursor: String): PlaylistListPage!
+  # NOT gated: a public playlist opens signed out. An inaccessible one comes
+  # back as an upstream error rather than as an empty page.
+  playlist(id: ID!, cursor: String): PlaylistPage!
   session: Session!
 }
 
@@ -143,4 +228,24 @@ type Mutation {
   removeFromHistory(videoId: ID!): ID!
   setSubscribed(channelId: ID!, subscribed: Boolean!): Channel!
   setNotificationLevel(channelId: ID!, level: NotificationLevel!): Channel!
+  addToPlaylist(playlistId: ID!, videoIds: [ID!]!): Playlist!
+  # Entries are addressed by `setVideoId`, never by video id: the same video can
+  # sit in one playlist twice and only the setVideoId says which row to drop.
+  # PlaylistItem.setVideoId is where the caller gets them.
+  removeFromPlaylist(playlistId: ID!, setVideoIds: [ID!]!): Playlist!
+  # `privacy` and `description` are only settable AT CREATION. See
+  # setPlaylistPrivacy for why the edit path is weaker than this one.
+  createPlaylist(title: String!, videoIds: [ID!], privacy: PlaylistPrivacy, description: String): Playlist!
+  # Resolves to the deleted id so the cache can drop it from the library list.
+  deletePlaylist(id: ID!): ID!
+  renamePlaylist(id: ID!, title: String!): Playlist!
+  setPlaylistDescription(id: ID!, description: String!): Playlist!
+  # The one write here whose upstream action name is not attested by youtubei.js
+  # 17.0.1. It is sent verbatim and may be ignored by the server; the resolved
+  # entity is optimistic either way. Prefer setting privacy through
+  # createPlaylist, which goes through an endpoint the library does implement.
+  setPlaylistPrivacy(id: ID!, privacy: PlaylistPrivacy!): Playlist!
+  # `afterSetVideoId` is the entry the moved one lands AFTER; omitting it asks
+  # for the first position.
+  movePlaylistItem(playlistId: ID!, setVideoId: ID!, afterSetVideoId: ID): Playlist!
 }

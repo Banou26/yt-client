@@ -7,6 +7,7 @@ import { useMutation, useQuery } from 'urql'
 import { useLocation } from 'wouter'
 
 import { useDocumentTitle } from '../app'
+import { readable } from '../components/format'
 import { showToast } from '../components/ui/toast'
 import { FeedSentinel, useInfiniteFeed } from '../components/use-infinite-feed'
 import { VideoCardCompact, VideoCardCompactSkeleton } from '../components/video-card-compact'
@@ -46,10 +47,6 @@ type HistoryPage = WatchHistoryQuery['history']
 // from useInfiniteFeed can be regrouped without a second lookup table.
 type HistoryVideo = HistoryPage['sections'][number]['items'][number] & { sectionTitle: string }
 type HistorySection = { title: string, items: HistoryVideo[] }
-
-// urql prefixes a GraphQL error message with its kind; the user only needs the
-// sentence the source wrote.
-const readable = (message: string) => message.replace(/^\[\w+]\s*/, '')
 
 const SKELETON_ROWS = 8
 

@@ -1,7 +1,7 @@
 import type { FunctionComponent } from 'preact'
 
 import { css } from '@emotion/react'
-import { Clapperboard, Flame, Gamepad2, History, House, ListVideo, Menu, Music2 } from 'lucide-react'
+import { Clapperboard, Clock, Flame, Gamepad2, History, House, Library, ListVideo, Menu, Music2, ThumbsUp } from 'lucide-react'
 import { useEffect } from 'preact/hooks'
 import { useQuery } from 'urql'
 import { Link, useLocation, useSearch } from 'wouter'
@@ -9,6 +9,7 @@ import { Link, useLocation, useSearch } from 'wouter'
 import { gql } from '../generated'
 import { useSession } from '../session'
 import { Logo } from './header'
+import { LIKED_VIDEOS_ID, playlistHrefFor, WATCH_LATER_ID } from './playlist'
 
 const GUIDE_SUBSCRIPTIONS_QUERY = gql(`
   query GuideSubscriptions {
@@ -35,8 +36,18 @@ const MAIN_ENTRIES: GuideEntry[] = [
   { label: 'Subscriptions', href: '/feed/subscriptions', Icon: ListVideo, match: '/feed/subscriptions' }
 ]
 
+const HISTORY_ENTRY: GuideEntry = { label: 'History', href: '/feed/history', Icon: History, match: '/feed/history' }
+
+// Watch later and Liked videos are ordinary playlists with fixed ids upstream,
+// so they address the same route the library cards do rather than getting a
+// page each. Their `match` holds the whole query string, which is why a row
+// opened at a position (?list=WL&index=4) stops lighting the entry: the same
+// limitation the Music and Gaming search entries already have.
 const YOU_ENTRIES: GuideEntry[] = [
-  { label: 'History', href: '/feed/history', Icon: History, match: '/feed/history' }
+  HISTORY_ENTRY,
+  { label: 'Playlists', href: '/feed/playlists', Icon: Library, match: '/feed/playlists' },
+  { label: 'Watch later', href: playlistHrefFor(WATCH_LATER_ID), Icon: Clock, match: playlistHrefFor(WATCH_LATER_ID) },
+  { label: 'Liked videos', href: playlistHrefFor(LIKED_VIDEOS_ID), Icon: ThumbsUp, match: playlistHrefFor(LIKED_VIDEOS_ID) }
 ]
 
 const EXPLORE_ENTRIES: GuideEntry[] = [
@@ -46,7 +57,10 @@ const EXPLORE_ENTRIES: GuideEntry[] = [
   { label: 'Gaming', href: '/results?search_query=Gaming', Icon: Gamepad2, match: '/results?search_query=Gaming' }
 ]
 
-const MINI_ENTRIES: GuideEntry[] = [...MAIN_ENTRIES, ...YOU_ENTRIES]
+// The mini rail is an icon column one short label wide, so it keeps carrying the
+// top-level destinations only: 'Watch later' and 'Liked videos' do not fit on
+// one 1rem line there, and the rail is not where the library is browsed from.
+const MINI_ENTRIES: GuideEntry[] = [...MAIN_ENTRIES, HISTORY_ENTRY]
 
 const FOOTER_LINKS = ['About', 'Press', 'Contact', 'Terms', 'Privacy', 'Developers']
 

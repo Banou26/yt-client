@@ -1,11 +1,26 @@
-import type { Channel, Video } from '../generated/graphql'
+import type { Channel, SavePlaylistsQuery, Video } from '../generated/graphql'
 
 import { css } from '@emotion/react'
-import { EllipsisVertical } from 'lucide-react'
-import { Link } from 'wouter'
+import { Check, ChevronLeft, Clock, EllipsisVertical, ListPlus, Share2 } from 'lucide-react'
+import { useLayoutEffect, useRef, useState } from 'preact/hooks'
+import { useMutation, useQuery } from 'urql'
+import { Link, useLocation } from 'wouter'
 
+/* The two documents the overflow menu needs are the ones save-menu.tsx already
+   declares, so the generated nodes are reused instead of a second gql() copy.
+   Two operations cannot share a name, and re-declaring these verbatim would
+   make the project's codegen depend on two copies never drifting apart: the day
+   one of them gains a field, `npm run generate` fails for everyone. The fix
+   that removes this import is lifting the save panel out of save-menu.tsx into
+   a component both surfaces render. */
+import { AddToPlaylistDocument, SavePlaylistsDocument } from '../generated/graphql'
 import { usePrefetchOnIntent } from '../player/prefetch'
-import { formatDuration, formatMeta } from './format'
+import { useSession } from '../session'
+import { formatDuration, formatMeta, readable } from './format'
+import { WATCH_LATER_ID } from './playlist'
+import { Menu, MenuItem, MenuSeparator } from './ui/menu'
+import { showToast } from './ui/toast'
+import { useInfiniteFeed } from './use-infinite-feed'
 
 export type VideoCardData =
   Pick<Video, 'id' | 'title'>
@@ -17,7 +32,29 @@ export type VideoCardData =
     channel?: (Pick<Channel, 'id' | 'name'> & Partial<Pick<Channel, 'avatar'>>) | null
   }
 
-export const watchHrefFor = (videoId: string) => `/watch?v=${encodeURIComponent(videoId)}`
+/**
+ * The playlist a link is being followed from, so /watch opens the queue the
+ * reader was already looking at instead of the video on its own.
+ *
+ * `index` is 1-based, matching PlaylistItem.index and upstream's own links. It
+ * is optional even when `list` is set: the server resolves the position from
+ * the video id, and a list that has shifted since the page was rendered would
+ * otherwise open on the wrong row.
+ */
+export type WatchContext = { list?: string, index?: number }
+
+export const watchHrefFor = (videoId: string, context?: WatchContext) => {
+  const params = new URLSearchParams({ v: videoId })
+  // An index with no list indexes into nothing, and upstream drops it there, so
+  // it only ships alongside one.
+  if (context?.list !== undefined && context.list.length > 0) {
+    params.set('list', context.list)
+    if (context.index !== undefined && Number.isFinite(context.index)) {
+      params.set('index', String(context.index))
+    }
+  }
+  return `/watch?${params}`
+}
 
 // Clamped because upstream progress is a rounded percentage that can read
 // slightly over 100, which would spill the fill past the thumbnail edge.
@@ -25,6 +62,253 @@ export const resumePercent = (progressPercent?: number | null) =>
   progressPercent !== undefined && progressPercent !== null && progressPercent > 0
     ? Math.min(progressPercent, 100)
     : undefined
+
+type PlaylistsPage = SavePlaylistsQuery['playlists']
+
+/* Wider than Popup's 20rem floor because a playlist title plus its count is
+   what the picker rows carry, and role=presentation keeps this wrapper out of
+   the accessibility tree so the rows stay owned by the menu. */
+const menuPanelStyle = css`
+  min-width: 24rem;
+`
+
+/* One panel, two sets of rows, rather than a panel stacked on a panel: the menu
+   primitive finds its rows with a single query rooted at the wrapper, so a
+   second panel open inside the first would have both sets answering one set of
+   arrow keys. Swapping which rows exist keeps that query honest. */
+type CardMenuView = 'root' | 'playlists'
+
+/**
+ * The card overflow menu's contents.
+ *
+ * Split from the trigger because Menu mounts its children only while the panel
+ * is open, and a feed renders dozens of cards: the session probe, the library
+ * query and the mutation all live here so a closed menu costs nothing but the
+ * button. The one thing that has to outlive the panel is which playlists this
+ * video has already been put into, so that state sits with the trigger.
+ */
+const CardMenuPanel = (
+  { videoId, saved, onSaved }: {
+    videoId: string
+    saved: string[]
+    onSaved: (playlistId: string) => void
+  },
+) => {
+  const [, navigate] = useLocation()
+  const { ready, signedIn } = useSession()
+  const [view, setView] = useState<CardMenuView>('root')
+  // Sticky within one opening: the library costs a round trip through the
+  // tunnel, so it is not asked for until the picker is actually entered.
+  const [wanted, setWanted] = useState(false)
+  const [loaded, setLoaded] = useState<PlaylistsPage[]>([])
+  // Which row is in flight, not merely that one is: only that row goes inert.
+  const [pending, setPending] = useState<string | undefined>(undefined)
+  const panelRef = useRef<HTMLDivElement>(null)
+  // Menu moves focus onto a row when the panel OPENS, the only moment it knows
+  // about. Swapping the rows underneath it strands focus on a button that just
+  // unmounted, which drops the reader back to <body>, so this covers the swap.
+  const shown = useRef(view)
+
+  useLayoutEffect(() => {
+    if (shown.current === view) return
+    shown.current = view
+    panelRef.current?.querySelector<HTMLElement>('[role="menuitem"], [role="menuitemcheckbox"]')?.focus()
+  }, [view])
+
+  const [{ data, error, fetching }] = useQuery({
+    query: SavePlaylistsDocument,
+    variables: { cursor: loaded[loaded.length - 1]?.cursor },
+    // The library browse is refused in the source before the network call when
+    // signed out, and errors are unmasked, so it is gated rather than fired.
+    pause: !wanted || !ready || !signedIn,
+  })
+  const [, addToPlaylist] = useMutation(AddToPlaylistDocument)
+
+  // urql keeps the previous result while the next page is in flight, so the
+  // live page can repeat one already consumed: useInfiniteFeed dedupes by id.
+  const page = data?.playlists
+  const { items, cursor } = useInfiniteFeed({
+    pages: page ? [...loaded, page] : loaded,
+    key: playlist => playlist.id,
+  })
+  // Watch later is filtered out of the picker: it already has a row of its own
+  // above, and the library aggregation lists it only sometimes.
+  const rows = items.filter(playlist => playlist.id !== WATCH_LATER_ID)
+
+  const onMore = () => {
+    if (!page?.cursor || fetching || error) return
+    setLoaded(loaded[loaded.length - 1] === page ? loaded : [...loaded, page])
+  }
+
+  const save = (playlistId: string, label: string) => {
+    if (pending !== undefined || saved.includes(playlistId)) return
+    setPending(playlistId)
+    void addToPlaylist({ playlistId, videoIds: [videoId] }).then((result) => {
+      setPending(undefined)
+      if (result.error) {
+        showToast(readable(result.error.message))
+        return
+      }
+      // Reported upwards: a save that closes the panel unmounts this component
+      // before the write lands, and the tick belongs to the card either way.
+      onSaved(playlistId)
+      showToast(`Saved to ${label}`)
+    })
+  }
+
+  const onShare = () => {
+    // The card's own watch link, deliberately without the playlist context it
+    // may have been rendered with: a shared link should open the video, not
+    // hand the recipient a queue they were never looking at.
+    const url = `${location.origin}${watchHrefFor(videoId)}`
+    const clipboard = navigator.clipboard
+    if (!clipboard) {
+      showToast('Could not copy the link')
+      return
+    }
+    void clipboard.writeText(url).then(
+      () => showToast('Link copied to clipboard'),
+      // writeText rejects on a denied permission as well as a non-secure
+      // context, and a silent failure is indistinguishable from a copy.
+      () => showToast('Could not copy the link'),
+    )
+  }
+
+  const savedWatchLater = saved.includes(WATCH_LATER_ID)
+
+  return (
+    <div css={menuPanelStyle} role='presentation' ref={panelRef}>
+      {view === 'root'
+        ? (
+          <>
+            {/* Reports rather than toggles, for the same reason the save panel
+                does: nothing upstream says whether the video is already in a
+                list, and taking it back out needs a setVideoId that only a
+                loaded playlist page carries. */}
+            <MenuItem
+              icon={savedWatchLater ? Check : Clock}
+              label={savedWatchLater ? 'Saved to Watch later' : 'Save to Watch later'}
+              disabled={!ready || pending !== undefined || savedWatchLater}
+              onSelect={() => {
+                // The source refuses this write before the network call, so a
+                // signed-out save goes where it can be made to work instead.
+                if (!signedIn) {
+                  navigate('/signin')
+                  return
+                }
+                save(WATCH_LATER_ID, 'Watch later')
+              }}
+            />
+            <MenuItem
+              icon={ListPlus}
+              label='Save to playlist'
+              disabled={!ready}
+              // Swaps the rows instead of acting, so the panel has to survive
+              // the selection.
+              closeOnSelect={false}
+              onSelect={() => {
+                if (!signedIn) {
+                  navigate('/signin')
+                  return
+                }
+                setWanted(true)
+                setView('playlists')
+              }}
+            />
+            <MenuSeparator />
+            <MenuItem icon={Share2} label='Share' onSelect={onShare} />
+            {/* No "Not interested" row. There is no feedback mutation in the
+                schema and no method behind one in the Source contract, so it
+                could only ever be a row that swallows a click. */}
+          </>
+        )
+        : (
+          <>
+            <MenuItem icon={ChevronLeft} label='Back' closeOnSelect={false} onSelect={() => setView('root')} />
+            <MenuSeparator />
+            {/* No visibility icon on these rows: the library feed parses to
+                GridPlaylist and playlist lockups, neither of which carries a
+                privacy, so SavePlaylists cannot select one without writing
+                nulls over the cached entity. See that query in save-menu.tsx. */}
+            {rows.map(playlist => (
+              <MenuItem
+                key={playlist.id}
+                label={playlist.title}
+                detail={playlist.videoCountText ?? undefined}
+                checked={saved.includes(playlist.id)}
+                disabled={pending !== undefined || saved.includes(playlist.id)}
+                onSelect={() => save(playlist.id, playlist.title)}
+              />
+            ))}
+            {/* Placeholders are menu items rather than bare text so the row set
+                is never empty: focus is moved onto a row on every swap, and an
+                empty panel would leave it on a button that no longer exists. */}
+            {fetching && rows.length === 0 ? <MenuItem label='Loading…' disabled /> : undefined}
+            {error && rows.length === 0 ? <MenuItem label={readable(error.message)} disabled /> : undefined}
+            {/* No "Create new playlist" row either. Creating one needs a name
+                and a visibility, and privacy is only settable at creation, so
+                it is a dialog rather than a row: that flow lives on the Save
+                pill on /watch, where the choice is not being made from inside a
+                hover menu over a card the reader was scrolling past. */}
+            {!fetching && !error && rows.length === 0
+              ? <MenuItem label='No playlists yet' disabled />
+              : undefined}
+            {cursor
+              ? (
+                <MenuItem
+                  label={fetching ? 'Loading more…' : 'Show more'}
+                  disabled={fetching || Boolean(error)}
+                  closeOnSelect={false}
+                  onSelect={onMore}
+                />
+              )
+              : undefined}
+          </>
+        )}
+    </div>
+  )
+}
+
+/**
+ * The overflow menu both card layouts hang off their `.more` button.
+ *
+ * `iconSize` is the only thing that differs between them: the compact card's
+ * button is 2.4rem where the grid card's is 3.6rem, and an icon sized for one
+ * looks wrong in the other.
+ */
+export const VideoCardMenu = (
+  { videoId, title, iconSize = 20, class: className }: {
+    videoId: string
+    title: string
+    iconSize?: number
+    class?: string
+  },
+) => {
+  const [saved, setSaved] = useState<string[]>([])
+
+  return (
+    <Menu
+      class={className}
+      // Named after the card, because a feed renders dozens of these and a
+      // screen reader reading out "More actions" dozens of times says nothing
+      // about which one it landed on.
+      label={`More actions for ${title}`}
+      trigger={
+        <button type='button' className='more' aria-label={`More actions for ${title}`}>
+          <EllipsisVertical size={iconSize} strokeWidth={1.5} />
+        </button>
+      }
+    >
+      <CardMenuPanel
+        videoId={videoId}
+        saved={saved}
+        // Annotated because this project's JSX factory gives no contextual type
+        // to a function passed as a component prop, so noImplicitAny trips.
+        onSaved={(playlistId: string) => setSaved(ids => ids.includes(playlistId) ? ids : [...ids, playlistId])}
+      />
+    </Menu>
+  )
+}
 
 const style = css`
   display: flex;
@@ -178,8 +462,12 @@ const style = css`
     transition: background 0.15s ease, opacity 0.15s ease;
   }
 
+  /* The third selector keeps the trigger of an OPEN menu on screen: the pointer
+     has moved onto the panel by then, so the card is no longer hovered and the
+     button would fade out from under its own menu. */
   &:hover .more,
-  .more:focus-visible {
+  .more:focus-visible,
+  .more-menu[data-open] .more {
     opacity: 1;
   }
 
@@ -188,8 +476,10 @@ const style = css`
   }
 `
 
-export const VideoCard = ({ video, variant }: { video: VideoCardData, variant?: 'channel' }) => {
-  const watchHref = watchHrefFor(video.id)
+export const VideoCard = (
+  { video, variant, context }: { video: VideoCardData, variant?: 'channel', context?: WatchContext },
+) => {
+  const watchHref = watchHrefFor(video.id, context)
   const channelHref = video.channel ? `/channel/${video.channel.id}` : undefined
   const duration = formatDuration(video.durationSeconds)
   const meta = formatMeta(video.viewCount, video.publishedText)
@@ -234,9 +524,7 @@ export const VideoCard = ({ video, variant }: { video: VideoCardData, variant?: 
             : undefined}
           {meta ? <div className='meta'>{meta}</div> : undefined}
         </div>
-        <button type='button' className='more' aria-label='More actions'>
-          <EllipsisVertical size={20} strokeWidth={1.5} />
-        </button>
+        <VideoCardMenu videoId={video.id} title={video.title} class='more-menu' />
       </div>
     </article>
   )

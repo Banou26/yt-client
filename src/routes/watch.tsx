@@ -1,5 +1,8 @@
+import type { PlaylistPanelData } from '../components/playlist-panel'
+import type { VideoCardData } from '../components/video-card'
+
 import { css } from '@emotion/react'
-import { EllipsisVertical, Share2, ThumbsDown, ThumbsUp } from 'lucide-react'
+import { EllipsisVertical, Link2, Share2, ThumbsDown, ThumbsUp } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { useMutation, useQuery } from 'urql'
 import { Link, useLocation, useSearch } from 'wouter'
@@ -7,11 +10,15 @@ import { Link, useLocation, useSearch } from 'wouter'
 import { useDocumentTitle } from '../app'
 import Comments from '../components/comments'
 import DescriptionBox from '../components/description-box'
+import { readable } from '../components/format'
+import PlaylistPanel from '../components/playlist-panel'
+import SaveMenu from '../components/save-menu'
 import SubscribeButton from '../components/subscribe-button'
 import { VideoCardCompact, VideoCardCompactSkeleton } from '../components/video-card-compact'
 import { gql } from '../generated'
 import VideoPlayer from '../player/video-player'
 import { prefetchPlayback } from '../player/prefetch'
+import { Menu, MenuItem } from '../components/ui/menu'
 import { showToast } from '../components/ui/toast'
 import { getSettings, updateSettings } from '../settings'
 
@@ -24,11 +31,13 @@ const RATE_VIDEO = gql(`
   }
 `)
 
-// one /next round trip serves the whole page (title included) — the /player
+// one /next round trip serves the whole page (title included). The /player
 // data rides in with the playback path already, so no video(id) query here.
+// The queue rides in on that same call: passing `playlistId` is what makes
+// upstream return the playlist panel, so there is no second round trip for it.
 const WATCH_META_QUERY = gql(`
-  query WatchMeta($id: ID!) {
-    watch(id: $id) {
+  query WatchMeta($id: ID!, $playlistId: ID, $playlistIndex: Int) {
+    watch(id: $id, playlistId: $playlistId, playlistIndex: $playlistIndex) {
       id
       title
       viewCountText
@@ -47,6 +56,19 @@ const WATCH_META_QUERY = gql(`
         publishedText
         isLive
         channel { id name }
+      }
+      playlist {
+        id
+        title
+        author
+        currentIndex
+        isInfinite
+        items {
+          id
+          title
+          thumbnail
+          durationSeconds
+        }
       }
     }
   }
@@ -292,11 +314,31 @@ const RELATED_SKELETON_KEYS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 // undefined silently: wouter checks the component prop bivariantly, so the
 // compiler would not object.
 const WatchPage = () => {
-  const videoId = new URLSearchParams(useSearch()).get('v') ?? ''
+  const params = new URLSearchParams(useSearch())
+  const videoId = params.get('v') ?? ''
   prefetchPlayback(videoId)
+  // The queue context, exactly as youtube.com spells it. `list` is the playlist
+  // id; `index` is 1-BASED there (index=1 is the first entry) while the schema
+  // takes a 0-based `playlistIndex`, so it is shifted here. Anything that is not
+  // a whole position is dropped rather than forwarded: upstream clamps an
+  // out-of-range index, but a NaN would serialize as null and lose a position
+  // that the URL actually carried.
+  const listId = params.get('list') ?? undefined
+  const indexParam = Number(params.get('index'))
+  const playlistIndex = Number.isInteger(indexParam) && indexParam > 0 ? indexParam - 1 : undefined
   const [{ data: watchData, error: watchError, fetching: watchFetching }] = useQuery({
     query: WATCH_META_QUERY,
-    variables: { id: videoId },
+    // Both are undefined without a `list`, which the resolver reads as "no
+    // queue" and graphcache leaves out of the field key entirely, so a plain
+    // watch URL resolves to the same field it did before the queue existed.
+    variables: { id: videoId, playlistId: listId, playlistIndex },
+    // WatchMeta is keyed by video id and WatchPlaylist is embedded in it, so
+    // every argument set for one video shares a single `playlist` slot: a plain
+    // ?v= read writes null over it, and a read from another queue writes that
+    // queue's panel. Under cache-first the stale slot would be served straight
+    // back. Revalidating keeps the cached render instant while making the panel
+    // converge on the queue the URL actually asked for.
+    requestPolicy: 'cache-and-network',
     pause: videoId === ''
   })
   const [, navigate] = useLocation()
@@ -317,7 +359,22 @@ const WatchPage = () => {
   const watch = watchData?.watch
   useDocumentTitle(watch?.title ?? undefined)
   const channel = watch?.channel
-  const related = watch?.related
+  // Annotated rather than inferred so the two selections above are checked
+  // against the contracts the components actually publish, which is the only
+  // place that mismatch can be caught: a field dropped from the document would
+  // otherwise surface as an undefined at runtime.
+  const related: VideoCardData[] | undefined = watch?.related
+  /* Gated on the URL, not just on the response. WatchMeta is keyed by video id
+     in graphcache and WatchPlaylist is embedded in it, so watching a video
+     inside a queue writes the panel onto the same entity a plain ?v= read links
+     to: without this the queue would reappear on a bare watch URL for any video
+     already opened from a playlist. Requirement is that no-list renders exactly
+     as before, and only the URL can answer whether a queue was asked for.
+     Matched on id as well: that shared slot can still be holding another
+     queue's panel from an earlier read of this same video, and rendering it
+     would navigate the viewer into a playlist they never opened. */
+  const playlist: PlaylistPanelData | undefined =
+    listId === undefined || watch?.playlist?.id !== listId ? undefined : watch.playlist
   // The rating now comes back with the video rather than living in component
   // state, so it survives navigation and reflects what the account already did.
   const liked = watch?.likeStatus === 'LIKE'
@@ -331,7 +388,7 @@ const WatchPage = () => {
     }
     const next = watch.likeStatus === status ? 'INDIFFERENT' : status
     void rateVideo({ id: videoId, status: next }).then((result) => {
-      if (result.error) showToast(result.error.message.replace(/^\[\w+]\s*/, ''))
+      if (result.error) showToast(readable(result.error.message))
     })
   }
 
@@ -409,9 +466,37 @@ const WatchPage = () => {
                   <Share2 size={20} strokeWidth={1.5} />
                   {copied ? 'Copied' : 'Share'}
                 </button>
-                <button type='button' className='round' aria-label='More actions'>
-                  <EllipsisVertical size={20} strokeWidth={1.5} />
-                </button>
+                {/* Save owns a trigger and a panel of its own, so it sits beside
+                    Share rather than inside the More menu: menu.tsx finds its
+                    rows with one DOM query rooted at the wrapper, so a menu
+                    nested in a menu would hand the outer panel the inner
+                    panel's rows to navigate. */}
+                <SaveMenu videoId={videoId} />
+                <Menu
+                  label='More actions'
+                  trigger={
+                    <button type='button' className='round' aria-label='More actions'>
+                      <EllipsisVertical size={20} strokeWidth={1.5} />
+                    </button>
+                  }
+                >
+                  {/* Only rows that do something. YouTube's own overflow menu
+                      also offers Report, Transcript and Show clip; none of the
+                      three has a mutation or a query behind it here, and a row
+                      that opens nothing is worse than an absent one. */}
+                  <MenuItem icon={Link2} label='Copy link' onSelect={onShare} />
+                  {/* No icon: a checkable row draws the tick box in the icon
+                      slot, so one passed here would never be rendered. */}
+                  <MenuItem
+                    label='Theater mode'
+                    checked={theater}
+                    // Checkable rows keep the panel up by default, which is
+                    // right for ticking several playlists but wrong here: the
+                    // change is behind the panel that would stay over it.
+                    closeOnSelect
+                    onSelect={toggleTheater}
+                  />
+                </Menu>
               </div>
             </div>
           )
@@ -431,9 +516,13 @@ const WatchPage = () => {
           ? <Comments key={`comments:${videoId}`} videoId={videoId} commentCountText={watch?.commentCountText} />
           : undefined}
       </div>
-      {watchFetching || (related && related.length > 0)
+      {/* `playlist` only widens this condition when the URL carried a list, so
+          the no-queue page keeps rendering (and not rendering) the column on
+          exactly the terms it did before. */}
+      {watchFetching || playlist || (related && related.length > 0)
         ? (
           <aside className='secondary'>
+            {playlist ? <PlaylistPanel playlist={playlist} /> : undefined}
             {related
               ? related.map(item => <VideoCardCompact key={item.id} video={item} />)
               : RELATED_SKELETON_KEYS.map(key => <VideoCardCompactSkeleton key={key} />)}

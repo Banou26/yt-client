@@ -1,12 +1,11 @@
-import type { VideoCardData } from './video-card'
+import type { VideoCardData, WatchContext } from './video-card'
 
 import { css } from '@emotion/react'
-import { EllipsisVertical } from 'lucide-react'
 import { Link } from 'wouter'
 
 import { usePrefetchOnIntent } from '../player/prefetch'
 import { formatDuration, formatMeta } from './format'
-import { resumePercent, watchHrefFor } from './video-card'
+import { resumePercent, VideoCardMenu, watchHrefFor } from './video-card'
 
 const style = css`
   display: flex;
@@ -119,8 +118,12 @@ const style = css`
     transition: background 0.15s ease, opacity 0.15s ease;
   }
 
+  /* The third selector keeps the trigger of an OPEN menu on screen: the pointer
+     has moved onto the panel by then, so the row is no longer hovered and the
+     button would fade out from under its own menu. */
   &:hover .more,
-  .more:focus-visible {
+  .more:focus-visible,
+  .more-menu[data-open] .more {
     opacity: 1;
   }
 
@@ -129,8 +132,8 @@ const style = css`
   }
 `
 
-export const VideoCardCompact = ({ video }: { video: VideoCardData }) => {
-  const watchHref = watchHrefFor(video.id)
+export const VideoCardCompact = ({ video, context }: { video: VideoCardData, context?: WatchContext }) => {
+  const watchHref = watchHrefFor(video.id, context)
   const duration = formatDuration(video.durationSeconds)
   const meta = formatMeta(video.viewCount, video.publishedText)
   const progress = resumePercent(video.progressPercent)
@@ -160,9 +163,7 @@ export const VideoCardCompact = ({ video }: { video: VideoCardData }) => {
           : undefined}
         {meta ? <div className='meta'>{meta}</div> : undefined}
       </div>
-      <button type='button' className='more' aria-label='More actions'>
-        <EllipsisVertical size={16} strokeWidth={1.5} />
-      </button>
+      <VideoCardMenu videoId={video.id} title={video.title} iconSize={16} class='more-menu' />
     </article>
   )
 }

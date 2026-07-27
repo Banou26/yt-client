@@ -1,8 +1,7 @@
-import type { VideoCardData } from './video-card'
+import type { VideoCardData, WatchContext } from './video-card'
 
 import { css } from '@emotion/react'
 
-import { FeedSentinel } from './use-infinite-feed'
 import { VideoCard, VideoCardSkeleton } from './video-card'
 
 const style = css`
@@ -24,17 +23,23 @@ const style = css`
 const FIRST_PAGE_SKELETONS = 12
 const NEXT_PAGE_SKELETONS = 4
 
+/* No paging props here. Every route already renders its own FeedSentinel as a
+   sibling after the grid, together with the two guards that make it idempotent
+   (an early return in onMore and an identity check when appending), so a grid
+   that also owned one would fire the same page twice for any route that used
+   both. `context` is forwarded rather than paged: it is the same for every card
+   in one grid, whereas a per-row index is not, so a list that needs indices
+   builds its own rows and passes context per card. */
 export const VideoGrid = (
-  { videos, fetching = false, variant, onMore, hasMore = false }: {
+  { videos, fetching = false, variant, context }: {
     videos: VideoCardData[]
     fetching?: boolean
     variant?: 'channel'
-    onMore?: () => void
-    hasMore?: boolean
+    context?: WatchContext
   }
 ) => (
   <div css={style} className={variant}>
-    {videos.map(video => <VideoCard key={video.id} video={video} variant={variant} />)}
+    {videos.map(video => <VideoCard key={video.id} video={video} variant={variant} context={context} />)}
     {/* A page loading under existing cards gets trailing placeholders only:
         replacing the whole grid with skeletons would rip the rows the reader is
         looking at out from under the scroll position. */}
@@ -44,7 +49,6 @@ export const VideoGrid = (
         (_, index) => <VideoCardSkeleton key={`skeleton-${index}`} />,
       )
       : undefined}
-    {onMore ? <FeedSentinel onVisible={onMore} disabled={!hasMore || fetching} /> : undefined}
   </div>
 )
 

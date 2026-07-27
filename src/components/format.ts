@@ -1,7 +1,7 @@
 const compactNumber = new Intl.NumberFormat('en', { notation: 'compact' })
 
 // wouter already decodeURI-s the pathname, so params can hold a literal '%'
-// that makes decodeURIComponent throw — fall back to the raw value.
+// that makes decodeURIComponent throw: fall back to the raw value.
 export const safeDecode = (value: string) => {
   try {
     return decodeURIComponent(value)
@@ -34,3 +34,9 @@ export const formatMeta = (viewCount?: string | null, publishedText?: string | n
   const parts = [formatViews(viewCount), publishedText ?? undefined].filter(part => part !== undefined)
   return parts.length > 0 ? parts.join(' • ') : undefined
 }
+
+// urql prefixes a GraphQL error message with its kind ('[GraphQL] '), and the
+// source's own sentence is the only part of that the user can act on. Shared
+// rather than redeclared per surface: every route and panel that shows an error
+// had grown its own copy of this line.
+export const readable = (message: string) => message.replace(/^\[\w+]\s*/, '')

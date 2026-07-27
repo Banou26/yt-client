@@ -33,6 +33,21 @@ describe('root queries', () => {
     await expect(resolvers.Query.watch({}, { id: 'missing' }, { source } as never)).resolves.toBeNull()
   })
 
+  it('forwards playlist context into watch and drops the nulls the schema allows', async () => {
+    const calls: [string, string | undefined, number | undefined][] = []
+    const source = {
+      watch: async (id: string, playlistId?: string, playlistIndex?: number) => {
+        calls.push([id, playlistId, playlistIndex])
+        return { id, related: [] }
+      },
+    } as unknown as SourceApi
+    await resolvers.Query.watch({}, { id: 'abc', playlistId: 'PL1', playlistIndex: 0 }, { source } as never)
+    await resolvers.Query.watch({}, { id: 'abc', playlistId: null, playlistIndex: null }, { source } as never)
+    // A 0 index is a real position, so it must survive the null coalescing that
+    // turns the schema's absent arguments into undefined.
+    expect(calls).toEqual([['abc', 'PL1', 0], ['abc', undefined, undefined]])
+  })
+
   it('delegates comments to the active source', async () => {
     const calls: [string, string | undefined][] = []
     const source = {
@@ -85,6 +100,52 @@ describe('root mutations', () => {
     await expect(resolvers.Mutation.setSubscribed({}, { channelId: 'c', subscribed: true }, { source } as never))
       .resolves.toMatchObject({ id: 'c', isSubscribed: true })
     expect(calls).toEqual([['c', true]])
+  })
+
+  it('passes playlist edits through to the active source', async () => {
+    const calls: unknown[][] = []
+    const source = {
+      addToPlaylist: async (playlistId: string, videoIds: string[]) => {
+        calls.push(['add', playlistId, videoIds])
+        return { id: playlistId, title: 'Saved' }
+      },
+      removeFromPlaylist: async (playlistId: string, setVideoIds: string[]) => {
+        calls.push(['remove', playlistId, setVideoIds])
+        return { id: playlistId, title: 'Saved' }
+      },
+      movePlaylistItem: async (playlistId: string, setVideoId: string, afterSetVideoId?: string) => {
+        calls.push(['move', playlistId, setVideoId, afterSetVideoId])
+        return { id: playlistId, title: 'Saved' }
+      },
+      deletePlaylist: async (id: string) => id,
+    } as unknown as SourceApi
+    await resolvers.Mutation.addToPlaylist({}, { playlistId: 'PL1', videoIds: ['a'] }, { source } as never)
+    await resolvers.Mutation.removeFromPlaylist({}, { playlistId: 'PL1', setVideoIds: ['set-a'] }, { source } as never)
+    // A null predecessor is the schema's way of saying "first position", and it
+    // has to reach the source as undefined rather than as a null target.
+    await resolvers.Mutation.movePlaylistItem({}, { playlistId: 'PL1', setVideoId: 'set-b', afterSetVideoId: null }, { source } as never)
+    await expect(resolvers.Mutation.deletePlaylist({}, { id: 'PL1' }, { source } as never)).resolves.toBe('PL1')
+    expect(calls).toEqual([
+      ['add', 'PL1', ['a']],
+      ['remove', 'PL1', ['set-a']],
+      ['move', 'PL1', 'set-b', undefined],
+    ])
+  })
+
+  it('passes the optional create arguments through as absent rather than null', async () => {
+    const calls: unknown[][] = []
+    const source = {
+      createPlaylist: async (title: string, videoIds?: string[], privacy?: string, description?: string) => {
+        calls.push([title, videoIds, privacy, description])
+        return { id: 'PLnew', title }
+      },
+    } as unknown as SourceApi
+    await resolvers.Mutation.createPlaylist({}, { title: 'Mix', videoIds: null, privacy: null, description: null }, { source } as never)
+    await resolvers.Mutation.createPlaylist({}, { title: 'Mix', videoIds: ['a'], privacy: 'PRIVATE', description: 'Notes' }, { source } as never)
+    expect(calls).toEqual([
+      ['Mix', undefined, undefined, undefined],
+      ['Mix', ['a'], 'PRIVATE', 'Notes'],
+    ])
   })
 
   it('passes the notification level through to the active source', async () => {

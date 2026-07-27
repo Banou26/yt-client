@@ -1,4 +1,4 @@
-import type { SourceChannel, SourceComment, SourceLikeStatus, SourceNotificationLevel, SourceSession, SourceVideo, SourceWatchMeta } from '../types'
+import type { SourceChannel, SourceComment, SourceLikeStatus, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourceSession, SourceVideo, SourceWatchMeta, SourceWatchPlaylist } from '../types'
 
 type Thumbnail = {
   url?: string
@@ -111,6 +111,71 @@ type LockupVideo = {
   }
 }
 
+type PlaylistVideoNode = FeedVideo & {
+  index?: Text
+  set_video_id?: string
+  video_info?: Text
+  style?: string
+}
+
+// GridPlaylist and the legacy Playlist node share every field this reads. They
+// differ only in `author`: GridPlaylist always builds an Author, while Playlist
+// hands back a bare Text byline when the response carries a simple one.
+type GridPlaylistNode = {
+  id?: string
+  title?: string | Text
+  thumbnails?: Thumbnail[]
+  sidebar_thumbnails?: Thumbnail[]
+  video_count?: Text
+  video_count_short?: Text
+  author?: Author | Text
+}
+
+// The queue row on a watch page. It shares almost nothing with a feed video:
+// `thumbnail` is singular in NAME but holds the whole array (youtubei.js builds
+// it from `data.thumbnail` through Thumbnail.fromResponse), the duration is
+// pre-parsed rather than a length badge, and the byline is a plain string with
+// no channel id anywhere on the node.
+type PlaylistPanelVideoNode = {
+  video_id?: string
+  title?: Text
+  thumbnail?: Thumbnail[]
+  duration?: { text?: string, seconds?: number }
+  author?: string
+  selected?: boolean
+  set_video_id?: string
+  // PlaylistPanelVideoWrapper, the YouTube Music shape, keeps the real row here.
+  primary?: PlaylistPanelVideoNode
+}
+
+// TwoColumnWatchNextResults hand-flattens the raw playlist panel into a plain
+// object rather than instantiating a node, so this is the complete field set:
+// totalVideos, isCourse and isEditable are dropped before we ever see them.
+type WatchNextPlaylistPanel = {
+  id?: string
+  title?: string
+  author?: Author | Text
+  contents?: unknown[]
+  current_index?: number
+  is_infinite?: boolean
+}
+
+type PlaylistDetails = {
+  info?: {
+    title?: string
+    description?: string
+    author?: Author
+    thumbnails?: Thumbnail[]
+    total_items?: string
+    views?: string
+    last_updated?: string
+    privacy?: string
+    is_editable?: boolean
+    can_delete?: boolean
+    can_reorder?: boolean
+  }
+}
+
 type AccountInfo = {
   contents?: {
     account_name?: Text
@@ -196,6 +261,46 @@ const metadataTexts = (metadata: MetadataParts | undefined) =>
     .filter((value): value is string => Boolean(value))
     ?? []
 
+// youtubei.js's Author fills BOTH id and name with the literal 'N/A' when the
+// node carries no byline (PlaylistVideo builds one unconditionally), so an
+// absent author otherwise reads as a real channel and renders a dead link.
+const authorChannel = (author: Author | undefined): SourceChannel | undefined => {
+  const id = presentText(author?.id)
+  const name = presentText(author?.name)
+  if (!id || !name) return undefined
+  return { id, name, avatar: thumbnail(author?.thumbnails), handle: handleFromUrl(author?.url) }
+}
+
+// A playlist byline is an Author on some renderers and a plain Text on others.
+// Only the Author shape has an `id`; a Text keeps the channel id on its
+// endpoint. Both paths read a named field rather than stringifying the node,
+// because an Author has no `text` and would otherwise fall through as the
+// literal '[object Object]'.
+const bylineChannel = (author: Author | Text | undefined): SourceChannel | undefined => {
+  const fromAuthor = authorChannel(author as Author | undefined)
+  if (fromAuthor) return fromAuthor
+  const byline = author as Text | undefined
+  const id = byline?.endpoint?.payload?.browseId
+  const name = presentText(byline?.text)
+  return id && name ? { id, name } : undefined
+}
+
+const lockupParts = (lockup: LockupVideo) =>
+  lockup.metadata?.metadata?.metadata_rows
+    ?.flatMap((row) => row.metadata_parts ?? [])
+    .map((part) => part.text)
+    ?? []
+
+// The first metadata part is the channel; its id rides on that part's endpoint,
+// falling back to the avatar's tap target when the part carries no link.
+const lockupChannel = (lockup: LockupVideo, parts: (Text | undefined)[]): SourceChannel | undefined => {
+  const name = text(parts[0])
+  const id = parts[0]?.endpoint?.payload?.browseId
+    ?? lockup.metadata?.image?.renderer_context?.command_context?.on_tap?.payload?.browseId
+  if (!id || !name) return undefined
+  return { id, name, avatar: thumbnail(lockup.metadata?.image?.avatar?.image) }
+}
+
 export const normalizeChannel = (input: unknown, fallbackId?: string): SourceChannel => {
   const channel = input as ChannelDetails
   const id = channel.metadata?.external_id ?? fallbackId
@@ -268,13 +373,6 @@ export const normalizeFeedVideo = (input: unknown): SourceVideo | undefined => {
   const id = video.video_id ?? video.id
   const title = text(video.title)
   if (!id || !title) return undefined
-  const author = video.author?.id && video.author.name
-    ? {
-        id: video.author.id,
-        name: video.author.name,
-        avatar: thumbnail(video.author.thumbnails),
-      }
-    : undefined
   return {
     id,
     title,
@@ -286,7 +384,7 @@ export const normalizeFeedVideo = (input: unknown): SourceVideo | undefined => {
     publishedText: text(video.published),
     isLive: video.is_live === true ? true : undefined,
     progressPercent: legacyProgressPercent(video),
-    channel: author,
+    channel: authorChannel(video.author),
   }
 }
 
@@ -307,21 +405,24 @@ export const normalizeVideoDetails = (input: unknown): SourceVideo | undefined =
   }
 }
 
+// One lockup renderer fronts every kind of content. The watchable kinds all
+// normalize as a video (a Short and a clip both play through /watch), while the
+// collection kinds have their own normalizers and must never be forced through
+// this one. An absent content_type means UNSPECIFIED, which older responses use
+// for ordinary videos. Rejecting by an explicit list rather than by "not VIDEO"
+// is what lets a playlist lockup reach normalizePlaylistLockup instead of being
+// swallowed here.
+const VIDEO_LOCKUPS = new Set(['UNSPECIFIED', 'VIDEO', 'SHORT', 'CLIP', 'MOVIE'])
+
 export const normalizeLockupVideo = (input: unknown): SourceVideo | undefined => {
   const lockup = input as LockupVideo
-  if (lockup.content_type && lockup.content_type !== 'VIDEO') return undefined
+  if (!VIDEO_LOCKUPS.has(lockup.content_type ?? 'UNSPECIFIED')) return undefined
   const id = lockup.content_id
   const title = text(lockup.metadata?.title)
   if (!id || !title) return undefined
   const image = lockup.content_image?.primary_thumbnail ?? lockup.content_image
   const badges = image?.overlays?.flatMap((overlay) => overlay.badges ?? []) ?? []
-  const parts = lockup.metadata?.metadata?.metadata_rows
-    ?.flatMap((row) => row.metadata_parts ?? [])
-    .map((part) => part.text)
-    ?? []
-  const channelName = text(parts[0])
-  const channelId = parts[0]?.endpoint?.payload?.browseId
-    ?? lockup.metadata?.image?.renderer_context?.command_context?.on_tap?.payload?.browseId
+  const parts = lockupParts(lockup)
   return {
     id,
     title,
@@ -333,13 +434,155 @@ export const normalizeLockupVideo = (input: unknown): SourceVideo | undefined =>
     publishedText: text(parts[2]),
     isLive: badges.some((badge) => badge.badge_style?.includes('LIVE')) ? true : undefined,
     progressPercent: lockupProgressPercent(image),
-    channel: channelId && channelName
-      ? {
-          id: channelId,
-          name: channelName,
-          avatar: thumbnail(lockup.metadata?.image?.avatar?.image),
-        }
-      : undefined,
+    channel: lockupChannel(lockup, parts),
+  }
+}
+
+export const normalizePlaylistLockup = (input: unknown): SourcePlaylist | undefined => {
+  const lockup = input as LockupVideo
+  if (lockup.content_type !== 'PLAYLIST') return undefined
+  const id = lockup.content_id
+  const title = presentText(lockup.metadata?.title)
+  if (!id || !title) return undefined
+  // A playlist lockup wraps its image in a CollectionThumbnailView, which owns
+  // no overlays of its own: the badge carrying "50 videos" sits one hop deeper
+  // than on a video lockup, where content_image IS the ThumbnailView. Reading
+  // content_image.overlays here yields undefined rather than an error, so the
+  // count would silently go missing.
+  const image = lockup.content_image?.primary_thumbnail ?? lockup.content_image
+  const badges = image?.overlays?.flatMap((overlay) => overlay.badges ?? []) ?? []
+  const parts = lockupParts(lockup)
+  return {
+    id,
+    title,
+    thumbnail: thumbnail(image?.image),
+    // Only the badge is read for the count. The metadata rows carry a localized
+    // mix of counts and update dates with nothing to tell them apart, so
+    // picking one would be a guess that renders "Updated today" as a count.
+    videoCountText: badges.map((badge) => badge.text).find((value) => Boolean(value)),
+    channel: lockupChannel(lockup, parts),
+  }
+}
+
+export const normalizeGridPlaylist = (input: unknown): SourcePlaylist | undefined => {
+  const node = input as GridPlaylistNode
+  const id = node.id
+  const title = presentText(node.title)
+  if (!id || !title) return undefined
+  return {
+    id,
+    title,
+    thumbnail: thumbnail(node.thumbnails) ?? thumbnail(node.sidebar_thumbnails),
+    // `video_count` is the long form ("50 videos"); the short one is the bare
+    // number, which only reads correctly next to a label the card supplies.
+    videoCountText: presentText(node.video_count) ?? presentText(node.video_count_short),
+    channel: bylineChannel(node.author),
+  }
+}
+
+// The playlist id is nowhere in `info`, on any renderer, so the caller has to
+// carry the id it browsed with. A continuation page degrades every other field
+// too (no header, no sidebar), which is why the page assembly reuses the
+// playlist read from the first page instead of re-reading it per page.
+export const normalizePlaylistDetails = (input: unknown, id: string): SourcePlaylist => {
+  const info = (input as PlaylistDetails).info
+  return {
+    id,
+    title: presentText(info?.title) ?? id,
+    description: presentText(info?.description),
+    thumbnail: thumbnail(info?.thumbnails),
+    // The three stats stringify to 'N/A' when the sidebar is absent, so they go
+    // through presentText rather than being surfaced as literal text.
+    videoCountText: presentText(info?.total_items),
+    viewCountText: presentText(info?.views),
+    updatedText: presentText(info?.last_updated),
+    privacy: info?.privacy,
+    isEditable: info?.is_editable,
+    canDelete: info?.can_delete,
+    canReorder: info?.can_reorder,
+    channel: authorChannel(info?.author),
+  }
+}
+
+// PlaylistVideo fuses the view count and the upload date into one `video_info`
+// line instead of the separate fields a feed video carries. The bullet is what
+// the renderer emits under any hl, so splitting on it beats leaving the whole
+// string in one field.
+const videoInfoParts = (value: Text | undefined) =>
+  presentText(value)?.split('•').map((part) => part.trim()).filter((part) => part.length > 0) ?? []
+
+export const normalizePlaylistItem = (input: unknown): SourcePlaylistItem | undefined => {
+  const node = input as PlaylistVideoNode
+  // A playlist page also carries a recommended-videos rail built from the same
+  // renderer. Those entries are not in the playlist and have no setVideoId, so
+  // a remove or reorder against one would fail.
+  if (node.style === 'PLAYLIST_VIDEO_RENDERER_STYLE_RECOMMENDED_VIDEO') return undefined
+  const video = normalizeFeedVideo(node)
+  if (!video) return undefined
+  const parts = videoInfoParts(node.video_info)
+  // 1-based, as YouTube numbers the rows.
+  const index = Number(presentText(node.index))
+  return {
+    video: {
+      ...video,
+      viewCount: video.viewCount ?? parts[0],
+      publishedText: video.publishedText ?? parts[1],
+    },
+    setVideoId: node.set_video_id,
+    index: Number.isInteger(index) ? index : undefined,
+  }
+}
+
+// The panel byline is an Author for a real playlist and a Text for a mix. Only
+// the Author path has a name field, and Author defines no toString, so the Text
+// branch is taken ONLY when the node really carries one: falling through to
+// presentText on an Author would stringify it to the literal '[object Object]',
+// which survives the 'N/A' filter and renders as the queue's byline. Author
+// fills `name` with 'N/A' whenever the byline node is empty, which is exactly
+// when that fallthrough used to happen.
+const bylineText = (author: Author | Text | undefined) => {
+  const named = presentText((author as Author | undefined)?.name)
+  if (named) return named
+  const node = author as Text | undefined
+  return typeof node?.text === 'string' ? presentText(node) : undefined
+}
+
+export const normalizePlaylistPanelVideo = (input: unknown): SourceVideo | undefined => {
+  // Three node kinds share the queue array. PlaylistPanelVideoWrapper keeps the
+  // row on `primary`, and AutomixPreviewVideo (the mix teaser tail) carries no
+  // video at all, so it falls out on the id check rather than needing its own
+  // branch.
+  const node = input as PlaylistPanelVideoNode | undefined
+  const row = node?.primary ?? node
+  const id = row?.video_id
+  const title = presentText(row?.title)
+  if (!id || !title) return undefined
+  return {
+    id,
+    title,
+    thumbnail: thumbnail(row?.thumbnail),
+    // Already in seconds, but it comes from parsing 'N/A' when the row carries
+    // no length, which yields NaN rather than an absent value.
+    durationSeconds: Number.isFinite(row?.duration?.seconds) ? row?.duration?.seconds : undefined,
+    // No channel: the row's byline is display text and the node carries no
+    // channel id on any field, so a Channel built from it would link nowhere.
+  }
+}
+
+export const normalizeWatchPlaylist = (input: unknown): SourceWatchPlaylist | undefined => {
+  const panel = input as WatchNextPlaylistPanel | undefined
+  const id = panel?.id
+  if (!id) return undefined
+  return {
+    id,
+    title: presentText(panel?.title),
+    author: bylineText(panel?.author),
+    items: (panel?.contents ?? [])
+      .map(normalizePlaylistPanelVideo)
+      .filter((video) => video !== undefined),
+    // 0-based, so 0 is a real position and must survive the guard.
+    currentIndex: Number.isInteger(panel?.current_index) ? panel?.current_index : undefined,
+    isInfinite: panel?.is_infinite,
   }
 }
 
@@ -378,6 +621,16 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
   } | undefined
   const commentsHeader = first('CommentsEntryPointHeader') as {
     comment_count?: Text
+  } | undefined
+  // The queue panel IS in contents_memo, unlike player_overlays: the parser
+  // builds TwoColumnWatchNextResults inside the window where the memo is live,
+  // and that constructor parses the panel rows synchronously, so both the
+  // container and every PlaylistPanelVideo land in it. The container is read
+  // rather than memo.get('PlaylistPanelVideo') because the id, title, byline
+  // and current index exist nowhere else, and the flat memo key over-collects
+  // the counterparts nested inside a wrapper.
+  const watchNext = first('TwoColumnWatchNextResults') as {
+    playlist?: unknown
   } | undefined
   const owner = secondary?.owner
   const author = owner?.author
@@ -421,6 +674,7 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
         }
       : undefined,
     related,
+    playlist: normalizeWatchPlaylist(watchNext?.playlist),
   }
 }
 
