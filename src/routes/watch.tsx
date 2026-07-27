@@ -10,9 +10,10 @@ import { Link, useLocation, useSearch } from 'wouter'
 import { useDocumentTitle } from '../app'
 import Comments from '../components/comments'
 import DescriptionBox from '../components/description-box'
-import { readable } from '../components/format'
+import { parseStartSeconds, readable } from '../components/format'
 import PlaylistPanel from '../components/playlist-panel'
 import SaveMenu from '../components/save-menu'
+import ShareDialog from '../components/share-dialog'
 import SubscribeButton from '../components/subscribe-button'
 import { VideoCardCompact, VideoCardCompactSkeleton } from '../components/video-card-compact'
 import { gql } from '../generated'
@@ -325,6 +326,10 @@ const WatchPage = () => {
   // out-of-range index, but a NaN would serialize as null and lose a position
   // that the URL actually carried.
   const listId = params.get('list') ?? undefined
+  // A shared link can carry a start offset. app.tsx deliberately keeps `t` out
+  // of the route identity, so changing it does NOT remount the player: this is
+  // the position a FRESH load of the page starts at.
+  const startAt = parseStartSeconds(params.get('t'))
   const indexParam = Number(params.get('index'))
   const playlistIndex = Number.isInteger(indexParam) && indexParam > 0 ? indexParam - 1 : undefined
   const [{ data: watchData, error: watchError, fetching: watchFetching }] = useQuery({
@@ -348,14 +353,10 @@ const WatchPage = () => {
   const toggleTheater = useCallback(() => {
     setTheater((value) => updateSettings({ theater: !value }).theater)
   }, [])
-  const [copied, setCopied] = useState(false)
-  const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
-  useEffect(() => {
-    setCopied(false)
-    clearTimeout(copiedTimer.current)
-  }, [videoId])
-  useEffect(() => () => clearTimeout(copiedTimer.current), [])
+  // The share sheet closes when the video changes: it is about the video it was
+  // opened over, and leaving it up would copy a link to a different one.
+  useEffect(() => setSharing(false), [videoId])
 
   const watch = watchData?.watch
   useDocumentTitle(watch?.title ?? undefined)
@@ -393,12 +394,10 @@ const WatchPage = () => {
     })
   }
 
-  const onShare = () => {
-    navigator.clipboard.writeText(location.href).catch(() => {})
-    setCopied(true)
-    clearTimeout(copiedTimer.current)
-    copiedTimer.current = setTimeout(() => setCopied(false), 2000)
-  }
+  // Replaces a bare clipboard write with a real sheet: the old control could
+  // only copy the current URL, so sharing from a position or embedding was not
+  // reachable at all.
+  const [sharing, setSharing] = useState(false)
 
   return (
     <main css={style} className={theater ? 'theater' : undefined}>
@@ -409,6 +408,7 @@ const WatchPage = () => {
         <VideoPlayer
           key={`player:${videoId}`}
           videoId={videoId}
+          startAt={startAt}
           theater={theater}
           onTheater={toggleTheater}
         />
@@ -463,9 +463,9 @@ const WatchPage = () => {
                     <ThumbsDown size={20} strokeWidth={1.5} fill={disliked ? 'currentColor' : 'none'} />
                   </button>
                 </div>
-                <button type='button' className='pill' onClick={onShare}>
+                <button type='button' className='pill' onClick={() => setSharing(true)}>
                   <Share2 size={20} strokeWidth={1.5} />
-                  {copied ? 'Copied' : 'Share'}
+                  Share
                 </button>
                 {/* Save owns a trigger and a panel of its own, so it sits beside
                     Share rather than inside the More menu: menu.tsx finds its
@@ -485,7 +485,7 @@ const WatchPage = () => {
                       also offers Report, Transcript and Show clip; none of the
                       three has a mutation or a query behind it here, and a row
                       that opens nothing is worse than an absent one. */}
-                  <MenuItem icon={Link2} label='Copy link' onSelect={onShare} />
+                  <MenuItem icon={Link2} label='Share' onSelect={() => setSharing(true)} />
                   {/* No icon: a checkable row draws the tick box in the icon
                       slot, so one passed here would never be rendered. */}
                   <MenuItem
@@ -532,6 +532,7 @@ const WatchPage = () => {
           </aside>
         )
         : undefined}
+      {sharing ? <ShareDialog videoId={videoId} list={listId} onClose={() => setSharing(false)} /> : undefined}
     </main>
   )
 }

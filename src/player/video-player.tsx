@@ -94,10 +94,19 @@ const requestPlayerFullscreen = (video: HTMLVideoElement | null) => {
 }
 
 const VideoPlayer = (
-  { videoId, theater = false, onTheater }: { videoId: string, theater?: boolean, onTheater?: () => void },
+  { videoId, startAt, theater = false, onTheater }: {
+    videoId: string
+    // Where a fresh load starts, from a shared link's `t`. Only the INITIAL
+    // value is used: after that this ref tracks the live playhead so a retry
+    // resumes where playback failed rather than jumping back to the link's
+    // offset.
+    startAt?: number
+    theater?: boolean
+    onTheater?: () => void
+  },
 ) => {
   const videoRef = useRef<HTMLVideoElement>(null)
-  const resumeAt = useRef(0)
+  const resumeAt = useRef(startAt ?? 0)
   const [attempt, setAttempt] = useState(0)
   const [status, setStatus] = useState('Loading player')
   const [player, setPlayer] = useState<shaka.Player | undefined>(undefined)
@@ -162,10 +171,14 @@ const VideoPlayer = (
       setStatus('')
       // Published for the description and comment timestamps, which sit outside
       // this subtree and cannot reach the element any other way.
-      registerSeek(videoId, (seconds) => {
-        video.currentTime = seconds
-        void video.play().catch(() => {})
-      })
+      registerSeek(
+        videoId,
+        (seconds) => {
+          video.currentTime = seconds
+          void video.play().catch(() => {})
+        },
+        () => video.currentTime,
+      )
       setPlayer(controller.player)
       setHeights(controller.heights)
       setStoryboards(controller.storyboards)

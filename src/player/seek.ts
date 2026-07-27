@@ -11,11 +11,25 @@
    and an unkeyed handle would let a seek land on a player that has already been
    torn down. */
 type SeekHandler = (seconds: number) => void
+type PlayheadReader = () => number
 
-let current: { videoId: string, seek: SeekHandler } | undefined
+let current: { videoId: string, seek: SeekHandler, playhead: PlayheadReader } | undefined
 
-export const registerSeek = (videoId: string, seek: SeekHandler) => {
-  current = { videoId, seek }
+export const registerSeek = (videoId: string, seek: SeekHandler, playhead: PlayheadReader) => {
+  current = { videoId, seek, playhead }
+}
+
+/**
+ * Where the mounted video is, for the share dialog's "start at" offset.
+ *
+ * Undefined rather than 0 when the video is not the one mounted: 0 is a real
+ * position, and a caller cannot tell a genuine start-of-video from "no player"
+ * if both answer the same.
+ */
+export const playheadOf = (videoId: string) => {
+  if (current?.videoId !== videoId) return undefined
+  const seconds = current.playhead()
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.floor(seconds) : undefined
 }
 
 // Takes the id it is releasing so a teardown that arrives AFTER the next
