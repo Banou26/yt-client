@@ -1,4 +1,4 @@
-import type { SourceChannel, SourceComment, SourceLikeStatus, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourceSession, SourceVideo, SourceWatchMeta, SourceWatchPlaylist } from '../types'
+import type { SourceChannel, SourceChannelAbout, SourceComment, SourceLikeStatus, SourcePost, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourceSession, SourceVideo, SourceWatchMeta, SourceWatchPlaylist } from '../types'
 
 type Thumbnail = {
   url?: string
@@ -406,6 +406,100 @@ export const normalizeSearchChannel = (input: unknown): SourceChannel | undefine
     description: presentText(node.description_snippet),
     isSubscribed: node.subscribe_button?.subscribed,
     isVerified: node.author?.is_verified === true ? true : undefined,
+  }
+}
+
+// Two renderer generations are BOTH live: newer channels answer with
+// AboutChannel wrapping an AboutChannelView, older ones still serve the legacy
+// ChannelAboutFullMetadata, whose fields are Text nodes where the modern one
+// uses plain strings. Reading only the modern shape leaves the panel blank on
+// exactly the channels old enough to have filled it in.
+export const normalizeChannelAbout = (input: unknown): SourceChannelAbout | undefined => {
+  const node = input as {
+    metadata?: {
+      description?: string
+      country?: string
+      joined_date?: Text
+      view_count?: string
+      subscriber_count?: string
+      video_count?: string
+      canonical_channel_url?: string
+      links?: { title?: Text, link?: Text }[]
+    }
+    description?: Text
+    country?: Text
+    joined_date?: Text
+    view_count?: Text
+    canonical_channel_url?: string
+    primary_links?: { title?: Text, endpoint?: { metadata?: { url?: string } } }[]
+  } | undefined
+  if (!node) return undefined
+  const view = node.metadata
+  if (view) {
+    return {
+      description: presentText(view.description),
+      country: presentText(view.country),
+      joinedDateText: presentText(view.joined_date),
+      viewCountText: presentText(view.view_count),
+      subscriberCountText: presentText(view.subscriber_count),
+      videoCountText: presentText(view.video_count),
+      canonicalUrl: view.canonical_channel_url,
+      links: (view.links ?? []).flatMap((link) => {
+        const title = presentText(link.title)
+        const url = presentText(link.link)
+        return title && url ? [{ title, url }] : []
+      }),
+    }
+  }
+  const legacy = node
+  // The legacy renderer carries no counts beyond views, so those stay absent
+  // rather than being back-filled from the header, which is a different read.
+  const about: SourceChannelAbout = {
+    description: presentText(legacy.description),
+    country: presentText(legacy.country),
+    joinedDateText: presentText(legacy.joined_date),
+    viewCountText: presentText(legacy.view_count),
+    canonicalUrl: legacy.canonical_channel_url,
+    links: (legacy.primary_links ?? []).flatMap((link) => {
+      const title = presentText(link.title)
+      const url = link.endpoint?.metadata?.url
+      return title && url ? [{ title, url }] : []
+    }),
+  }
+  // A node that is neither shape yields nothing worth a panel.
+  return Object.values(about).some((value) => value !== undefined && value.length !== 0) ? about : undefined
+}
+
+export const normalizeCommunityPost = (input: unknown): SourcePost | undefined => {
+  const node = input as {
+    id?: string
+    author?: Author
+    content?: Text
+    published?: Text
+    vote_count?: Text
+    attachment?: unknown
+  } | undefined
+  const id = node?.id
+  if (!id) return undefined
+  const attachment = node?.attachment as {
+    image?: Thumbnail[]
+    thumbnails?: Thumbnail[]
+  } | undefined
+  return {
+    id,
+    author: authorChannel(node?.author),
+    // A post can be an image or a poll with no words at all, so empty text is a
+    // real state rather than a reason to drop the row.
+    text: presentText(node?.content) ?? '',
+    publishedText: presentText(node?.published),
+    voteCountText: presentText(node?.vote_count),
+    // Only the two attachment kinds a card can actually draw. The node behind
+    // `attachment` is a whole union, and the rest needs a surface first.
+    // Guarded because most posts carry no attachment at all, and
+    // normalizeFeedVideo takes a node rather than a maybe-node: it casts and
+    // reads `video_id` straight off, which throws on undefined.
+    attachedVideo: node?.attachment === undefined ? undefined : normalizeFeedVideo(node.attachment),
+    attachedImage: thumbnail(attachment?.image ?? attachment?.thumbnails),
   }
 }
 

@@ -1,8 +1,8 @@
-import type { Source, SourceChannel, SourceChannelPage, SourceChannelTab, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourcePlaylistListPage, SourcePlaylistPage, SourcePlaylistPrivacy, SourceSearchFeature, SourceSearchFilters, SourceSearchPage, SourceSearchResult, SourceSectionedVideoPage, SourceVideo, SourceVideoPage } from '../types'
+import type { Source, SourceChannel, SourceChannelPage, SourceChannelTab, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourcePlaylistListPage, SourcePlaylistPage, SourcePlaylistPrivacy, SourceSearchFeature, SourceSearchFilters, SourceSearchPage, SourceSearchResult, SourcePostPage, SourceSectionedVideoPage, SourceVideo, SourceVideoPage } from '../types'
 
 import { Innertube } from 'youtubei.js/web'
 
-import { normalizeChannel, normalizeCommentThread, normalizeFeedChannel, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizeSearchChannel, normalizeSession, normalizeShortsLockup, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
+import { normalizeChannel, normalizeCommentThread, normalizeFeedChannel, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizeChannelAbout, normalizeCommunityPost, normalizeSearchChannel, normalizeSession, normalizeShortsLockup, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
 
 type Feed = {
   videos: Iterable<unknown>
@@ -79,8 +79,16 @@ type ChannelFeed = Feed & {
   getCourses?: () => Promise<ChannelFeed>
   getPlaylists?: () => Promise<ChannelFeed>
   getCommunity?: () => Promise<ChannelFeed>
+  getAbout?: () => Promise<unknown>
+  has_about?: boolean
   applySort?: (sort: string) => Promise<ChannelFeed>
   search?: (query: string) => Promise<ChannelFeed>
+}
+
+// Community posts page like any other feed, but the rows come off `posts`
+// rather than `videos`, which pageItems never reads.
+type PostsFeed = Feed & {
+  posts?: Iterable<unknown>
 }
 
 type CommentsFeed = {
@@ -329,10 +337,17 @@ const CHANNEL_TABS = [
 ] as const satisfies readonly { tab: SourceChannelTab, has: keyof ChannelFeed, open: keyof ChannelFeed }[]
 
 const availableChannelTabs = (feed: ChannelFeed): SourceChannelTab[] => {
-  const tabs = CHANNEL_TABS.filter((entry) => feed[entry.has] === true).map((entry) => entry.tab)
-  // Search is not a content tab upstream, but it is reachable the same way and
-  // the strip renders it last, matching youtube.com.
-  return feed.has_search === true ? [...tabs, 'SEARCH'] : tabs
+  // Annotated rather than inferred: the table below is narrower than the tab
+  // union, so an inferred element type would reject the two appended tabs.
+  const tabs: SourceChannelTab[] = CHANNEL_TABS
+    .filter((entry) => feed[entry.has] === true)
+    .map((entry) => entry.tab)
+  // Neither About nor Search is a content feed, so neither is in that table:
+  // they are reachable the same way but render their own surface, and the strip
+  // puts them last, matching youtube.com.
+  if (feed.has_about === true) tabs.push('ABOUT')
+  if (feed.has_search === true) tabs.push('SEARCH')
+  return tabs
 }
 
 // Videos first when it exists, because that is what a channel link is almost
@@ -345,6 +360,9 @@ const openChannelTab = async (
   tab: SourceChannelTab,
   query: string | undefined,
 ): Promise<ChannelFeed> => {
+  // About renders from its own query rather than from a feed, so the landing
+  // feed is returned untouched: nothing reads its rows while that tab is open.
+  if (tab === 'ABOUT') return feed
   if (tab === 'SEARCH') {
     // An empty in-channel query would browse the whole channel rather than
     // search it, so it stays on the landing feed until there is something to
@@ -384,6 +402,7 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
   const playlistContinuations = createContinuations<SourcePlaylistPage>()
   const playlistListContinuations = createContinuations<SourcePlaylistListPage>()
   const searchContinuations = createContinuations<SourceSearchPage>()
+  const postContinuations = createContinuations<SourcePostPage>()
   // The tab set, sort options and applied sort belong to the page rather than
   // to the channel entity, and a cursored call does not re-read them, so the
   // last read of each channel keeps both halves.
@@ -441,6 +460,19 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
       result.cursor = searchContinuations.register(
         kind,
         async () => searchPage(kind, await feed.getContinuation() as SearchFeed),
+      )
+    }
+    return result
+  }
+
+  const postPage = (kind: string, feed: PostsFeed): SourcePostPage => {
+    const result: SourcePostPage = {
+      items: [...(feed.posts ?? [])].map(normalizeCommunityPost).filter((post) => post !== undefined),
+    }
+    if (feed.has_continuation) {
+      result.cursor = postContinuations.register(
+        kind,
+        async () => postPage(kind, await feed.getContinuation() as PostsFeed),
       )
     }
     return result
@@ -654,6 +686,21 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
       const rest = { availableTabs, tab: selected, sortOptions, appliedSort }
       channels.set(id, { channel, page: rest })
       return { ...rest, channel, videos: page(kind, feed) }
+    },
+    // A second browse on top of channel(), so it is only paid for by the About
+    // tab. `has_about` gates it: getAbout() reaches for a tab that is simply
+    // not there on channels that publish no panel.
+    channelAbout: async (id) => {
+      const result = await (await client).getChannel(id)
+      if (result.has_about !== true || !result.getAbout) return undefined
+      return normalizeChannelAbout(await result.getAbout.call(result))
+    },
+    communityPosts: async (channelId, cursor) => {
+      const kind = `community:${channelId}`
+      if (cursor) return postContinuations.resolve(kind, cursor)
+      const result = await (await client).getChannel(channelId)
+      if (result.has_community !== true || !result.getCommunity) return { items: [] }
+      return postPage(kind, await result.getCommunity.call(result) as PostsFeed)
     },
     // A single /next call carries everything the watch page needs on top of
     // playback (which fetches /player separately): one tunneled round trip. In

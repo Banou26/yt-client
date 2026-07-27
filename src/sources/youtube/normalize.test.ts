@@ -1,8 +1,77 @@
 import { describe, expect, it } from 'vitest'
 
-import { normalizeChannel, normalizeCommentThread, normalizeFeedVideo, normalizeShortsLockup, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizePlaylistPanelVideo, normalizeSearchChannel, normalizeSession, normalizeVideoDetails, normalizeWatchMeta, normalizeWatchPlaylist } from './normalize'
+import { normalizeChannel, normalizeChannelAbout, normalizeCommentThread, normalizeCommunityPost, normalizeFeedVideo, normalizeShortsLockup, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizePlaylistPanelVideo, normalizeSearchChannel, normalizeSession, normalizeVideoDetails, normalizeWatchMeta, normalizeWatchPlaylist } from './normalize'
 
 describe('youtube normalization', () => {
+  it('reads the About panel from both renderer generations', () => {
+    // Modern channels answer with AboutChannel wrapping an AboutChannelView,
+    // whose fields are plain strings.
+    expect(normalizeChannelAbout({
+      metadata: {
+        description: 'We make things',
+        country: 'Norway',
+        joined_date: { text: 'Joined 3 Mar 2011' },
+        view_count: '12,345,678 views',
+        subscriber_count: '1.2M subscribers',
+        video_count: '431 videos',
+        canonical_channel_url: 'https://www.youtube.com/@achannel',
+        links: [{ title: { text: 'Site' }, link: { text: 'example.com' } }],
+      },
+    })).toEqual({
+      description: 'We make things',
+      country: 'Norway',
+      joinedDateText: 'Joined 3 Mar 2011',
+      viewCountText: '12,345,678 views',
+      subscriberCountText: '1.2M subscribers',
+      videoCountText: '431 videos',
+      canonicalUrl: 'https://www.youtube.com/@achannel',
+      links: [{ title: 'Site', url: 'example.com' }],
+    })
+  })
+
+  it('falls back to the legacy About renderer, whose fields are Text nodes', () => {
+    // Older channels still serve ChannelAboutFullMetadata, and reading only the
+    // modern shape leaves the panel blank on exactly those channels.
+    expect(normalizeChannelAbout({
+      description: { text: 'An older channel' },
+      country: { text: 'Japan' },
+      joined_date: { text: 'Joined 1 Jan 2008' },
+      view_count: { text: '99 views' },
+      canonical_channel_url: 'https://www.youtube.com/channel/UC1',
+      primary_links: [{ title: { text: 'Blog' }, endpoint: { metadata: { url: 'https://blog.example' } } }],
+    })).toMatchObject({
+      description: 'An older channel',
+      country: 'Japan',
+      viewCountText: '99 views',
+      links: [{ title: 'Blog', url: 'https://blog.example' }],
+    })
+    // Neither shape means there is no panel worth rendering.
+    expect(normalizeChannelAbout({})).toBeUndefined()
+    expect(normalizeChannelAbout(undefined)).toBeUndefined()
+  })
+
+  it('keeps a community post that carries no words and no attachment', () => {
+    // A post can be a bare poll or image, so empty text is a real state rather
+    // than a reason to drop the row.
+    expect(normalizeCommunityPost({
+      id: 'Ugkx',
+      author: { id: 'UC1', name: 'Chan' },
+      published: { text: '2 days ago' },
+      vote_count: { text: '1.2K' },
+    })).toEqual({
+      id: 'Ugkx',
+      author: { id: 'UC1', name: 'Chan', avatar: undefined, handle: undefined, isVerified: undefined },
+      text: '',
+      publishedText: '2 days ago',
+      voteCountText: '1.2K',
+      attachedVideo: undefined,
+      attachedImage: undefined,
+    })
+    // No id is the one thing that makes a row unrenderable.
+    expect(normalizeCommunityPost({ content: { text: 'orphan' } })).toBeUndefined()
+    expect(normalizeCommunityPost(undefined)).toBeUndefined()
+  })
+
   it('keeps the shorts that every feed used to drop', () => {
     // ShortsLockupView carries NEITHER video_id NOR id, so normalizeFeedVideo
     // returned undefined for every Short and each one fell out of home,

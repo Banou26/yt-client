@@ -173,7 +173,45 @@ enum ChannelTab {
   COURSES
   PLAYLISTS
   COMMUNITY
+  ABOUT
   SEARCH
+}
+
+type ChannelLink {
+  title: String!
+  url: String!
+}
+
+# The About panel. Reached through its own call rather than as a field on
+# ChannelPage: getAbout() is a separate round trip and only the About tab needs
+# it, so folding it in would tax every other tab with a request it discards.
+type ChannelAbout {
+  description: String
+  country: String
+  joinedDateText: String
+  viewCountText: String
+  subscriberCountText: String
+  videoCountText: String
+  canonicalUrl: String
+  links: [ChannelLink!]!
+}
+
+# A community post. `attachment` is deliberately reduced to the parts a card can
+# render: the node behind it is a whole union (poll, image, video, playlist) and
+# modelling all of it belongs with the surface that would show it.
+type Post {
+  id: ID!
+  author: Channel
+  text: String!
+  publishedText: String
+  voteCountText: String
+  attachedVideo: Video
+  attachedImage: String
+}
+
+type PostPage {
+  items: [Post!]!
+  cursor: String
 }
 
 type ChannelPage {
@@ -314,6 +352,11 @@ type Query {
   # SEARCH tab and is ignored elsewhere. `sort` is one of the page's own
   # `sortOptions` labels.
   channel(id: ID!, tab: ChannelTab, sort: String, query: String, cursor: String): ChannelPage!
+  # Null when the channel publishes no About panel, which is an ordinary state
+  # rather than a failure: `ChannelPage.availableTabs` is what says whether to
+  # ask at all.
+  channelAbout(id: ID!): ChannelAbout
+  communityPosts(channelId: ID!, cursor: String): PostPage!
   # `playlistId` puts the video in a queue: the same /next call then also returns
   # the playlist panel. `playlistIndex` is 0-based, and the server corrects an
   # out-of-range one rather than failing, so read the position back off

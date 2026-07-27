@@ -107,7 +107,38 @@ export type SourceSearchPage = {
 
 export type SourceChannelTab =
   | 'HOME' | 'VIDEOS' | 'SHORTS' | 'LIVE' | 'RELEASES'
-  | 'PODCASTS' | 'COURSES' | 'PLAYLISTS' | 'COMMUNITY' | 'SEARCH'
+  | 'PODCASTS' | 'COURSES' | 'PLAYLISTS' | 'COMMUNITY' | 'ABOUT' | 'SEARCH'
+
+export type SourceChannelLink = {
+  title: string
+  url: string
+}
+
+export type SourceChannelAbout = {
+  description?: string
+  country?: string
+  joinedDateText?: string
+  viewCountText?: string
+  subscriberCountText?: string
+  videoCountText?: string
+  canonicalUrl?: string
+  links: SourceChannelLink[]
+}
+
+export type SourcePost = {
+  id: string
+  author?: SourceChannel
+  text: string
+  publishedText?: string
+  voteCountText?: string
+  attachedVideo?: SourceVideo
+  attachedImage?: string
+}
+
+export type SourcePostPage = {
+  items: SourcePost[]
+  cursor?: string
+}
 
 export type SourceChannelPage = {
   channel: SourceChannel
@@ -226,6 +257,10 @@ export type Source = {
   // `tab` omitted means the channel's own landing tab. `query` applies only to
   // the SEARCH tab. `sort` is one of the page's own sortOptions labels.
   channel(id: string, tab?: SourceChannelTab, sort?: string, query?: string, cursor?: string): Promise<SourceChannelPage>
+  // A second browse on top of channel(): only the About tab needs it, so it is
+  // its own call rather than a field every other tab would pay for.
+  channelAbout(id: string): Promise<SourceChannelAbout | undefined>
+  communityPosts(channelId: string, cursor?: string): Promise<SourcePostPage>
   // Passing a playlist puts the video in a queue, and the same call then also
   // brings back the panel. `playlistIndex` is 0-based; the server corrects an
   // out-of-range one, so the honoured position is the one on the result.
@@ -273,6 +308,8 @@ export const SOURCE_METHODS = [
   'searchSuggestions',
   'video',
   'channel',
+  'channelAbout',
+  'communityPosts',
   'watch',
   'comments',
   'playlists',
@@ -313,6 +350,7 @@ export const SOURCE_CURSOR_ARGUMENT = {
   search: 2,
   channel: 4,
   comments: 1,
+  communityPosts: 1,
   playlists: 0,
   playlist: 1,
 } as const satisfies Partial<Record<SourceMethod, number>>
@@ -337,6 +375,8 @@ export const SOURCE_REPLAY = {
   searchSuggestions: 'always',
   video: 'always',
   channel: 'unless-cursor',
+  channelAbout: 'always',
+  communityPosts: 'unless-cursor',
   watch: 'always',
   comments: 'unless-cursor',
   playlists: 'unless-cursor',

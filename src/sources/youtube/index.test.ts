@@ -80,6 +80,22 @@ const playlists = (id: string, next?: () => Promise<FakePlaylists>): FakePlaylis
   getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
 })
 
+type FakePosts = {
+  videos: unknown[]
+  posts: unknown[]
+  has_continuation: boolean
+  getContinuation(): Promise<FakePosts>
+}
+
+// Community rows come off `posts`, which pageItems never reads: a post feed run
+// through the video path yields an empty tab rather than an error.
+const posts = (id: string, next?: () => Promise<FakePosts>): FakePosts => ({
+  videos: [],
+  posts: [{ id, content: { text: `Body of ${id}` }, published: { text: '2 days ago' }, author: { id: 'UC1', name: 'Chan' } }],
+  has_continuation: Boolean(next),
+  getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
+})
+
 type FakeCall = { endpoint: string, args?: Record<string, unknown> }
 
 const createFakeClient = () => {
@@ -115,6 +131,8 @@ const createFakeClient = () => {
         metadata: { external_id: 'c', title: 'Channel' },
         has_videos: true,
         has_playlists: true,
+        has_community: true,
+        has_about: true,
         async getVideos(this: unknown) {
           if (this !== channel) throw new TypeError("Cannot read properties of undefined (reading 'getTabByURL')")
           return feed('channel-videos', async () => feed('channel-videos-2'))
@@ -122,6 +140,14 @@ const createFakeClient = () => {
         async getPlaylists(this: unknown) {
           if (this !== channel) throw new TypeError("Cannot read properties of undefined (reading 'getTabByURL')")
           return feed('channel-playlists', async () => feed('channel-playlists-2'))
+        },
+        async getCommunity(this: unknown) {
+          if (this !== channel) throw new TypeError("Cannot read properties of undefined (reading 'getTabByURL')")
+          return posts('post-1', async () => posts('post-2'))
+        },
+        async getAbout(this: unknown) {
+          if (this !== channel) throw new TypeError("Cannot read properties of undefined (reading 'getTabByURL')")
+          return { metadata: { description: 'About us', country: 'Norway', view_count: '1,234 views', links: [{ title: { text: 'Site' }, link: { text: 'example.com' } }] } }
         },
       }
       return channel
@@ -263,7 +289,9 @@ describe('youtube channel tabs', () => {
     const result = await source.channel('c')
     // The fake carries Videos and Playlists only, so Shorts must not appear:
     // opening a tab a channel lacks throws `Tab "shorts" not found` upstream.
-    expect(result.availableTabs).toEqual(['VIDEOS', 'PLAYLISTS'])
+    // About and Search render their own surface, so they sit after the content
+    // tabs rather than inside the feed table.
+    expect(result.availableTabs).toEqual(['VIDEOS', 'PLAYLISTS', 'COMMUNITY', 'ABOUT'])
     expect(result.tab).toBe('VIDEOS')
     expect(result.videos.items[0]?.id).toBe('channel-videos')
   })
@@ -277,7 +305,7 @@ describe('youtube channel tabs', () => {
     expect(playlists.tab).toBe('PLAYLISTS')
     expect(playlists.videos.items[0]?.id).toBe('channel-playlists')
     // Falling back beats throwing at the page for a tab that is not there.
-    const missing = await source.channel('c', 'COMMUNITY')
+    const missing = await source.channel('c', 'SHORTS')
     expect(missing.tab).toBe('VIDEOS')
   })
 
@@ -481,6 +509,7 @@ describe('youtube source', () => {
     search: ['query', undefined as unknown as string],
     channel: ['c', undefined as unknown as string, undefined as unknown as string, undefined as unknown as string],
     comments: ['abc'],
+    communityPosts: ['c'],
     playlists: [],
     playlist: ['PL1'],
   }

@@ -1,17 +1,61 @@
-import type { ChannelTab, ChannelViewQuery } from '../generated/graphql'
+import type { ChannelTab, ChannelViewQuery, CommunityPostsQuery } from '../generated/graphql'
 
 import { css } from '@emotion/react'
 import { useState } from 'preact/hooks'
 import { useQuery } from 'urql'
-import { useLocation, useSearch } from 'wouter'
+import { Link, useLocation, useSearch } from 'wouter'
 
 import { useDocumentTitle } from '../app'
 import { SubscribeButton } from '../components/subscribe-button'
 import { FeedSentinel, useInfiniteFeed } from '../components/use-infinite-feed'
+import { VideoCardCompact } from '../components/video-card-compact'
 import { VideoGrid } from '../components/video-grid'
 import { gql } from '../generated'
 
 type VideosPage = ChannelViewQuery['channel']['videos']
+type PostsPage = CommunityPostsQuery['communityPosts']
+
+// Both are their own round trip and only one tab needs each, so they are
+// separate documents rather than fields folded into the channel query.
+const CHANNEL_ABOUT_QUERY = gql(`
+  query ChannelAbout($id: ID!) {
+    channelAbout(id: $id) {
+      description
+      country
+      joinedDateText
+      viewCountText
+      subscriberCountText
+      videoCountText
+      canonicalUrl
+      links { title url }
+    }
+  }
+`)
+
+const COMMUNITY_POSTS_QUERY = gql(`
+  query CommunityPosts($channelId: ID!, $cursor: String) {
+    communityPosts(channelId: $channelId, cursor: $cursor) {
+      items {
+        id
+        text
+        publishedText
+        voteCountText
+        attachedImage
+        author { id name avatar }
+        attachedVideo {
+          id
+          title
+          thumbnail
+          durationSeconds
+          viewCount
+          publishedText
+          channel { id name }
+        }
+      }
+      cursor
+    }
+  }
+`)
 
 const CHANNEL_VIEW_QUERY = gql(`
   query ChannelView($id: ID!, $tab: ChannelTab, $sort: String, $query: String, $cursor: String) {
@@ -64,6 +108,7 @@ const TAB_LABELS: Record<ChannelTab, string> = {
   COURSES: 'Courses',
   PLAYLISTS: 'Playlists',
   COMMUNITY: 'Community',
+  ABOUT: 'About',
   SEARCH: 'Search',
 }
 
@@ -210,6 +255,117 @@ const style = css`
     margin-top: 2.4rem;
   }
 
+  /* A single readable column rather than a grid: a post is a body of text, and
+     the video grid's card width would set the measure far too wide. */
+  .posts {
+    display: flex;
+    flex-direction: column;
+    gap: 1.6rem;
+    max-width: 68rem;
+  }
+
+  .post {
+    padding: 1.6rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 1.2rem;
+  }
+
+  .post-head {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    font-size: 1.3rem;
+    color: var(--text-secondary);
+  }
+
+  .post-author {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.8rem;
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  .post-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.4rem;
+    height: 2.4rem;
+    border-radius: 50%;
+    object-fit: cover;
+    background: var(--bg-chip);
+    font-size: 1.1rem;
+  }
+
+  .post-text {
+    margin: 1.2rem 0 0;
+    font-size: 1.4rem;
+    line-height: 2rem;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+  }
+
+  .post-image {
+    display: block;
+    width: 100%;
+    margin-top: 1.2rem;
+    border-radius: 0.8rem;
+  }
+
+  .post-votes {
+    margin-top: 1.2rem;
+    font-size: 1.3rem;
+    color: var(--text-secondary);
+  }
+
+  .about {
+    max-width: 68rem;
+  }
+
+  .about-description {
+    margin: 0;
+    font-size: 1.4rem;
+    line-height: 2.2rem;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+  }
+
+  .about-stats {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.8rem 2.4rem;
+    margin: 2.4rem 0 0;
+    font-size: 1.4rem;
+  }
+
+  .about-stats > div {
+    display: contents;
+  }
+
+  .about-stats dt {
+    color: var(--text-secondary);
+  }
+
+  .about-stats dd {
+    margin: 0;
+    color: var(--text-primary);
+  }
+
+  .about-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.6rem;
+    margin: 2.4rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .about-links a {
+    color: var(--accent);
+    font-size: 1.4rem;
+  }
+
   .status {
     margin-top: 2.4rem;
     color: var(--text-secondary);
@@ -292,6 +448,43 @@ export const ChannelPage = ({ params }: { params: { channelId: string } }) => {
     navigate(rest ? `/channel/${id}?${rest}` : `/channel/${id}`)
   }
 
+  const activeTab = data?.channel.tab
+  // Both are gated on their tab being open: each is a separate browse, and a
+  // channel page that fired all three would pay two round trips it discards.
+  const [{ data: aboutData, fetching: aboutFetching }] = useQuery({
+    query: CHANNEL_ABOUT_QUERY,
+    variables: { id },
+    pause: activeTab !== 'ABOUT',
+  })
+  const about = aboutData?.channelAbout
+  const aboutStats: [string, string][] = about
+    ? ([
+      ['Joined', about.joinedDateText],
+      ['Country', about.country],
+      ['Subscribers', about.subscriberCountText],
+      ['Videos', about.videoCountText],
+      ['Views', about.viewCountText],
+    ] as const)
+      .flatMap(([label, value]) => (value ? [[label, value] as [string, string]] : []))
+    : []
+
+  const [postPages, setPostPages] = useState<PostsPage[]>([])
+  const [{ data: postsData, fetching: postsFetching }] = useQuery({
+    query: COMMUNITY_POSTS_QUERY,
+    variables: { channelId: id, cursor: postPages[postPages.length - 1]?.cursor },
+    pause: activeTab !== 'COMMUNITY',
+  })
+  const postPage = postsData?.communityPosts
+  const { items: posts, cursor: postsCursor } = useInfiniteFeed({
+    pages: postPage ? [...postPages, postPage] : postPages,
+    key: post => post.id,
+  })
+
+  const onMorePosts = () => {
+    if (!postPage?.cursor || postsFetching) return
+    setPostPages(postPages[postPages.length - 1] === postPage ? postPages : [...postPages, postPage])
+  }
+
   const onMore = () => {
     if (!page?.cursor || fetching) return
     setLoaded({ id: feedKey, pages: pages[pages.length - 1] === page ? pages : [...pages, page] })
@@ -360,14 +553,78 @@ export const ChannelPage = ({ params }: { params: { channelId: string } }) => {
           </div>
         )
         : undefined}
-      <div className='videos'>
-        <VideoGrid videos={items} fetching={fetching && items.length === 0} variant='channel' />
-        {data && !fetching && !error && items.length === 0
-          ? <p className='status'>This channel has no videos.</p>
-          : undefined}
-      </div>
-      {fetching && items.length > 0 ? <p className='status'>Loading more…</p> : undefined}
-      <FeedSentinel onVisible={onMore} disabled={fetching || !cursor} />
+      {activeTab === 'COMMUNITY'
+        ? (
+          <div className='videos'>
+            <div className='posts'>
+              {posts.map(post => (
+                <article className='post' key={post.id}>
+                  <div className='post-head'>
+                    {post.author
+                      ? (
+                        <Link href={`/channel/${post.author.id}`} className='post-author'>
+                          {post.author.avatar
+                            ? <img className='post-avatar' src={post.author.avatar} alt='' loading='lazy' />
+                            : <span className='post-avatar' aria-hidden='true'>{post.author.name.slice(0, 1)}</span>}
+                          <span>{post.author.name}</span>
+                        </Link>
+                      )
+                      : undefined}
+                    {post.publishedText ? <span className='post-date'>{post.publishedText}</span> : undefined}
+                  </div>
+                  {post.text ? <p className='post-text'>{post.text}</p> : undefined}
+                  {post.attachedImage
+                    ? <img className='post-image' src={post.attachedImage} alt='' loading='lazy' />
+                    : undefined}
+                  {post.attachedVideo ? <VideoCardCompact video={post.attachedVideo} /> : undefined}
+                  {post.voteCountText ? <div className='post-votes'>{post.voteCountText}</div> : undefined}
+                </article>
+              ))}
+            </div>
+            {!postsFetching && posts.length === 0
+              ? <p className='status'>This channel has no posts.</p>
+              : undefined}
+            <FeedSentinel onVisible={onMorePosts} disabled={postsFetching || !postsCursor} />
+          </div>
+        )
+        : activeTab === 'ABOUT'
+          ? (
+            <div className='videos about'>
+              {about?.description ? <p className='about-description'>{about.description}</p> : undefined}
+              <dl className='about-stats'>
+                {aboutStats.map(([label, value]) => (
+                  <div key={label}>
+                    <dt>{label}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
+              {about && about.links.length > 0
+                ? (
+                  <ul className='about-links'>
+                    {about.links.map(link => (
+                      <li key={link.url}>
+                        <a href={link.url} target='_blank' rel='noreferrer noopener'>{link.title}</a>
+                      </li>
+                    ))}
+                  </ul>
+                )
+                : undefined}
+              {!aboutFetching && !about ? <p className='status'>This channel has no About panel.</p> : undefined}
+            </div>
+          )
+          : (
+            <>
+              <div className='videos'>
+                <VideoGrid videos={items} fetching={fetching && items.length === 0} variant='channel' />
+                {data && !fetching && !error && items.length === 0
+                  ? <p className='status'>This channel has no videos.</p>
+                  : undefined}
+              </div>
+              {fetching && items.length > 0 ? <p className='status'>Loading more…</p> : undefined}
+              <FeedSentinel onVisible={onMore} disabled={fetching || !cursor} />
+            </>
+          )}
     </main>
   )
 }
