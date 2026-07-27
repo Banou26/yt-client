@@ -6,6 +6,7 @@ import { css } from '@emotion/react'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 
 import { resetEngine, startEngine } from '../scramjet/client'
+import { registerSeek, clearSeek } from './seek'
 import { getSettings, updateSettings } from '../settings'
 import { isTypingTarget, PlayerControls } from './controls'
 import { startShakaPlayback } from './shaka'
@@ -159,6 +160,12 @@ const VideoPlayer = (
       })
       if (abort.signal.aborted) return
       setStatus('')
+      // Published for the description and comment timestamps, which sit outside
+      // this subtree and cannot reach the element any other way.
+      registerSeek(videoId, (seconds) => {
+        video.currentTime = seconds
+        void video.play().catch(() => {})
+      })
       setPlayer(controller.player)
       setHeights(controller.heights)
       setStoryboards(controller.storyboards)
@@ -173,6 +180,7 @@ const VideoPlayer = (
     return () => {
       abort.abort()
       clearTimeout(retryTimer)
+      clearSeek(videoId)
       setPlayer(undefined)
       setHeights([])
       setStoryboards([])

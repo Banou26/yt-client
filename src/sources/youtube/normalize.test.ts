@@ -1,8 +1,50 @@
 import { describe, expect, it } from 'vitest'
 
-import { normalizeChannel, normalizeChannelAbout, normalizeCommentThread, normalizeCommunityPost, normalizeFeedVideo, normalizeShortsLockup, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizePlaylistPanelVideo, normalizeSearchChannel, normalizeSession, normalizeVideoDetails, normalizeWatchMeta, normalizeWatchPlaylist } from './normalize'
+import { normalizeChannel, normalizeChannelAbout, normalizeRuns, normalizeCommentThread, normalizeCommunityPost, normalizeFeedVideo, normalizeShortsLockup, normalizeGridPlaylist, normalizeLockupVideo, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizePlaylistPanelVideo, normalizeSearchChannel, normalizeSession, normalizeVideoDetails, normalizeWatchMeta, normalizeWatchPlaylist } from './normalize'
 
 describe('youtube normalization', () => {
+  it('segments a rich text body into linkable runs', () => {
+    // Every one of these is inert when the body is collapsed with text(), which
+    // is the state descriptions and comments were in.
+    expect(normalizeRuns({
+      text: 'See 1:23 and https://example.com and #tag',
+      runs: [
+        { text: 'See ' },
+        { text: '1:23', endpoint: { payload: { videoId: 'abc', startTimeSeconds: 83 } } },
+        { text: ' and ' },
+        { text: 'https://example.com', endpoint: { payload: { url: 'https://example.com' } } },
+        { text: ' and ' },
+        { text: '#tag', endpoint: { payload: { browseId: 'UChashtag' } } },
+      ],
+    })).toEqual([
+      { text: 'See ', url: undefined, videoId: undefined, startSeconds: undefined, browseId: undefined },
+      { text: '1:23', url: undefined, videoId: 'abc', startSeconds: 83, browseId: undefined },
+      { text: ' and ', url: undefined, videoId: undefined, startSeconds: undefined, browseId: undefined },
+      { text: 'https://example.com', url: 'https://example.com', videoId: undefined, startSeconds: undefined, browseId: undefined },
+      { text: ' and ', url: undefined, videoId: undefined, startSeconds: undefined, browseId: undefined },
+      { text: '#tag', url: undefined, videoId: undefined, startSeconds: undefined, browseId: 'UChashtag' },
+    ])
+  })
+
+  it('keeps a chapter that starts at zero', () => {
+    // 0 is a real position, and a falsy check would drop the opening chapter of
+    // every description that has one.
+    expect(normalizeRuns({
+      text: 'Intro',
+      runs: [{ text: 'Intro', endpoint: { payload: { videoId: 'abc', startTimeSeconds: 0 } } }],
+    })[0]).toMatchObject({ startSeconds: 0, videoId: 'abc' })
+  })
+
+  it('yields one unlinked run for a body that carries none', () => {
+    expect(normalizeRuns({ text: 'Plain body' })).toEqual([
+      { text: 'Plain body', url: undefined, videoId: undefined, startSeconds: undefined, browseId: undefined },
+    ])
+    expect(normalizeRuns('a string')).toEqual([{ text: 'a string' }])
+    // Nothing to render is an empty list rather than a run with empty text.
+    expect(normalizeRuns(undefined)).toEqual([])
+    expect(normalizeRuns('')).toEqual([])
+  })
+
   it('reads the About panel from both renderer generations', () => {
     // Modern channels answer with AboutChannel wrapping an AboutChannelView,
     // whose fields are plain strings.
@@ -567,6 +609,7 @@ describe('youtube normalization', () => {
       likeCountText: '123K',
       commentCountText: '4.2K',
       description: 'Full description\nwith lines',
+      descriptionRuns: [{ text: 'Full description\nwith lines', url: undefined, videoId: undefined, startSeconds: undefined, browseId: undefined }],
       channel: {
         id: 'UC123',
         name: 'Channel',
@@ -672,6 +715,9 @@ describe('youtube normalization', () => {
       id: 'UgxComment',
       author: { id: 'UC123', name: '@viewer', avatar: 'avatar', handle: '@viewer' },
       text: 'Nice video',
+      // The same body segmented. A body with no runs still yields one unlinked
+      // segment, so the renderer never has to fall back to the flat string.
+      runs: [{ text: 'Nice video', url: undefined, videoId: undefined, startSeconds: undefined, browseId: undefined }],
       publishedText: '2 days ago',
       likeCountText: '1.2K',
       replyCount: 24,

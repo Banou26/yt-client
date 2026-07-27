@@ -45,6 +45,7 @@ const WATCH_META_QUERY = gql(`
       likeCountText
       commentCountText
       description
+      descriptionRuns { text url videoId startSeconds browseId }
       likeStatus
       channel { id name avatar handle subscriberCountText isSubscribed notificationLevel }
       related {
@@ -508,6 +509,8 @@ const WatchPage = () => {
               viewCountText={watch.viewCountText}
               publishedDateText={watch.publishedDateText}
               description={watch.description}
+              runs={watch.descriptionRuns}
+              videoId={videoId}
             />
           )
           : undefined}

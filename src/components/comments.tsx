@@ -1,4 +1,4 @@
-import type { CommentsQuery } from '../generated/graphql'
+import type { CommentSort, CommentsQuery } from '../generated/graphql'
 
 import { css } from '@emotion/react'
 import { ListFilter, ThumbsDown, ThumbsUp } from 'lucide-react'
@@ -7,27 +7,39 @@ import { useQuery } from 'urql'
 import { Link } from 'wouter'
 
 import { gql } from '../generated'
+import { RichText } from './rich-text'
+import { Menu, MenuItem } from './ui/menu'
 import { useInfiniteFeed } from './use-infinite-feed'
 
 type CommentPage = CommentsQuery['comments']
 
 const COMMENTS_QUERY = gql(`
-  query Comments($videoId: ID!, $cursor: String) {
-    comments(videoId: $videoId, cursor: $cursor) {
+  query Comments($videoId: ID!, $sort: CommentSort, $cursor: String) {
+    comments(videoId: $videoId, sort: $sort, cursor: $cursor) {
       items {
         id
         text
+        runs { text url videoId startSeconds browseId }
         publishedText
         likeCountText
         replyCount
         isPinned
-        author { id name avatar }
+        isHearted
+        isCreator
+        isMember
+        author { id name avatar isVerified }
       }
       cursor
       disabled
+      countText
     }
   }
 `)
+
+const SORTS: { value: CommentSort, label: string }[] = [
+  { value: 'TOP', label: 'Top comments' },
+  { value: 'NEWEST', label: 'Newest first' },
+]
 
 const style = css`
   margin-top: 2.4rem;
@@ -220,22 +232,32 @@ const style = css`
 `
 
 export const Comments = ({ videoId, commentCountText }: { videoId: string, commentCountText?: string | null }) => {
-  const [loadedPages, setLoadedPages] = useState<CommentPage[]>([])
+  const [sort, setSort] = useState<CommentSort>('TOP')
+  // Consumed pages carry the ordering they came from, so switching sort starts
+  // from an empty list in the same render. Without this the accumulator would
+  // dedupe the new ordering against the old one and drop legitimately reordered
+  // comments rather than reordering them.
+  const [loaded, setLoaded] = useState<{ sort: CommentSort, pages: CommentPage[] }>({ sort, pages: [] })
+  const loadedPages = loaded.sort === sort ? loaded.pages : []
   const [{ data, error, fetching }] = useQuery({
     query: COMMENTS_QUERY,
-    variables: { videoId, cursor: loadedPages[loadedPages.length - 1]?.cursor ?? null }
+    variables: { videoId, sort, cursor: loadedPages[loadedPages.length - 1]?.cursor ?? null }
   })
   const page = data?.comments
   const { items } = useInfiniteFeed({
     pages: page ? [...loadedPages, page] : loadedPages,
     key: comment => comment.id
   })
-  const heading = commentCountText
-    ? /comment/i.test(commentCountText) ? commentCountText : `${commentCountText} Comments`
-    : 'Comments'
+  // The header's own count is exact and already reads as a count, so the regex
+  // that had to guess whether the /next teaser said 'comments' is gone. That
+  // teaser stays as the fallback for the render before the page arrives.
+  const heading = page?.countText
+    ?? (commentCountText
+      ? /comment/i.test(commentCountText) ? commentCountText : `${commentCountText} Comments`
+      : 'Comments')
   const onMore = () => {
-    if (!page?.cursor) return
-    setLoadedPages(previous => [...previous, page])
+    if (!page?.cursor || fetching) return
+    setLoaded({ sort, pages: loadedPages[loadedPages.length - 1] === page ? loadedPages : [...loadedPages, page] })
   }
   // only bail entirely when the FIRST page failed: a pagination error must not
   // unmount already-loaded comments (comment cursors die on engine restarts).
@@ -252,10 +274,24 @@ export const Comments = ({ videoId, commentCountText }: { videoId: string, comme
     <section css={style}>
       <div className='heading-row'>
         <h2 className='heading'>{heading}</h2>
-        <button type='button' className='sort'>
-          <ListFilter size={24} strokeWidth={1.5} />
-          Sort by
-        </button>
+        <Menu
+          align='start'
+          trigger={
+            <button type='button' className='sort'>
+              <ListFilter size={24} strokeWidth={1.5} />
+              {SORTS.find(option => option.value === sort)?.label ?? 'Sort by'}
+            </button>
+          }
+        >
+          {SORTS.map(option => (
+            <MenuItem
+              key={option.value}
+              label={option.label}
+              checked={option.value === sort}
+              onSelect={() => setSort(option.value)}
+            />
+          ))}
+        </Menu>
       </div>
       <div className='list'>
         {items.map(comment => (
@@ -281,7 +317,9 @@ export const Comments = ({ videoId, commentCountText }: { videoId: string, comme
                   : undefined}
                 {comment.publishedText ? <span className='age'>{comment.publishedText}</span> : undefined}
               </div>
-              <div className='text'>{comment.text}</div>
+              {comment.runs.length > 0
+                ? <RichText className='text' runs={comment.runs} videoId={videoId} />
+                : <div className='text'>{comment.text}</div>}
               <div className='actions'>
                 <button type='button' className='action' aria-label='Like'>
                   <ThumbsUp size={16} strokeWidth={1.5} />

@@ -172,27 +172,47 @@ export type SourceWatchMeta = {
   likeCountText?: string
   commentCountText?: string
   description?: string
+  descriptionRuns: SourceTextRun[]
   likeStatus?: SourceLikeStatus
   channel?: SourceChannel
   related: SourceVideo[]
   playlist?: SourceWatchPlaylist
 }
 
+// One segment of a rich text body. Which target field is set is what names the
+// kind: a run whose endpoint is a kind this client does not model keeps its
+// text and simply renders unlinked, rather than being dropped.
+export type SourceTextRun = {
+  text: string
+  url?: string
+  videoId?: string
+  startSeconds?: number
+  browseId?: string
+}
+
 export type SourceComment = {
   id: string
   author?: SourceChannel
   text: string
+  runs: SourceTextRun[]
   publishedText?: string
   likeCountText?: string
   replyCount?: number
   isPinned?: boolean
   isHearted?: boolean
+  isLiked?: boolean
+  isDisliked?: boolean
+  isCreator?: boolean
+  isMember?: boolean
 }
+
+export type SourceCommentSort = 'TOP' | 'NEWEST'
 
 export type SourceCommentPage = {
   items: SourceComment[]
   cursor?: string
   disabled?: boolean
+  countText?: string
 }
 
 export type SourcePlaylist = {
@@ -265,7 +285,9 @@ export type Source = {
   // brings back the panel. `playlistIndex` is 0-based; the server corrects an
   // out-of-range one, so the honoured position is the one on the result.
   watch(id: string, playlistId?: string, playlistIndex?: number): Promise<SourceWatchMeta | undefined>
-  comments(videoId: string, cursor?: string): Promise<SourceCommentPage>
+  // A cursor is bound to the sort that minted it: switching order has to start
+  // a new feed rather than page the previous ordering's results.
+  comments(videoId: string, sort?: SourceCommentSort, cursor?: string): Promise<SourceCommentPage>
   // The library aggregation is signed-in only; a single playlist is not, so a
   // public one opens anonymously.
   playlists(cursor?: string): Promise<SourcePlaylistListPage>
@@ -349,7 +371,7 @@ export const SOURCE_CURSOR_ARGUMENT = {
   // gained `filters` and channel gained `tab`, `sort` and `query`.
   search: 2,
   channel: 4,
-  comments: 1,
+  comments: 2,
   communityPosts: 1,
   playlists: 0,
   playlist: 1,

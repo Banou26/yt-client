@@ -253,6 +253,9 @@ type WatchMeta {
   likeCountText: String
   commentCountText: String
   description: String
+  # The description as runs, so its links and chapter timestamps work. `text`
+  # above stays for the collapsed clamp.
+  descriptionRuns: [TextRun!]!
   likeStatus: LikeStatus
   channel: Channel
   related: [Video!]!
@@ -260,10 +263,36 @@ type WatchMeta {
   playlist: WatchPlaylist
 }
 
+# One segment of a rich text body. Upstream hands text back as runs, each of
+# which may carry an endpoint, and collapsing them to a plain string is what
+# makes URLs, mentions and 12:34 timestamps inert.
+#
+# The four kinds are distinguished by which target field is set, rather than by
+# an enum, so a run whose endpoint is a kind this client does not model still
+# renders as its own text instead of disappearing.
+type TextRun {
+  text: String!
+  # An off-site link.
+  url: String
+  # A /watch link. `startSeconds` is what makes a description chapter or a
+  # comment timestamp seek rather than reload the page.
+  videoId: String
+  startSeconds: Int
+  # A channel, hashtag or other browse target.
+  browseId: String
+}
+
 type Comment {
   id: ID!
   author: Channel
   text: String!
+  # The same body as `text`, segmented. `text` stays for the collapsed clamp and
+  # for anything that only needs a plain string.
+  runs: [TextRun!]!
+  isLiked: Boolean
+  isDisliked: Boolean
+  isCreator: Boolean
+  isMember: Boolean
   publishedText: String
   likeCountText: String
   replyCount: Int
@@ -275,6 +304,16 @@ type CommentPage {
   items: [Comment!]!
   cursor: String
   disabled: Boolean
+  # The comments header's own count, which is exact. The /next-derived text on
+  # WatchMeta is a rounded teaser and needed a regex to read.
+  countText: String
+}
+
+# youtubei.js encodes only these two orderings, and passing one to getComments
+# costs a single round trip where Comments.applySort costs two.
+enum CommentSort {
+  TOP
+  NEWEST
 }
 
 type Playlist {
@@ -362,7 +401,9 @@ type Query {
   # out-of-range one rather than failing, so read the position back off
   # `playlist.currentIndex` instead of assuming the request was honoured.
   watch(id: ID!, playlistId: ID, playlistIndex: Int): WatchMeta
-  comments(videoId: ID!, cursor: String): CommentPage!
+  # A cursor is bound to the sort that minted it: switching order has to start a
+  # new feed rather than page the previous ordering's results.
+  comments(videoId: ID!, sort: CommentSort, cursor: String): CommentPage!
   # Signed-in only, like `subscriptions` and `history`: the library aggregation
   # browse is refused before the network call when signed out.
   playlists(cursor: String): PlaylistListPage!

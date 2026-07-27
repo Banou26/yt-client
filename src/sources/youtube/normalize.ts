@@ -1,4 +1,4 @@
-import type { SourceChannel, SourceChannelAbout, SourceComment, SourceLikeStatus, SourcePost, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourceSession, SourceVideo, SourceWatchMeta, SourceWatchPlaylist } from '../types'
+import type { SourceChannel, SourceChannelAbout, SourceTextRun, SourceComment, SourceLikeStatus, SourcePost, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourceSession, SourceVideo, SourceWatchMeta, SourceWatchPlaylist } from '../types'
 
 type Thumbnail = {
   url?: string
@@ -9,6 +9,22 @@ type Text = {
   text?: string
   toString?: () => string
   endpoint?: { payload?: { browseId?: string } }
+  runs?: RunNode[]
+}
+
+// One run of a rich text body. The endpoint's payload is keyed by the endpoint
+// NAME upstream, so these four fields are the union of the ones this client
+// reads across url, watch and browse endpoints.
+type RunNode = {
+  text?: string
+  endpoint?: {
+    payload?: {
+      url?: string
+      videoId?: string
+      startTimeSeconds?: number
+      browseId?: string
+    }
+  }
 }
 
 type Author = {
@@ -188,17 +204,23 @@ type AccountInfo = {
   }
 }
 
+type CommentViewNode = {
+  comment_id?: string
+  content?: Text
+  published_time?: string
+  like_count?: string
+  reply_count?: string
+  is_pinned?: boolean
+  is_hearted?: boolean
+  is_liked?: boolean
+  is_disliked?: boolean
+  author_is_channel_owner?: boolean
+  is_member?: boolean
+  author?: Author
+}
+
 type CommentThread = {
-  comment?: {
-    comment_id?: string
-    content?: Text
-    published_time?: string
-    like_count?: string
-    reply_count?: string
-    is_pinned?: boolean
-    is_hearted?: boolean
-    author?: Author
-  }
+  comment?: CommentViewNode
 }
 
 const text = (value: string | Text | undefined) => {
@@ -501,6 +523,39 @@ export const normalizeCommunityPost = (input: unknown): SourcePost | undefined =
     attachedVideo: node?.attachment === undefined ? undefined : normalizeFeedVideo(node.attachment),
     attachedImage: thumbnail(attachment?.image ?? attachment?.thumbnails),
   }
+}
+
+/* Upstream hands a text body back as runs, each of which may carry an endpoint.
+   Collapsing them with text() is what makes every URL, @mention, #hashtag and
+   12:34 timestamp inert, which is the state descriptions and comments are in.
+
+   Deliberately NOT Text.toHTML(): that returns a markup string, and rendering
+   it would mean injecting upstream HTML into the tree. Runs are data, so the
+   component decides what an anchor, a route link and a seek button are. */
+export const normalizeRuns = (value: string | Text | undefined): SourceTextRun[] => {
+  if (typeof value === 'string') return value.length > 0 ? [{ text: value }] : []
+  const runs = (value as { runs?: RunNode[] } | undefined)?.runs
+  if (!runs || runs.length === 0) {
+    // A body with no runs is still a body: keep it as one unlinked segment so
+    // the caller never has to fall back to the flat string itself.
+    const flat = presentText(value)
+    return flat ? [{ text: flat }] : []
+  }
+  return runs.flatMap((run) => {
+    const runText = run.text
+    if (!runText) return []
+    const payload = run.endpoint?.payload
+    const startSeconds = payload?.startTimeSeconds
+    return [{
+      text: runText,
+      url: payload?.url,
+      videoId: payload?.videoId,
+      // 0 is a real position (a chapter at the very start), so it survives on
+      // its own rather than being filtered out as falsy.
+      startSeconds: typeof startSeconds === 'number' && Number.isFinite(startSeconds) ? startSeconds : undefined,
+      browseId: payload?.browseId,
+    }]
+  })
 }
 
 const clampPercent = (value: unknown) =>
@@ -859,6 +914,9 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
     likeCountText: likeCount,
     commentCountText: text(commentsHeader?.comment_count),
     description: text(secondary?.description),
+    // The same body segmented, so its links and chapter timestamps work. The
+    // flat string above stays for the collapsed clamp.
+    descriptionRuns: normalizeRuns(secondary?.description),
     likeStatus: status,
     channel: author?.id && author.name
       ? {
@@ -888,8 +946,11 @@ export const normalizeSession = (input: unknown): SourceSession => {
   }
 }
 
-export const normalizeCommentThread = (input: unknown): SourceComment | undefined => {
-  const comment = (input as CommentThread).comment
+// Split from the thread wrapper because a REPLY is a bare CommentView with no
+// thread around it: CommentThread.replies is an ObservedArray<CommentView>, so
+// the reply path would otherwise need a fake `{ comment }` wrapper per row.
+export const normalizeCommentView = (input: unknown): SourceComment | undefined => {
+  const comment = input as CommentViewNode | undefined
   if (!comment?.comment_id) return undefined
   return {
     id: comment.comment_id,
@@ -899,13 +960,22 @@ export const normalizeCommentThread = (input: unknown): SourceComment | undefine
           name: comment.author.name,
           avatar: thumbnail(comment.author.thumbnails),
           handle: handleFromUrl(comment.author.url) ?? (comment.author.name.startsWith('@') ? comment.author.name : undefined),
+          isVerified: comment.author.is_verified === true ? true : undefined,
         }
       : undefined,
     text: text(comment.content) ?? '',
+    runs: normalizeRuns(comment.content),
     publishedText: comment.published_time,
     likeCountText: comment.like_count,
     replyCount: approximateCount(comment.reply_count),
     isPinned: comment.is_pinned === true ? true : undefined,
     isHearted: comment.is_hearted === true ? true : undefined,
+    isLiked: comment.is_liked === true ? true : undefined,
+    isDisliked: comment.is_disliked === true ? true : undefined,
+    isCreator: comment.author_is_channel_owner === true ? true : undefined,
+    isMember: comment.is_member === true ? true : undefined,
   }
 }
+
+export const normalizeCommentThread = (input: unknown): SourceComment | undefined =>
+  normalizeCommentView((input as CommentThread | undefined)?.comment)

@@ -1,5 +1,9 @@
+import type { RichTextRun } from './rich-text'
+
 import { css } from '@emotion/react'
 import { useState } from 'preact/hooks'
+
+import { RichText } from './rich-text'
 
 const style = css`
   margin-top: 1.2rem;
@@ -51,10 +55,14 @@ const style = css`
 `
 
 export const DescriptionBox = (
-  { viewCountText, publishedDateText, description }: {
+  { viewCountText, publishedDateText, description, runs, videoId }: {
     viewCountText?: string | null
     publishedDateText?: string | null
     description?: string | null
+    // The same body segmented. Present whenever the watch query selected it;
+    // the flat string is what the collapsed clamp measures.
+    runs?: readonly RichTextRun[]
+    videoId?: string
   }
 ) => {
   const [expanded, setExpanded] = useState(false)
@@ -67,7 +75,9 @@ export const DescriptionBox = (
       onClick={collapsible ? () => setExpanded(true) : undefined}
     >
       {meta ? <div className='meta'>{meta}</div> : undefined}
-      {description ? <div className='text'>{description}</div> : undefined}
+      {runs && runs.length > 0
+        ? <RichText className='text' runs={runs} videoId={videoId} />
+        : description ? <div className='text'>{description}</div> : undefined}
       {description
         ? (
           expanded

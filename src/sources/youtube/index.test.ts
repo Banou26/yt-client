@@ -400,13 +400,16 @@ describe('youtube source', () => {
     const first = await source.comments('abc')
     expect(first.items[0]?.id).toBe('top')
     expect(first.cursor).toBeTruthy()
-    const second = await source.comments('abc', first.cursor)
+    const second = await source.comments('abc', undefined, first.cursor)
     expect(second.items[0]?.id).toBe('next')
     expect(second.cursor).toBeUndefined()
-    await expect(source.comments('abc', first.cursor)).resolves.toMatchObject({ items: [{ id: 'next' }] })
+    await expect(source.comments('abc', undefined, first.cursor)).resolves.toMatchObject({ items: [{ id: 'next' }] })
     // Comment cursors are scoped to their video, so the same cursor must not
     // page a different video's comments.
-    await expect(source.comments('other', first.cursor)).rejects.toThrow('belongs to comments:abc')
+    await expect(source.comments('other', undefined, first.cursor)).rejects.toThrow('belongs to comments:abc')
+    // ...nor a different ORDERING of the same video: Top and Newest interleave
+    // into nonsense if one's cursor pages the other.
+    await expect(source.comments('abc', 'NEWEST', first.cursor)).rejects.toThrow('belongs to comments:abc:TOP')
   })
 
   it('pages a playlist with cursors scoped to that playlist', async () => {
@@ -508,7 +511,7 @@ describe('youtube source', () => {
     // channel gained `tab`, `sort` and `query`.
     search: ['query', undefined as unknown as string],
     channel: ['c', undefined as unknown as string, undefined as unknown as string, undefined as unknown as string],
-    comments: ['abc'],
+    comments: ['abc', undefined as unknown as string],
     communityPosts: ['c'],
     playlists: [],
     playlist: ['PL1'],

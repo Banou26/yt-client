@@ -93,6 +93,7 @@ type PostsFeed = Feed & {
 
 type CommentsFeed = {
   contents: Iterable<unknown>
+  header?: { comments_count?: unknown, count?: unknown }
   has_continuation: boolean
   getContinuation(): Promise<CommentsFeed>
 }
@@ -146,7 +147,7 @@ export type YoutubeClient = {
   getSearchSuggestions(query: string, previousQuery?: string): Promise<string[]>
   getBasicInfo(id: string): Promise<{ basic_info?: unknown }>
   getChannel(id: string): Promise<ChannelFeed>
-  getComments(videoId: string): Promise<CommentsFeed>
+  getComments(videoId: string, sortBy?: 'TOP_COMMENTS' | 'NEWEST_FIRST'): Promise<CommentsFeed>
   getPlaylists(): Promise<PlaylistsFeed>
   getPlaylist(id: string): Promise<PlaylistFeed>
   account: {
@@ -501,14 +502,17 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
     return result
   }
 
-  const commentPage = (videoId: string, comments: CommentsFeed): SourceCommentPage => {
+  const commentPage = (kind: string, comments: CommentsFeed): SourceCommentPage => {
     const result: SourceCommentPage = {
       items: [...comments.contents].map(normalizeCommentThread).filter((comment) => comment !== undefined),
+      // The header count is exact, unlike the rounded teaser /next carries on
+      // WatchMeta, which the UI had to read with a regex.
+      countText: text(comments.header?.comments_count) ?? text(comments.header?.count),
     }
     if (comments.has_continuation) {
       result.cursor = commentContinuations.register(
-        `comments:${videoId}`,
-        async () => commentPage(videoId, await comments.getContinuation()),
+        kind,
+        async () => commentPage(kind, await comments.getContinuation()),
       )
     }
     return result
@@ -719,10 +723,16 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
       }),
       id,
     ),
-    comments: async (videoId, cursor) => {
-      if (cursor) return commentContinuations.resolve(`comments:${videoId}`, cursor)
+    comments: async (videoId, sort, cursor) => {
+      // The sort is part of the kind: a cursor minted under Top cannot page
+      // Newest, and the two orderings interleave into nonsense if it does.
+      const kind = `comments:${videoId}:${sort ?? 'TOP'}`
+      if (cursor) return commentContinuations.resolve(kind, cursor)
       try {
-        return commentPage(videoId, await (await client).getComments(videoId))
+        // Passed to getComments rather than applied afterwards: applySort costs
+        // a second round trip for the same result.
+        const upstreamSort = sort === 'NEWEST' ? 'NEWEST_FIRST' : 'TOP_COMMENTS'
+        return commentPage(kind, await (await client).getComments(videoId, upstreamSort))
       } catch (error) {
         // videos with comments turned off make youtubei.js throw
         // "Comments page did not have any content.", an expected state, not a failure.
@@ -768,7 +778,7 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
       // Only identity and the changed field are real; `related` satisfies the
       // non-null list without being fetched back. See the Mutation comment in
       // src/worker/schema.gql.
-      return { id, likeStatus: status, related: [] }
+      return { id, likeStatus: status, related: [], descriptionRuns: [] }
     },
     // History.removeVideo string-matches the English menu label for LockupView
     // items, so this breaks under a non-English hl. It is the only removal path
