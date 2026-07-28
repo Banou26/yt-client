@@ -661,7 +661,11 @@ const Replies = (
               </div>
             ))}
             {fetching ? <div className='age'>Loading replies…</div> : undefined}
-            {error && items.length === 0 ? <div className='age'>Could not load replies.</div> : undefined}
+            {/* The source's own sentence rather than a fixed line: a generic
+                "could not load" reads the same whether the continuation expired,
+                the engine restarted or upstream changed shape, so it hid a real
+                failure behind wording that looked handled. */}
+            {error && items.length === 0 ? <div className='age'>{readable(error.message)}</div> : undefined}
             {next && !fetching
               ? (
                 <button
@@ -708,9 +712,17 @@ export const Comments = ({ videoId, commentCountText }: { videoId: string, comme
     if (!page?.cursor || fetching) return
     setLoaded({ sort, pages: loadedPages[loadedPages.length - 1] === page ? loadedPages : [...loadedPages, page] })
   }
-  // only bail entirely when the FIRST page failed: a pagination error must not
-  // unmount already-loaded comments (comment cursors die on engine restarts).
-  if (error && items.length === 0) return null
+  // A first-page failure REPORTS rather than unmounting. Returning null here
+  // renders a watch page with no comment section at all, which reads as "this
+  // video has no comments" and hides the actual error from both the reader and
+  // anyone debugging it. A pagination error still keeps the loaded comments up.
+  if (error && items.length === 0) {
+    return (
+      <section css={style}>
+        <p className='disabled-notice'>{readable(error.message)}</p>
+      </section>
+    )
+  }
   if (!fetching && !error && items.length === 0 && !page?.disabled) return null
   if (page?.disabled && items.length === 0) {
     return (

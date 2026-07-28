@@ -776,7 +776,14 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
      endpoint is a selectActiveIdentityEndpoint holding GAIA tokens). Resolving
      costs one round trip, and only for callers that arrive with a handle. */
   const resolveHandle = async (handle: string) => {
-    const endpoint = await (await client).resolveURL(`https://www.youtube.com/${handle}`)
+    /* A handle nobody owns is an ordinary miss, not a fault: upstream answers
+       it with no endpoint at all and youtubei.js reports that as "Expected a
+       NavigationEndpoint but got undefined", an internal sentence that reached
+       the reader verbatim because maskedErrors is off. Anyone can produce it by
+       mistyping a handle or following a link to a renamed channel. */
+    const endpoint = await (await client)
+      .resolveURL(`https://www.youtube.com/${handle}`)
+      .catch(() => { throw new Error(`youtube: no channel with the handle ${handle}`) })
     const browseId = (endpoint as { payload?: { browseId?: string } }).payload?.browseId
     if (!browseId) throw new Error(`youtube: ${handle} does not resolve to a channel`)
     return browseId

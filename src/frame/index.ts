@@ -309,6 +309,13 @@ const connect = (port: MessagePort) => {
       },
       (error) => {
         document.documentElement.dataset.frameApi = `${request.method}:error`
+        /* Only the message crosses the port, because it is rendered to readers.
+           The stack stays here, on the frame's own console, rather than being
+           dropped: a TypeError thrown deep inside youtubei.js arrives in the app
+           realm as a bare sentence like "Cannot read properties of undefined",
+           which names neither the call that failed nor the line. That is how a
+           renderer change that broke comments on every video stayed invisible. */
+        console.error(`yt-client: ${request.method} failed`, error)
         port.postMessage({
           id: request.id,
           error: error instanceof Error ? error.message : String(error),
