@@ -368,7 +368,10 @@ export const startShakaPlayback = async ({
       activePlayer.selectVariantTrack(track, upgrade, upgrade ? SAFE_MARGIN_SECONDS : 0)
     }
 
-    return { player: activePlayer, destroy, heights, selectQuality, storyboards: session.storyboards, isLive: false }
+    // Reported rather than hardcoded: the live branch above falls through to
+    // this same return, and saying `false` here is what left a live stream
+    // showing a 3348:27:07 / 0:00 clock instead of a LIVE badge.
+    return { player: activePlayer, destroy, heights, selectQuality, storyboards: session.storyboards, isLive: session.isLive }
   } catch (error) {
     await destroy()
     throw error instanceof shaka.util.Error ? describeShakaError(error) : error
