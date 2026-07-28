@@ -460,11 +460,28 @@ type PlaylistListPage {
   cursor: String
 }
 
+# One account on the signed-in Google login.
+type Account {
+  # The account's position in the login, which becomes X-Goog-Authuser. It is
+  # the identity because it is the only handle the transport accepts: there is
+  # no runtime switch that takes anything else.
+  index: Int!
+  name: String
+  avatar: String
+  handle: String
+  selected: Boolean
+  # A brand account with no channel cannot be browsed as one.
+  hasChannel: Boolean
+}
+
 type Session {
   signedIn: Boolean!
   name: String
   avatar: String
   handle: String
+  # Every account on this login, including the selected one. Comes off the same
+  # response the header avatar does, so listing them costs no extra round trip.
+  accounts: [Account!]!
 }
 
 type Query {

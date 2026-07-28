@@ -10,15 +10,26 @@ const SESSION_QUERY = gql(`
       name
       avatar
       handle
+      accounts { index name avatar handle selected hasChannel }
     }
   }
 `)
+
+export type SessionAccount = {
+  index: number
+  name?: string
+  avatar?: string
+  handle?: string
+  selected?: boolean
+  hasChannel?: boolean
+}
 
 export type SessionState = {
   signedIn: boolean
   name?: string
   avatar?: string
   handle?: string
+  accounts: SessionAccount[]
   ready: boolean
 }
 
@@ -63,6 +74,14 @@ export const useSession = (): SessionState => {
     name: session?.name ?? undefined,
     avatar: session?.avatar ?? undefined,
     handle: session?.handle ?? undefined,
+    accounts: (session?.accounts ?? []).map((account) => ({
+      index: account.index,
+      name: account.name ?? undefined,
+      avatar: account.avatar ?? undefined,
+      handle: account.handle ?? undefined,
+      selected: account.selected ?? undefined,
+      hasChannel: account.hasChannel ?? undefined,
+    })),
     ready: engineReady && (data !== undefined || error !== undefined),
   }
 }

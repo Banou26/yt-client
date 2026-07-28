@@ -357,11 +357,32 @@ export type SourcePlaylistListPage = {
   cursor?: string
 }
 
+/* One account on the signed-in Google login.
+
+   `index` is the identity, because it is the only handle the transport accepts:
+   youtubei.js switches accounts by `account_index`, which becomes
+   X-Goog-Authuser, and there is no runtime switch method that takes anything
+   else. It is the account's position in the list the account endpoint returns,
+   which is the order authuser itself is numbered in. */
+export type SourceAccount = {
+  index: number
+  name?: string
+  avatar?: string
+  handle?: string
+  selected?: boolean
+  // A brand account with no channel cannot be browsed as one.
+  hasChannel?: boolean
+}
+
 export type SourceSession = {
   signedIn: boolean
   name?: string
   avatar?: string
   handle?: string
+  /* Every account on this login, including the selected one. Comes off the same
+     response the header avatar does, so listing them costs no extra round trip.
+     Empty when signed out, and a single entry is the ordinary case. */
+  accounts: SourceAccount[]
 }
 
 export type Source = {

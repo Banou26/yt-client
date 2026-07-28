@@ -114,6 +114,13 @@ export type FrameApi = SourceApi & {
   selectVideoFormat(sessionId: string, formatKey: string): Promise<void>
   closePlayback(sessionId: string): Promise<void>
   resetIdentity(): Promise<void>
+  /* Selects which account on the login to act as, for the NEXT engine.
+
+     Not a mutation: youtubei.js has no runtime switch, and the Innertube
+     clients bake the account into every request at module load. So this only
+     records the choice, and the caller reloads to apply it, exactly the way
+     signing out does. */
+  switchAccount(index: number): Promise<void>
 }
 
 // Both ends of the port forward by method name, so the list has to exist at
@@ -129,6 +136,7 @@ export const FRAME_METHODS = [
   'selectVideoFormat',
   'closePlayback',
   'resetIdentity',
+  'switchAccount',
 ] as const satisfies readonly (keyof FrameApi)[]
 
 export type FrameMethod = (typeof FRAME_METHODS)[number]

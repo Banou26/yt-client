@@ -6,7 +6,7 @@ import { createYoutubeSource } from '../sources/youtube'
 import { catalogInnertube, getSabrSource, hasSessionCookie, prefetchInitialPlayerResponse } from './innertube'
 import { buildLiveManifest, liveAnchor, timelineEndMs } from './live-manifest'
 import { createSabrSession, isSabrSessionRefreshError } from './sabr'
-import { resetIdentity } from './identity'
+import { resetIdentity, storeAccountIndex } from './identity'
 import { FRAME_CONNECT, isFrameMethod } from './protocol'
 
 // `id` is source metadata rather than part of the RPC surface. The rest of the
@@ -99,6 +99,14 @@ const liveManifestFor = (entry: PlaybackEntry) => {
 const api = {
   ...sourceApi,
   resetIdentity,
+  switchAccount: async (index: number) => {
+    storeAccountIndex(index)
+    /* Drop the identity residue too. Visitor data and PoTokens were minted
+       against the previous account, and carrying them into the next one is
+       exactly what resetIdentity exists to prevent. The stored index itself
+       deliberately survives it. */
+    await resetIdentity()
+  },
   prefetchPlayback: async (videoId) => {
     // Kick (and memoize) the watch-page fetch now; openPlayback reuses it. Do
     // not await — this resolves the moment the transfer is in flight.

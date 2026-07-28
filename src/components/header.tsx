@@ -29,6 +29,7 @@ const HEADER_SESSION_QUERY = gql(`
       name
       avatar
       handle
+      accounts { index name avatar handle selected hasChannel }
     }
   }
 `)
@@ -432,7 +433,19 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
         </Link>
         <NotificationsMenu />
         {session?.signedIn
-          ? <AccountMenu name={session.name ?? undefined} avatar={session.avatar ?? undefined} handle={session.handle ?? undefined} />
+          ? <AccountMenu
+              name={session.name ?? undefined}
+              avatar={session.avatar ?? undefined}
+              handle={session.handle ?? undefined}
+              accounts={session.accounts.map((account) => ({
+                index: account.index,
+                name: account.name ?? undefined,
+                avatar: account.avatar ?? undefined,
+                handle: account.handle ?? undefined,
+                selected: account.selected ?? undefined,
+                hasChannel: account.hasChannel ?? undefined,
+              }))}
+            />
           : (
             <button type='button' className='sign-in' onClick={() => navigate('/signin')}>
               <CircleUserRound size={24} strokeWidth={1.5} />

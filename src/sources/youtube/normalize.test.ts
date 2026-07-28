@@ -851,7 +851,37 @@ describe('youtube normalization', () => {
       name: 'Banou',
       avatar: 'large',
       handle: '@banou',
+      channelId: undefined,
+      // The same rows the header reads are the account list, so offering a
+      // switch costs no extra round trip.
+      accounts: [{
+        index: 0,
+        name: 'Banou',
+        avatar: 'large',
+        handle: '@banou',
+        selected: true,
+        hasChannel: undefined,
+      }],
     })
+  })
+
+  it('numbers accounts by position among the NAMED rows', () => {
+    /* account_index becomes X-Goog-Authuser, so the number has to match the
+       order authuser itself uses. The section mixes in CompactLink rows that
+       carry none of these fields, and counting those would offset every index
+       and switch to the wrong account. */
+    const session = normalizeSession({
+      contents: {
+        contents: [
+          { navigation_endpoint: {} },
+          { account_name: { text: 'First' } },
+          { navigation_endpoint: {} },
+          { account_name: { text: 'Second' }, is_selected: true },
+        ],
+      },
+    })
+    expect(session.accounts.map((account) => [account.index, account.name])).toEqual([[0, 'First'], [1, 'Second']])
+    expect(session.name).toBe('Second')
   })
 
   it('takes the selected account, not the first row', () => {
@@ -876,14 +906,21 @@ describe('youtube normalization', () => {
           channel_handle: { text: undefined, toString: () => 'N/A' },
         }],
       },
-    })).toEqual({ signedIn: true, name: 'Banou' })
+    })).toMatchObject({ signedIn: true, name: 'Banou', handle: undefined })
   })
 
   it('still reports a signed-in session when the account section is unreadable', () => {
     // The cookie jar probe is what decides signed-in; this call only decorates
     // it, so a shape change must not read back as signed out.
-    expect(normalizeSession({})).toEqual({ signedIn: true })
-    expect(normalizeSession({ contents: { contents: [] } })).toEqual({ signedIn: true })
+    expect(normalizeSession({})).toEqual({
+      signedIn: true,
+      name: undefined,
+      avatar: undefined,
+      handle: undefined,
+      channelId: undefined,
+      accounts: [],
+    })
+    expect(normalizeSession({ contents: { contents: [] } })).toMatchObject({ signedIn: true, accounts: [] })
   })
 
   it('drops comments without an id and approximates shortened reply counts', () => {

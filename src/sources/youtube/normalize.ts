@@ -1,4 +1,4 @@
-import type { SourceChannel, SourceChannelAbout, SourceNotification, SourceTextRun, SourceComment, SourceLikeStatus, SourceLiveChatMessage, SourceLiveChatRun, SourcePost, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourceSession, SourceVideo, SourceWatchMeta, SourceWatchPlaylist } from '../types'
+import type { SourceAccount, SourceChannel, SourceChannelAbout, SourceNotification, SourceTextRun, SourceComment, SourceLikeStatus, SourceLiveChatMessage, SourceLiveChatRun, SourcePost, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourceSession, SourceVideo, SourceWatchMeta, SourceWatchPlaylist } from '../types'
 
 type Thumbnail = {
   url?: string
@@ -204,6 +204,7 @@ type AccountItemNode = {
   account_photo?: Thumbnail[]
   channel_handle?: Text
   is_selected?: boolean
+  has_channel?: boolean
 }
 
 type AccountInfo = {
@@ -1030,6 +1031,17 @@ export const normalizeSession = (input: unknown): SourceSession => {
     name: presentText(account?.account_name),
     avatar: thumbnail(account?.account_photo, AVATAR_WIDTH),
     handle: presentText(account?.channel_handle),
+    /* Position among the NAMED rows, not among all of them: the section also
+       carries CompactLink rows, and counting those would offset every index and
+       switch to the wrong account. */
+    accounts: named.map((row, index) => ({
+      index,
+      name: presentText(row.account_name),
+      avatar: thumbnail(row.account_photo, AVATAR_WIDTH),
+      handle: presentText(row.channel_handle),
+      selected: row.is_selected === true ? true : undefined,
+      hasChannel: row.has_channel === true ? true : undefined,
+    })),
   }
 }
 

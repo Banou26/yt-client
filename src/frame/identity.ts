@@ -1,6 +1,34 @@
 import { clearStoredTokens, resetPoTokenSession } from './botguard'
 
 export const VISITOR_DATA_KEY = 'yt-client:visitor-data'
+
+/* Which account on the login to act as, as an X-Goog-Authuser index.
+
+   Stored rather than passed because the choice has to survive the page reload
+   that applies it: youtubei.js has no runtime switch, so the only way to change
+   identity is to build the clients again with a different `account_index`, and
+   those are built at module load. Deliberately NOT cleared by resetIdentity,
+   which exists to drop identity RESIDUE (visitor data, tokens) so a new
+   identity is derived cleanly. Clearing the selection there would make every
+   switch reset itself back to the first account. */
+export const ACCOUNT_INDEX_KEY = 'yt-client:account-index'
+
+export const readAccountIndex = () => {
+  try {
+    const stored = Number(localStorage.getItem(ACCOUNT_INDEX_KEY))
+    return Number.isInteger(stored) && stored > 0 ? stored : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export const storeAccountIndex = (index: number) => {
+  try {
+    // Zero is the default account, so it is an absence rather than a value.
+    if (index > 0) localStorage.setItem(ACCOUNT_INDEX_KEY, String(index))
+    else localStorage.removeItem(ACCOUNT_INDEX_KEY)
+  } catch {}
+}
 export const GVS_ORIGIN_KEY = 'yt-client:gvs-origin'
 
 // youtubei.js's UniversalCache persists the serialized session context

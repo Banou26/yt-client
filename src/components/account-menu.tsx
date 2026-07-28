@@ -1,6 +1,9 @@
+import type { SessionAccount } from '../session'
+
 import { css } from '@emotion/react'
-import { LogOut } from 'lucide-react'
+import { Check, CircleUser, LogOut, UserRoundCog } from 'lucide-react'
 import { useCallback, useRef, useState } from 'preact/hooks'
+import { Link } from 'wouter'
 
 import { clearSessionCookies, startEngine } from '../scramjet/client'
 import { useDismiss } from './ui/popup'
@@ -124,6 +127,49 @@ const style = css`
     font-size: 1.2rem;
     color: var(--danger);
   }
+
+  .row {
+    width: 100%;
+    min-height: 4rem;
+    display: flex;
+    align-items: center;
+    gap: 1.6rem;
+    padding: 0.6rem 1.6rem;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 1.4rem;
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  .row:hover:not(:disabled) { background: var(--bg-hover); }
+  .row:disabled { opacity: 0.5; cursor: default; }
+
+  .row .avatar,
+  .row .initial {
+    flex: none;
+    width: 2.4rem;
+    height: 2.4rem;
+    font-size: 1.2rem;
+  }
+
+  .row .label {
+    min-width: 0;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .section-title {
+    padding: 0.8rem 1.6rem 0.4rem;
+    font-size: 1.2rem;
+    color: var(--text-secondary);
+  }
 `
 
 const Avatar = ({ name, avatar }: { name?: string, avatar?: string }) =>
@@ -131,9 +177,17 @@ const Avatar = ({ name, avatar }: { name?: string, avatar?: string }) =>
     ? <img className='avatar' src={avatar} alt='' referrerpolicy='no-referrer' />
     : <span className='initial' aria-hidden='true'>{name?.trim().charAt(0) || '?'}</span>
 
-export const AccountMenu = ({ name, avatar, handle }: { name?: string, avatar?: string, handle?: string }) => {
+export const AccountMenu = (
+  { name, avatar, handle, accounts = [] }: {
+    name?: string
+    avatar?: string
+    handle?: string
+    accounts?: SessionAccount[]
+  },
+) => {
   const [open, setOpen] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
+  const [switching, setSwitching] = useState<number>()
   const [signOutError, setSignOutError] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -162,6 +216,28 @@ export const AccountMenu = ({ name, avatar, handle }: { name?: string, avatar?: 
     location.assign('/')
   }
 
+  /* Switching is an engine-lifecycle operation, not a mutation.
+
+     The Innertube clients bake the account into every request at module load
+     and youtubei.js has no runtime switch, so the frame only RECORDS the
+     choice and the reload below is what actually applies it. Same shape as
+     signing out, and for the same reason. */
+  const onSwitch = async (index: number) => {
+    if (switching !== undefined || signingOut) return
+    setSwitching(index)
+    try {
+      await (await startEngine()).switchAccount(index)
+    } catch {
+      setSwitching(undefined)
+      return
+    }
+    location.assign('/')
+  }
+
+  const busy = signingOut || switching !== undefined
+  // One account is not a choice, so it is not offered as one.
+  const switchable = accounts.filter((account) => !account.selected)
+
   return (
     <div css={style} ref={rootRef}>
       <button
@@ -186,7 +262,44 @@ export const AccountMenu = ({ name, avatar, handle }: { name?: string, avatar?: 
               </div>
             </div>
             <div className='divider' role='presentation' />
-            <button type='button' className='sign-out' role='menuitem' disabled={signingOut} onClick={onSignOut}>
+            {/* By handle: the account endpoint carries GAIA tokens, not a
+                browse id, and the channel route resolves a handle. */}
+            {handle
+              ? (
+                <Link className='row' role='menuitem' href={`/channel/${handle.startsWith('@') ? handle : `@${handle}`}`} onClick={onClose}>
+                  <CircleUser size={20} strokeWidth={1.5} />
+                  <span className='label'>Your channel</span>
+                </Link>
+              )
+              : undefined}
+            <Link className='row' role='menuitem' href='/account' onClick={onClose}>
+              <UserRoundCog size={20} strokeWidth={1.5} />
+              <span className='label'>Manage account</span>
+            </Link>
+            {switchable.length
+              ? (
+                <>
+                  <div className='divider' role='presentation' />
+                  <div className='section-title' role='presentation'>Switch account</div>
+                  {switchable.map((account) => (
+                    <button
+                      key={account.index}
+                      type='button'
+                      className='row'
+                      role='menuitem'
+                      disabled={busy}
+                      onClick={() => onSwitch(account.index)}
+                    >
+                      <Avatar name={account.name} avatar={account.avatar} />
+                      <span className='label'>{account.name ?? account.handle ?? `Account ${account.index + 1}`}</span>
+                      {switching === account.index ? <Check size={16} strokeWidth={1.5} /> : undefined}
+                    </button>
+                  ))}
+                </>
+              )
+              : undefined}
+            <div className='divider' role='presentation' />
+            <button type='button' className='sign-out' role='menuitem' disabled={busy} onClick={onSignOut}>
               <LogOut size={20} strokeWidth={1.5} />
               {signingOut ? 'Signing out…' : 'Sign out'}
             </button>

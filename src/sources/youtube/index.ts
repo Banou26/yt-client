@@ -260,6 +260,9 @@ export type YoutubeClient = {
   // metadata, and /reel/reel_watch_sequence for the shorts that follow it.
   getShortsVideoInfo(id: string): Promise<ShortsSequence>
   getChannel(id: string): Promise<ChannelFeed>
+  // Turns a public URL into the endpoint behind it, which is the only way to
+  // get a browse id from an @handle.
+  resolveURL(url: string): Promise<{ payload?: { browseId?: string } }>
   /* The FULL video info, not getBasicInfo. Live chat hangs off the /next half
      of the response, and getBasicInfo only issues /player, so its result has no
      `livechat` and getLiveChat() throws on it. */
@@ -764,10 +767,27 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
   const CHANNEL_TTL_MS = 60_000
   const channelFetches = new Map<string, { at: number, result: Promise<ChannelFeed> }>()
 
+  /* A handle is not a browse id.
+
+     getChannel wants a `UC...` id and answers "Invalid channel" for anything
+     else, but a handle is what the app actually has in hand in two places: a
+     YouTube URL is `youtube.com/@name` these days, and the signed-in account
+     reports its own `channel_handle` while carrying NO browse id at all (its
+     endpoint is a selectActiveIdentityEndpoint holding GAIA tokens). Resolving
+     costs one round trip, and only for callers that arrive with a handle. */
+  const resolveHandle = async (handle: string) => {
+    const endpoint = await (await client).resolveURL(`https://www.youtube.com/${handle}`)
+    const browseId = (endpoint as { payload?: { browseId?: string } }).payload?.browseId
+    if (!browseId) throw new Error(`youtube: ${handle} does not resolve to a channel`)
+    return browseId
+  }
+
   const fetchChannel = async (id: string) => {
     const cached = channelFetches.get(id)
     if (cached && Date.now() - cached.at < CHANNEL_TTL_MS) return cached.result
-    const result = (await client).getChannel(id)
+    const result = id.startsWith('@')
+      ? resolveHandle(id).then((browseId) => (client).then((active) => active.getChannel(browseId)))
+      : (await client).getChannel(id)
     channelFetches.set(id, { at: Date.now(), result })
     // A failed fetch must not be cached as the answer: drop it so the next
     // attempt re-browses rather than replaying a transient error.
@@ -1642,11 +1662,13 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
     // Signed-in state comes from the cookie jar probe; the accounts_list call
     // only decorates it, so its failure must not read back as signed out.
     session: async () => {
-      if (!signedIn?.()) return { signedIn: false }
+      if (!signedIn?.()) return { signedIn: false, accounts: [] }
       try {
         return normalizeSession(await (await client).account.getInfo())
       } catch {
-        return { signedIn: true }
+        // Signed in, but the account read failed. The header still has to know
+        // which it is, and an empty list simply offers no switch.
+        return { signedIn: true, accounts: [] }
       }
     },
   }

@@ -22,6 +22,7 @@ const FeedSubscriptionsPage = lazy(() => import('./routes/feed-subscriptions'))
 const PlaylistPage = lazy(() => import('./routes/playlist'))
 const SearchPage = lazy(() => import('./routes/search'))
 const SettingsPage = lazy(() => import('./routes/settings'))
+const AccountPage = lazy(() => import('./routes/account'))
 const ShortsPage = lazy(() => import('./routes/shorts'))
 const SignInPage = lazy(() => import('./routes/signin'))
 const WatchPage = lazy(() => import('./routes/watch'))
@@ -219,6 +220,7 @@ export const App = () => {
               <Route path='/feed/playlists' component={FeedPlaylistsPage} />
               <Route path='/channel/:channelId' component={ChannelPage} />
               <Route path='/settings' component={SettingsPage} />
+              <Route path='/account' component={AccountPage} />
               <Route path='/signin' component={SignInPage} />
               <Route path='/search/:query' component={LegacySearchRedirect} />
               <Route path='/watch/:videoId' component={LegacyWatchRedirect} />

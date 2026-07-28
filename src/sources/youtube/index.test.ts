@@ -258,6 +258,10 @@ const createFakeClient = () => {
       return channel
     },
     getComments: async () => comments('top', async () => comments('next')),
+    resolveURL: async (url: string) => {
+      calls.push(`resolveURL:${url}`)
+      return { payload: { browseId: 'UCresolved' } }
+    },
     getInfo: async (id: string) => {
       calls.push(`getInfo:${id}`)
       // `nochat` stands in for a video with live chat turned off, which is the
@@ -625,6 +629,23 @@ describe('youtube source', () => {
     expect(client.calls).toContain('livechat:send:hi')
   })
 
+  it('resolves an @handle into a browse id before browsing a channel', async () => {
+    /* getChannel wants a `UC...` id and answers "Invalid channel" for anything
+       else, but a handle is what the app has in hand in two places: a modern
+       YouTube URL is `youtube.com/@name`, and the signed-in account reports its
+       own handle while carrying NO browse id (its endpoint is a
+       selectActiveIdentityEndpoint holding GAIA tokens). */
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    await source.channel('@someone')
+    expect(client.calls).toContain('resolveURL:https://www.youtube.com/@someone')
+
+    // A browse id is already an address, so it costs no resolution.
+    client.calls.length = 0
+    await source.channel('UCdirect')
+    expect(client.calls.some((call) => call.startsWith('resolveURL:'))).toBe(false)
+  })
+
   it('keeps continuations opaque and replayable', async () => {
     const client = createFakeClient()
     let continuationCalls = 0
@@ -845,7 +866,7 @@ describe('youtube source', () => {
       fetch: globalThis.fetch,
       createClient: async () => client,
     })
-    await expect(source.session()).resolves.toEqual({ signedIn: false })
+    await expect(source.session()).resolves.toEqual({ signedIn: false, accounts: [] })
     expect(called).toBe(false)
   })
 
@@ -855,7 +876,7 @@ describe('youtube source', () => {
       createClient: async () => createFakeClient(),
       signedIn: () => true,
     })
-    await expect(source.session()).resolves.toEqual({
+    await expect(source.session()).resolves.toMatchObject({
       signedIn: true,
       name: 'Banou',
       avatar: 'avatar',
@@ -1262,6 +1283,6 @@ describe('youtube source', () => {
       createClient: async () => client,
       signedIn: () => true,
     })
-    await expect(source.session()).resolves.toEqual({ signedIn: true })
+    await expect(source.session()).resolves.toEqual({ signedIn: true, accounts: [] })
   })
 })

@@ -11,7 +11,7 @@ import type { Storyboard } from './storyboard'
 import { egressFetch } from './egress'
 import { playableFormats } from './formats'
 import { parseStoryboards } from './storyboard'
-import { GVS_ORIGIN_KEY, VISITOR_DATA_KEY } from './identity'
+import { GVS_ORIGIN_KEY, readAccountIndex, VISITOR_DATA_KEY } from './identity'
 
 export { GVS_ORIGIN_KEY }
 
@@ -104,6 +104,11 @@ export const hasSessionCookie = () => readAuthCookie() !== undefined
 // any auth change rebuilds the whole engine frame anyway.
 const authCookie = readAuthCookie()
 
+/* Which account on the login to act as. Frozen for the same reason the cookie
+   is: it becomes X-Goog-Authuser on every request these clients make, and
+   changing it means building them again, which is a whole engine rebuild. */
+const accountIndex = readAccountIndex()
+
 export const catalogInnertube = Innertube.create({
   fetch: globalThis.fetch.bind(globalThis),
   generate_session_locally: false,
@@ -115,6 +120,9 @@ export const catalogInnertube = Innertube.create({
   // flips youtubei.js into SAPISIDHASH + X-Goog-Authuser mode — identity
   // cookies arriving without a matching Authorization header get 401s.
   ...(authCookie && { cookie: authCookie }),
+  // Only meaningful alongside a cookie: authuser selects among the accounts a
+  // signed-in jar carries.
+  ...(authCookie && accountIndex !== undefined && { account_index: accountIndex }),
 }).then((client) => {
   const context = client.session.context as unknown as InnertubeContext
   // retrieve_innertube_config can hand back a canary/experiment clientVersion
@@ -145,6 +153,7 @@ const innertube = catalogInnertube.then((client) => {
     visitor_data: context.client.visitorData,
     user_agent: context.client.userAgent,
     ...(authCookie && { cookie: authCookie }),
+    ...(authCookie && accountIndex !== undefined && { account_index: accountIndex }),
   })
 })
 
