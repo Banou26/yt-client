@@ -226,6 +226,33 @@ const createPlayerAdapter = (state: AdapterState): SabrPlayerAdapter => ({
   dispose: () => {},
 })
 
+/* A rangeless init answer is the initialization segment CONCATENATED with a
+   media segment: ftyp + moov + emsg + moof + mdat, of which only the first few
+   hundred bytes are the init. MSE needs the initialization segment on its own,
+   and handing it the whole blob does not error, it just leaves readyState and
+   videoWidth at 0 forever.
+
+   Only correct for the rangeless (live) case. A VOD range request returns
+   ftyp + moov + sidx, and cutting at moov would drop the sidx that SegmentBase
+   indexing depends on. */
+const initSegmentPrefix = (data: Uint8Array) => {
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+  let offset = 0
+  while (offset + 8 <= view.byteLength) {
+    const size = view.getUint32(offset)
+    if (size < 8) break
+    const type = String.fromCharCode(
+      view.getUint8(offset + 4),
+      view.getUint8(offset + 5),
+      view.getUint8(offset + 6),
+      view.getUint8(offset + 7),
+    )
+    offset += size
+    if (type === 'moov') return data.subarray(0, Math.min(offset, data.byteLength))
+  }
+  return data
+}
+
 export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
   const videoFormats = source.playbackFormats.filter((format) => format.width && format.height)
   const audioFormats = source.playbackFormats.filter((format) => !format.width)
@@ -607,10 +634,15 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     dualTrack: boolean,
     attempt = 0,
   ): Promise<Uint8Array> => {
-    const end = Math.max(format.initRange.end, format.indexRange?.end ?? 0)
+    const end = Math.max(format.initRange?.end ?? 0, format.indexRange?.end ?? 0)
     const response = await execute(
       `sabr://${track}?key=${encodeURIComponent(format.key)}`,
-      { Range: `bytes=0-${end}` },
+      /* No init range means nothing to slice. Asking for `bytes=0-0` returns
+         exactly one byte, and the success path below CACHES it, so every later
+         read serves that byte and MSE fails the append (shaka 3014). The server
+         sends the init segment on the stream instead, filed by
+         storeCollectedSegment under the same key this function reads. */
+      format.initRange ? { Range: `bytes=0-${end}` } : {},
       startTimeMs,
       true,
       generation,
@@ -619,7 +651,21 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
       0,
       dualTrack,
     )
-    const data = bytes(response.data)
+    /* Which of the two answers is the init segment depends on how it was asked
+       for. A RANGE request (VOD) returns the init+index head as the response
+       body. A rangeless one (live) returns a MEDIA blob as the body, several
+       hundred KB of it, while the real init arrives separately on the stream
+       and is filed in the cache by storeCollectedSegment. Preferring the body
+       in that case hands MSE half a megabyte of media as an initialization
+       segment, which leaves readyState at 0 and videoWidth at 0 rather than
+       erroring.
+
+       The VOD branch is deliberately byte-for-byte what it always was, so this
+       whole live path cannot regress it. */
+    const collected = bytes(state.cache?.getInitSegment(initCacheKey(format.key) ?? ''))
+    const data = format.initRange
+      ? bytes(response.data)
+      : initSegmentPrefix(collected?.byteLength ? collected : bytes(response.data) ?? new Uint8Array())
     if (data?.byteLength) {
       const cacheKey = initCacheKey(format.key)
       if (cacheKey) {
@@ -742,7 +788,13 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
           mimeType: format.mimeType,
           elapsedMs: response.elapsedMs,
         }
-        const data = bytes(response.data)
+        const raw = bytes(response.data)
+        /* A rangeless init answer (live) is the initialization segment with a
+           media segment glued to it: ftyp + moov + emsg + moof + mdat, of which
+           only the first few hundred bytes are the init. MSE wants the
+           initialization segment alone, and handing it the whole blob does not
+           error, it just leaves readyState and videoWidth at 0. */
+        const data = raw && request.kind === 'init' && !requestedRange ? initSegmentPrefix(raw) : raw
         const media = response.metadata.streamInfo?.mediaHeader
         if (data?.byteLength && !response.incomplete) {
           return {

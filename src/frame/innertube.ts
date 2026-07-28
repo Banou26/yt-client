@@ -19,6 +19,9 @@ export { GVS_ORIGIN_KEY }
 
 type YoutubeFormat = {
   itag: number
+  // Live only. `target_duration_dec` is the parsed spelling of the raw
+  // response's targetDurationSec.
+  target_duration_dec?: number
   width?: number
   height?: number
   bitrate: number
@@ -275,8 +278,19 @@ const beaconFormats = (raw: Record<string, unknown>): BeaconFormat[] => {
   })
 }
 
-const playbackFormat = (format: YoutubeFormat): PlaybackFormat | undefined => {
-  if (!format.init_range || !format.mime_type) return undefined
+/* `init_range` is required for VOD and absent for live.
+
+   It describes a DASH SegmentBase, which only the VOD manifest uses, and
+   requiring it unconditionally dropped every live format before a session could
+   be built: that single gate is the whole reason live never reached the SABR
+   transport, which serves it fine.
+
+   It still gates VOD, though. Letting range-less formats through there admits
+   ones the VOD manifest cannot describe, and playback stops before the first
+   frame. */
+const playbackFormat = (format: YoutubeFormat, isLive: boolean): PlaybackFormat | undefined => {
+  if (!format.mime_type) return undefined
+  if (!isLive && !format.init_range) return undefined
   const sabr = buildSabrFormat(format as never)
   const key = FormatKeyUtils.fromFormat(sabr)
   if (!key) return undefined
@@ -292,11 +306,15 @@ const playbackFormat = (format: YoutubeFormat): PlaybackFormat | undefined => {
     language: format.language ?? undefined,
     initRange: format.init_range,
     indexRange: format.index_range,
+    targetDurationMs: format.target_duration_dec ? format.target_duration_dec * 1_000 : undefined,
   }
 }
 
 export type SabrSource = {
   videoId: string
+  // Live needs its own manifest, generated after a probe segment reveals the
+  // edge, so the source says which kind it is rather than the caller guessing.
+  isLive: boolean
   durationMs: number
   manifest: string
   streamingUrl: string
@@ -359,10 +377,12 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
 
      `is_live` rather than `is_live_content`, which stays true for the VOD a
      finished stream leaves behind. */
-  if (info.basic_info?.is_live) throw new Error(LIVE_UNSUPPORTED)
+  const isLive = info.basic_info?.is_live === true
   if (!streaming?.server_abr_streaming_url) throw new Error('youtube: SABR URL is missing')
   const rawFormats = playableFormats(streaming.adaptive_formats ?? []) as unknown as YoutubeFormat[]
-  const playbackFormats = rawFormats.map(playbackFormat).filter((format) => format !== undefined)
+  const playbackFormats = rawFormats
+    .map((format) => playbackFormat(format, isLive))
+    .filter((format) => format !== undefined)
   // The manifest must advertise EXACTLY the formats the SABR session can serve,
   // so it is filtered by format KEY rather than by itag. Filtering by itag is
   // not enough: a DRC or dubbed audio track shares itag 251 with the plain one
@@ -372,7 +392,7 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
   // it failed with "unknown audio format 251:...".
   const allowedKeys = new Set(playbackFormats.map((format) => format.key))
   const [manifest, decipheredUrl] = await Promise.all([
-    info.toDash({
+    isLive ? Promise.resolve('') : info.toDash({
       format_filter: (format: YoutubeFormat) => {
         const key = FormatKeyUtils.fromFormat(buildSabrFormat(format as never))
         return !key || !allowedKeys.has(key)
@@ -399,6 +419,7 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
   warmPoTokenSession(context, mintIdentifier)
   return {
     videoId,
+    isLive,
     durationMs: Number(info.basic_info?.duration ?? 0) * 1_000,
     manifest,
     streamingUrl: url.toString(),

@@ -4,6 +4,7 @@ import type { YoutubeClient } from '../sources/youtube'
 
 import { createYoutubeSource } from '../sources/youtube'
 import { catalogInnertube, getSabrSource, hasSessionCookie, prefetchInitialPlayerResponse } from './innertube'
+import { buildLiveManifest } from './live-manifest'
 import { createSabrSession, isSabrSessionRefreshError } from './sabr'
 import { resetIdentity } from './identity'
 import { FRAME_CONNECT, isFrameMethod } from './protocol'
@@ -67,6 +68,35 @@ const api = {
     const id = `playback:${++sessionId}`
     const source = await getSabrSource(videoId)
     const player = createSabrSession(source, maxHeight)
+    /* A live manifest cannot be written before the stream says where its edge
+       is, and the only thing that knows is a segment. One probe buys that, and
+       it is not wasted work: the session caches it, so the first segment Shaka
+       asks for is already in hand. */
+    let manifest = player.manifest
+    if (source.isLive) {
+      const probe = await player.requestSegment({
+        requestId: `${id}:live-probe`,
+        sessionId: id,
+        generation: 0,
+        track: 'video',
+        kind: 'media',
+        formatKey: player.videoFormat.key,
+        startTimeMs: 0,
+        snapshot: { currentTimeMs: 0, playbackRate: 1, bandwidthEstimate: 10_000_000, viewportWidth: 1_280, viewportHeight: 720 },
+      }, () => {})
+      const targetMs = player.videoFormat.targetDurationMs
+        ?? player.audioFormat.targetDurationMs
+        // Every live stream measured used 5s segments, and the probe's own
+        // duration is the better answer whenever it reports one.
+        ?? (probe.durationMs || 5_000)
+      manifest = buildLiveManifest({
+        videoFormats: player.videoFormats,
+        audioFormats: player.audioFormats,
+        targetMs,
+        edgeMs: probe.startMs ?? 0,
+        nowMs: Date.now(),
+      })
+    }
     sessions.set(id, {
       videoId,
       maxHeight,
@@ -80,12 +110,13 @@ const api = {
     return {
       id,
       durationMs: player.durationMs,
-      manifest: player.manifest,
+      manifest,
       videoFormats: player.videoFormats,
       audioFormats: player.audioFormats,
       selectedVideoKey: player.videoFormat.key,
       selectedAudioKey: player.audioFormat.key,
       storyboards: source.storyboards,
+      isLive: source.isLive,
     }
   },
   requestSegment: async (request, progress: (phase: string) => void = () => {}) => {

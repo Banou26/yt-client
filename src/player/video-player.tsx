@@ -118,6 +118,7 @@ const VideoPlayer = (
   const [player, setPlayer] = useState<shaka.Player | undefined>(undefined)
   const [heights, setHeights] = useState<number[]>([])
   const [storyboards, setStoryboards] = useState<Storyboard[]>([])
+  const [isLive, setIsLive] = useState(false)
   const [quality, setQuality] = useState<'auto' | number>(() => getSettings().quality)
   const selectQualityRef = useRef<((height: number | 'auto') => Promise<void>) | undefined>(undefined)
   const [active, setActive] = useState(true)
@@ -195,6 +196,7 @@ const VideoPlayer = (
       setPlayer(controller.player)
       setHeights(controller.heights)
       setStoryboards(controller.storyboards)
+      setIsLive(controller.isLive)
       selectQualityRef.current = controller.selectQuality
       // A stored preference has to be reapplied per video, once this session's
       // formats exist, or every new video silently reverts to auto.
@@ -210,6 +212,7 @@ const VideoPlayer = (
       setPlayer(undefined)
       setHeights([])
       setStoryboards([])
+      setIsLive(false)
       void controller?.destroy()
     }
   }, [attempt, videoId])
@@ -330,6 +333,7 @@ const VideoPlayer = (
             onQuality={applyQuality}
             theater={theater}
             onTheater={() => onTheater?.()}
+            isLive={isLive}
             visible={active || state.paused}
           />
         )

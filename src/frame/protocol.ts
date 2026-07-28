@@ -29,8 +29,16 @@ export type PlaybackFormat = {
   qualityLabel?: string
   audioTrackId?: string
   language?: string
-  initRange: { start: number, end: number }
+  /* Absent for live, which publishes no byte ranges at all. It describes a
+     DASH SegmentBase, which only the VOD manifest uses.
+
+     Optional rather than zero-filled: a `{0,0}` range is a REAL range meaning
+     "one byte", and the segment path slices the cached init blob down to it.
+     That is how live playback failed with a 1-byte init and shaka 3014. */
+  initRange?: { start: number, end: number }
   indexRange?: { start: number, end: number }
+  // Live only: one segment's worth. Sequence maps onto time through it.
+  targetDurationMs?: number
 }
 
 export type PlaybackSnapshot = {
@@ -52,6 +60,11 @@ export type PlaybackSession = {
   // Scrubber hover previews. The sheets live on i.ytimg.com, which the app
   // realm already loads thumbnails from, so only the spec crosses the boundary.
   storyboards: Storyboard[]
+  /* A live stream's manifest is dynamic and its media is only ever served from
+     the edge, so the player has to be told to start there. Left alone it opens
+     at presentation time 0, which for a stream running six hours is 24,000
+     seconds behind the only media the server will send. */
+  isLive: boolean
 }
 
 export type SegmentRequest = {

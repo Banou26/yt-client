@@ -42,6 +42,34 @@ const style = css`
     pointer-events: auto;
   }
 
+  /* Live cannot seek: the server answers every request with the edge segment
+     regardless of the position asked for, so a draggable rail would promise
+     something the transport does not do. */
+  .scrubber.live {
+    pointer-events: none;
+  }
+
+  .scrubber.live .knob {
+    display: none;
+  }
+
+  .live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 1.3rem;
+    font-weight: 500;
+    color: var(--text-on-media);
+  }
+
+  .live-badge::before {
+    content: '';
+    width: 0.8rem;
+    height: 0.8rem;
+    border-radius: 50%;
+    background: #f00;
+  }
+
   .scrubber {
     position: relative;
     height: 1.6rem;
@@ -202,10 +230,13 @@ type ControlsProps = {
   onTheater: () => void
   onNext?: () => void
   visible: boolean
+  // Live has no meaningful position, duration or seek range, so the scrubber
+  // and clock are replaced rather than fed nonsense.
+  isLive?: boolean
 }
 
 export const PlayerControls = (
-  { video, state, heights, storyboards, quality, onQuality, theater, onTheater, onNext, visible }: ControlsProps,
+  { video, state, heights, storyboards, quality, onQuality, theater, onTheater, onNext, visible, isLive = false }: ControlsProps,
 ) => {
   const [scrubbing, setScrubbing] = useState(false)
   const [preview, setPreview] = useState<number | undefined>(undefined)
@@ -336,7 +367,7 @@ export const PlayerControls = (
   return (
     <div css={style} className={visible || scrubbing || menu !== undefined ? 'visible' : undefined}>
       <div
-        className={scrubbing ? 'scrubber scrubbing' : 'scrubber'}
+        className={`${scrubbing ? 'scrubber scrubbing' : 'scrubber'}${isLive ? ' live' : ''}`}
         role='slider'
         aria-label='Seek'
         aria-valuemin={0}
@@ -397,7 +428,13 @@ export const PlayerControls = (
             />
           </div>
         </div>
-        <span className='time'>{clock(position)} / {clock(duration)}</span>
+        {/* A live stream's presentation timeline is the stream's own clock, so
+            the position is a number like 3348:05:43 and the duration is 0. Both
+            are meaningless to a viewer, and there is no seeking to describe, so
+            the pair is replaced by the state itself. */}
+        {isLive
+          ? <span className='live-badge'>LIVE</span>
+          : <span className='time'>{clock(position)} / {clock(duration)}</span>}
         <span className='spacer' />
         <div className='menu-anchor' ref={menuRef}>
           <button

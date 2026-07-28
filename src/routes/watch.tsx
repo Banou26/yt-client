@@ -4,7 +4,7 @@ import type { RelatedVideosQuery } from '../generated/graphql'
 import type { VideoCardData } from '../components/video-card'
 
 import { css } from '@emotion/react'
-import { EllipsisVertical, Link2, Radio, Share2, ThumbsDown, ThumbsUp } from 'lucide-react'
+import { EllipsisVertical, Link2, Share2, ThumbsDown, ThumbsUp } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { useMutation, useQuery } from 'urql'
 import { Link, useLocation, useSearch } from 'wouter'
@@ -102,42 +102,6 @@ const style = css`
   .player-slot > .player-host {
     display: block;
     width: 100%;
-  }
-
-  /* Sized like the player it stands in for, so the page does not reflow between
-     a live video and an ordinary one. */
-  .live-notice {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.8rem;
-    width: 100%;
-    aspect-ratio: 16 / 9;
-    border-radius: 1.4rem;
-    background: var(--bg-subtle);
-    color: var(--text-secondary);
-    text-align: center;
-  }
-
-  .live-notice h2 {
-    margin: 0;
-    font-size: 1.8rem;
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  .live-notice p {
-    margin: 0;
-    max-width: 42rem;
-    font-size: 1.4rem;
-  }
-
-  .live-notice a {
-    margin-top: 0.8rem;
-    color: var(--accent);
-    font-size: 1.4rem;
-    font-weight: 500;
   }
 
   .primary {
@@ -459,10 +423,6 @@ const WatchPage = () => {
      meantime. */
   useEffect(() => {
     if (videoId === '') return
-    if (watch?.isLive) {
-      closePlayer()
-      return
-    }
     openPlayer({ videoId, startAt, title: watch?.title ?? undefined })
   }, [videoId, startAt, watch?.title, watch?.isLive])
   // Annotated rather than inferred so the two selections above are checked
@@ -524,25 +484,10 @@ const WatchPage = () => {
           it to another parent would remount it and restart playback. Only the
           grid placement of .stage changes. */}
       <div className='stage'>
-        {/* A live stream never reaches the player. Its watch-page response has
-            no DASH or HLS manifest and its direct format URLs are refused, so
-            mounting the player would spend three retries to arrive at an
-            internal error string. Saying so once is the honest outcome. */}
-        {watch?.isLive
-          ? (
-            <div className='live-notice'>
-              <Radio size={32} strokeWidth={1.5} />
-              <h2>This is a live stream</h2>
-              <p>Live playback is not wired up in this client yet. Everything else on this page works.</p>
-              <a href={`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`} target='_blank' rel='noreferrer'>
-                Watch it on YouTube
-              </a>
-            </div>
-          )
-          /* The player is NOT mounted here. It lives above the router, and
-             this slot only says where to show it, so leaving the page moves it
-             to the miniplayer dock instead of destroying its SABR session. */
-          : <div className='player-slot' ref={claimPlayer} />}
+        {/* The player is NOT mounted here. It lives above the router, and this
+            slot only says where to show it, so leaving the page moves it to the
+            miniplayer dock instead of destroying its SABR session. */}
+        <div className='player-slot' ref={claimPlayer} />
       </div>
       <div className='primary'>
         {watch?.title ? <h1 className='title'>{watch.title}</h1> : undefined}

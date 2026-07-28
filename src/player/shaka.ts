@@ -257,6 +257,58 @@ export const startShakaPlayback = async ({
     video.addEventListener('seeking', seeking)
     await activePlayer.load(manifestUrl, startTime || undefined, 'application/dash+xml')
     if (signal.aborted) throw signal.reason
+    /* Live opens wherever the media actually landed.
+
+       The manifest's presentation timeline is the stream's own clock, so a
+       stream running six hours starts at 24,000s and the element would
+       otherwise sit at 0 while every segment appends at the far end.
+       goToLive() gets the playhead into the right neighbourhood, but not
+       reliably into the media: the server streams from ITS live edge, which has
+       moved on since the probe that dated the manifest, so the computed edge
+       landed ~15s short of the first buffered range and stalled in the hole.
+
+       The server decides where the media is, so the playhead follows the
+       buffer rather than the arithmetic. Bounded, and only until the first
+       range appears. */
+    if (session.isLive) {
+      /* Live gets its own buffer budget, and keeps ABR.
+
+         The server only ever serves the live EDGE, so Shaka can never build the
+         30s of lookahead the VOD config asks for: measured buffer ahead was
+         ~3s. Against the VOD budget ABR read that permanently-thin buffer as
+         congestion and walked a 1280x720 stream down to 256x144 inside twenty
+         seconds. Pinning the format instead is worse, not better: 720p then
+         held but stalled, playing 10s of media in 25s of wall clock, because
+         the tunnel genuinely cannot sustain it.
+
+         So the goal is lowered to something a live edge can actually reach and
+         ABR is left to find the rate the pipe supports, which is the job it
+         exists to do. */
+      activePlayer.configure({
+        streaming: { bufferingGoal: 12, rebufferingGoal: 2, bufferBehind: 15 },
+        /* Start ABR pessimistic and let it climb. Its default estimate is
+           tuned for a VOD start, where a fat first segment measures the pipe
+           quickly; a live edge never hands over enough at once to correct an
+           optimistic guess, so it opened at 720p, starved (11.7s of media in
+           30s of wall clock, playhead 3s PAST the buffer) and never recovered.
+           Climbing from a low guess converges on what the tunnel can feed. */
+        abr: { defaultBandwidthEstimate: 400_000 },
+      })
+      try {
+        activePlayer.goToLive()
+      } catch {}
+      const settle = Date.now() + 10_000
+      while (!destroyed && !signal.aborted && Date.now() < settle) {
+        const buffered = video.buffered
+        if (buffered.length > 0) {
+          const start = buffered.start(0)
+          // Only forward: a playhead already inside the buffer is left alone.
+          if (video.currentTime < start) video.currentTime = start + 0.1
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      }
+    }
     diagnosticBridgeId = bridgeId
     document.documentElement.dataset.playerEngine = 'shaka'
     // Autoplay with sound is blocked until the origin has enough media
@@ -316,7 +368,7 @@ export const startShakaPlayback = async ({
       activePlayer.selectVariantTrack(track, upgrade, upgrade ? SAFE_MARGIN_SECONDS : 0)
     }
 
-    return { player: activePlayer, destroy, heights, selectQuality, storyboards: session.storyboards }
+    return { player: activePlayer, destroy, heights, selectQuality, storyboards: session.storyboards, isLive: false }
   } catch (error) {
     await destroy()
     throw error instanceof shaka.util.Error ? describeShakaError(error) : error
