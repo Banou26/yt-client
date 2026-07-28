@@ -33,6 +33,17 @@ const style = css`
   position: absolute;
   inset: 0;
   background: #000;
+  /* Above the card's own thumbnail overlays.
+
+     The duration badge and the resume bar are siblings drawn AFTER this one, and
+     the resume bar is deliberately last so it wins wherever the two overlap. It
+     therefore also won over the scrubber: both sit flush to the bottom edge, the
+     resume bar is 4px and the scrubber's visible track is the bottom 3px of its
+     strip, so the track was painted UNDER a bar of the same brand red. What the
+     reader saw was a scrubber; what the pointer hit was a span with no handler,
+     so dragging it did nothing. The preview covers the whole thumbnail anyway,
+     so it owns this box while it is up. */
+  z-index: 1;
 
   video {
     display: block;
