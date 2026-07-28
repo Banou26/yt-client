@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 
 import { createYoutubeSource } from '.'
 import { SOURCE_CURSOR_ARGUMENT, SOURCE_REPLAY } from '../types'

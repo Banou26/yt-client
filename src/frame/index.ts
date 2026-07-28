@@ -287,10 +287,6 @@ const dispatch = async (request: FrameRequest, progress: (phase: string) => void
   return (api[request.method] as (...args: unknown[]) => Promise<unknown>)(...request.args)
 }
 
-type FrameWindow = Window & {
-  [FRAME_CONNECT]?: (port: MessagePort) => void
-}
-
 const connect = (port: MessagePort) => {
   port.addEventListener('message', (event) => {
     const request = event.data as FrameRequest

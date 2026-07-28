@@ -47,6 +47,8 @@ export const egressFetch = async (
   const port = await portReady
   if (signal?.aborted) throw abortReason(signal)
   const id = ++requestId
+  // Assigned once below, but declared here because `cancel` closes over it.
+  // eslint-disable-next-line prefer-const
   let responseBody: ReadableStreamDefaultReader<Uint8Array> | undefined
   let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined
   let aborted = false

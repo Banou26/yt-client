@@ -466,9 +466,9 @@ const Composer = ({ videoId }: { videoId: string }) => {
   )
 }
 
-const CommentActions = (
-  { comment, videoId }: { comment: CommentRow, videoId: string },
-) => {
+// No videoId: both writes address the comment through the actions token the
+// page minted for it, so the video it sits on is not part of either call.
+const CommentActions = ({ comment }: { comment: CommentRow }) => {
   const [, navigate] = useLocation()
   const { ready, signedIn } = useSession()
   const [, rateComment] = useMutation(RATE_COMMENT)
@@ -782,7 +782,7 @@ export const Comments = ({ videoId, commentCountText }: { videoId: string, comme
               {comment.runs.length > 0
                 ? <RichText className='text' runs={comment.runs} videoId={videoId} />
                 : <div className='text'>{comment.text}</div>}
-              <CommentActions comment={comment} videoId={videoId} />
+              <CommentActions comment={comment} />
               {comment.repliesCursor
                 ? <Replies cursor={comment.repliesCursor} count={comment.replyCount} videoId={videoId} />
                 : comment.replyCount

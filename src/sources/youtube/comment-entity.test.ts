@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 
 // Through the package's own surface rather than a deep path: `exports` does not
 // publish dist/, so a direct file import does not resolve.

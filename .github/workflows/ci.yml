@@ -28,6 +28,13 @@ jobs:
 
       - run: npm test
 
+      # oxlint was configured in vite.config.ts from the start but nothing ever
+      # ran it, so the rules were decoration. It catches the class of bug the
+      # type-checker cannot see: an expression whose result is discarded, a
+      # handler that is imported and never wired, a comment describing code that
+      # was deleted.
+      - run: npm run lint
+
       # Includes the separate frame bundle, which has no HMR and is easy to
       # leave stale after a src/frame change.
       - run: npm run build

@@ -232,6 +232,8 @@ export const startShakaPlayback = async ({
   let playerError: ((event: Event) => void) | undefined
   let buffering: ((event: Event) => void) | undefined
   let seeking: (() => void) | undefined
+  // Assigned once below, but declared here because `destroy` closes over it.
+  // eslint-disable-next-line prefer-const
   let abortListener: (() => void) | undefined
   let destroyed = false
 

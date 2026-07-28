@@ -417,7 +417,7 @@ const ShortsPage = () => {
     pause: !ready,
   })
   const page = data?.shorts
-  const { items, cursor } = useInfiniteFeed({
+  const { items } = useInfiniteFeed({
     pages: page ? [...loaded, page] : loaded,
     key: short => short.id,
   })

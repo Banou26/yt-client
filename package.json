@@ -8,6 +8,7 @@
     "build:frame": "vp build -c vite.frame.config.ts",
     "dev": "npm run build:frame && npm run generate && vp dev --port 4561",
     "generate": "graphql-codegen --config codegen.ts",
+    "lint": "vp lint src",
     "postinstall": "patch-package",
     "test": "vp test run src",
     "test:browser": "playwright test",
