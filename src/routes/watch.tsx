@@ -87,6 +87,18 @@ const WATCH_META_QUERY = gql(`
 const style = css`
   display: grid;
   grid-template-columns: minmax(0, 128rem) 40.2rem;
+  /* The sidebar spans BOTH rows, and an auto-sized row absorbs a share of a
+     spanning item that is taller than its own content. So a long sidebar
+     inflated row 1 and pushed the title and description far below the player:
+     measured at 590px below it with 40 related videos, and 1610px once paging
+     had loaded more.
+
+     min-content pins row 1 to the player it actually holds, and the FLEXIBLE
+     second row is what makes it stick: a spanning item's excess height is
+     shared out across intrinsic rows, so a min-content plus auto pair still
+     inflated row 1 (measured: a 2007px gap). A flexible track absorbs that
+     excess instead. */
+  grid-template-rows: min-content 1fr;
   align-items: start;
   gap: 0 2.4rem;
   padding: 2.4rem;
