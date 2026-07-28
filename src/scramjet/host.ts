@@ -1,4 +1,4 @@
-import type { EgressApi, HostControlEvent, HostControlRequest } from './protocol'
+import type { EgressApi, ExtFetchRequest, ExtFetchResponse, HostBootstrap, HostControlEvent, HostControlRequest, HostHello, TransportResponse } from './protocol'
 import type { FrameEgressRequest, FrameEgressResponse } from '../frame/protocol'
 
 import { defaultConfigDev } from '@mercuryworkshop/scramjet'
@@ -6,7 +6,7 @@ import { Tap } from '@mercuryworkshop/scramjet'
 import { Controller } from '@mercuryworkshop/scramjet-controller'
 import { expose } from 'osra'
 
-import { CLEAR_COOKIES, CLOSE_SIGNIN, COOKIES_CLEARED, EGRESS_KEY, ENGINE_READY, OPEN_SIGNIN, SIGNIN_LOADED, SIGNIN_STATUS } from './protocol'
+import { CLEAR_COOKIES, CLOSE_SIGNIN, COOKIES_CLEARED, EGRESS_KEY, ENGINE_READY, HOST_BOOTSTRAP, HOST_HELLO, OPEN_SIGNIN, SIGNIN_LOADED, SIGNIN_STATUS } from './protocol'
 import { FRAME_CONNECT, FRAME_EGRESS_CONNECT } from '../frame/protocol'
 import { createFknTransport, createWebvpnTransport, FRAME_BOOTSTRAP_URL } from './fkn-transport'
 import type { ExtEgressFetch } from './fkn-transport'
@@ -44,23 +44,74 @@ const stage = (value: string) => {
   document.documentElement.dataset.stage = value
 }
 
-const loadBroker = async () => {
-  const frame = document.createElement('iframe')
-  frame.hidden = true
-  frame.src = 'https://fkn.app/api'
-  const loaded = new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('yt-client: FKN broker load timed out')), 15_000)
-    frame.addEventListener('load', () => {
-      clearTimeout(timeout)
-      resolve()
-    }, { once: true })
-    frame.addEventListener('error', () => {
-      clearTimeout(timeout)
-      reject(new Error('yt-client: FKN broker failed to load'))
-    }, { once: true })
+/* Longer than the app's own broker-load ceiling, deliberately: this is only a
+   backstop against an app that never answers at all. A platform that fails to
+   come up is reported by the app side, which invalidates the engine with the
+   real reason rather than letting this fire with a vaguer one. */
+const BOOTSTRAP_TIMEOUT_MS = 30_000
+
+/* The app realm owns `@fkn/lib`, the FKN broker and the egress worker (see
+   platform.ts for why), so this frame is handed its egress instead of building
+   it. Announced at module evaluation rather than inside boot(), so the app can
+   answer while the service worker registration is still in flight. */
+const bootstrap = new Promise<{ egress: MessagePort, extFetch: MessagePort }>((resolve, reject) => {
+  const timeout = setTimeout(
+    () => reject(new Error('yt-client: engine bootstrap ports never arrived')),
+    BOOTSTRAP_TIMEOUT_MS,
+  )
+  const onMessage = (event: MessageEvent) => {
+    if (event.origin !== location.origin || event.source !== window.parent) return
+    if ((event.data as HostBootstrap | undefined)?.type !== HOST_BOOTSTRAP) return
+    window.removeEventListener('message', onMessage)
+    clearTimeout(timeout)
+    const [egress, extFetch] = event.ports
+    if (!egress || !extFetch) {
+      reject(new Error('yt-client: engine bootstrap ports are missing'))
+      return
+    }
+    resolve({ egress, extFetch })
+  }
+  window.addEventListener('message', onMessage)
+  window.parent.postMessage({ type: HOST_HELLO } satisfies HostHello, location.origin)
+})
+
+/* The app realm's extension fetch, reached over a port. Mirrors the local
+   function it replaces exactly, including answering null when the extension is
+   absent so every caller falls back to the tunnelled transports. */
+const createExtFetch = (port: MessagePort): ExtEgressFetch => {
+  let requestId = 0
+  const pending = new Map<number, { resolve(value: TransportResponse | null): void, reject(reason: unknown): void }>()
+  port.addEventListener('message', (event) => {
+    const message = event.data as ExtFetchResponse
+    const request = pending.get(message.id)
+    if (!request) return
+    pending.delete(message.id)
+    if (message.error) request.reject(new Error(message.error))
+    // `?? null` only bridges the union's optional-vs-null shape; both mean the
+    // same thing to the caller, which is "fall back to the tunnel".
+    else request.resolve(message.response ?? null)
   })
-  document.body.appendChild(frame)
-  await loaded
+  port.start()
+  return (url, options, signal) => new Promise<TransportResponse | null>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason)
+      return
+    }
+    const id = ++requestId
+    pending.set(id, { resolve, reject })
+    signal?.addEventListener('abort', () => {
+      // Only the first settler wins: a response that crossed the abort keeps
+      // the entry, and deleting it here is what proves this abort got there
+      // first.
+      if (!pending.delete(id)) return
+      port.postMessage({ type: 'cancel', id } satisfies ExtFetchRequest)
+      reject(signal.reason)
+    }, { once: true })
+    // `options.body` is NOT transferred: the caller reuses this same options
+    // object on the tunnelled fallback, and a transferred ArrayBuffer would
+    // reach it detached.
+    port.postMessage({ type: 'fetch', id, url, options } satisfies ExtFetchRequest)
+  })
 }
 
 const boot = async () => {
@@ -72,53 +123,20 @@ const boot = async () => {
     type: 'classic',
     updateViaCache: 'none',
   }).then(waitForWorker)
-  const worker = new Worker(new URL('./egress.worker.ts', import.meta.url), { type: 'module' })
-  const relayAbort = new AbortController()
   const frameCodePromise = fetch('/__yt_scramjet__/youtube-frame.js').then((response) => response.text())
-  const fknLib = import('@fkn/lib')
-  stage('egress-worker')
-  const transportReady = Promise.all([loadBroker(), fknLib]).then(async ([, { relayWorker, fetch: extPlatformFetch, isExtensionExposed }]) => {
-    relayWorker(worker, { unregisterSignal: relayAbort.signal })
-    const channel = new MessageChannel()
-    worker.postMessage({ type: EGRESS_KEY, port: channel.port1 }, [channel.port1])
-    channel.port2.start()
+  stage('bootstrap')
+  const transportReady = bootstrap.then(async ({ egress, extFetch: extFetchPort }) => {
+    egress.start()
     const remote = expose<EgressApi>({}, {
       key: EGRESS_KEY,
-      transport: { receive: channel.port2, emit: channel.port2 },
+      transport: { receive: egress, emit: egress },
     })
-    // When the FKN extension is present in this (host) window, its native fetch
-    // holds host permissions — a direct, CORS-free request that skips the proxy
-    // broker and the webvpn tunnel entirely. Returns null when the extension is
-    // absent so every caller falls back to the tunnelled transports. `redirect`
-    // is forced to follow: the extension fetches natively (bypassing scramjet's
-    // own manual-redirect rewriting), so it resolves redirects itself.
-    let lastEgressMode: boolean | undefined
-    const extFetch: ExtEgressFetch = async (url, options, signal) => {
-      const exposed = isExtensionExposed()
-      if (exposed !== lastEgressMode) {
-        lastEgressMode = exposed
-        console.info(`[yt-client] egress → ${exposed ? 'FKN extension (direct native fetch)' : 'FKN relay + webvpn tunnel'}`)
-      }
-      if (!exposed) return null
-      const response = await extPlatformFetch(url, {
-        method: options.method,
-        headers: options.headers,
-        body: options.body ?? undefined,
-        redirect: 'follow',
-        signal: signal ?? undefined,
-      })
-      return {
-        status: response.status,
-        statusText: response.statusText,
-        headers: [...response.headers],
-        body: response.body,
-      }
-    }
+    const extFetch = createExtFetch(extFetchPort)
     const transport = createFknTransport(remote, extFetch)
     await transport.init()
-    return { channel, remote, transport, extFetch }
+    return { egress, extFetchPort, remote, transport, extFetch }
   })
-  const [serviceworker, { channel, remote, transport, extFetch }] = await Promise.all([workerReady, transportReady])
+  const [serviceworker, { egress, extFetchPort, remote, transport, extFetch }] = await Promise.all([workerReady, transportReady])
 
   stage('controller')
   const controller = new Controller({
@@ -379,12 +397,14 @@ const boot = async () => {
     stage('frame-posted')
   })
   proxiedFrame.go(FRAME_BOOTSTRAP_URL)
+  /* Ports only. The egress worker, the relay and the broker belong to the app
+     realm now and deliberately outlive this frame - surviving engine resets is
+     the point of the move. */
   window.addEventListener('pagehide', () => {
-    relayAbort.abort()
-    channel.port2.close()
+    egress.close()
+    extFetchPort.close()
     frameEgressPort?.close()
     controlPort?.close()
-    worker.terminate()
   }, { once: true })
 
   return { controller, frame: proxiedFrame }

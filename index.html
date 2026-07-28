@@ -3,6 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The FKN broker, relay and egress worker are owned by THIS document now
+         (src/scramjet/platform.ts), so the connection hints live here rather
+         than on the engine frame that used to mount them. -->
+    <link rel="preconnect" href="https://fkn.app" />
+    <link rel="preconnect" href="https://api.fkn.app" />
+    <link rel="dns-prefetch" href="https://webvpn.fkn.app" />
     <!-- Kept in step with the resolved theme by applyTheme() in src/settings.ts,
          which has to win over the OS preference when the user picks explicitly. -->
     <meta name="theme-color" content="#0f0f0f" />

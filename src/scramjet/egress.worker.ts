@@ -20,7 +20,7 @@ workerGlobal.global ??= globalThis
 
 import type { EgressApi } from './protocol'
 
-import { EGRESS_KEY } from './protocol'
+import { EGRESS_ABORT_ALL, EGRESS_KEY } from './protocol'
 
 declare const self: DedicatedWorkerGlobalScope
 
@@ -224,9 +224,24 @@ const api = {
 
 void prepare()
 
+/* This worker outlives the engine now (it is owned by the app realm, not by
+   the host frame), so it has to be told when an engine goes away instead of
+   simply dying with it. */
+let enginePort: MessagePort | undefined
+
 self.addEventListener('message', (event) => {
+  if (event.data?.type === EGRESS_ABORT_ALL) {
+    for (const controller of requests.values()) controller.abort()
+    requests.clear()
+    return
+  }
   if (event.data?.type !== EGRESS_KEY || !event.data.port) return
   const port = event.data.port as MessagePort
+  // One live engine at a time: a previous engine's port belongs to a frame
+  // that is already gone, so release it rather than stranding one osra
+  // listener per engine reset.
+  enginePort?.close()
+  enginePort = port
   port.start()
   expose(api, {
     key: EGRESS_KEY,

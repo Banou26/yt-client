@@ -1,8 +1,9 @@
 import type { FrameApi, FrameMethod, FrameProgress, FrameRequest, FrameResponse } from '../frame/protocol'
-import type { HostControlEvent, HostControlRequest } from './protocol'
+import type { HostBootstrap, HostControlEvent, HostControlRequest } from './protocol'
 
 import { FRAME_METHODS } from '../frame/protocol'
-import { CLEAR_COOKIES, CLOSE_SIGNIN, COOKIES_CLEARED, ENGINE_READY, OPEN_SIGNIN, SIGNIN_LOADED, SIGNIN_STATUS } from './protocol'
+import { abortPlatformEgress, startPlatform } from './platform'
+import { CLEAR_COOKIES, CLOSE_SIGNIN, COOKIES_CLEARED, ENGINE_READY, HOST_BOOTSTRAP, HOST_HELLO, OPEN_SIGNIN, SIGNIN_LOADED, SIGNIN_STATUS } from './protocol'
 
 let engine: Promise<FrameApi> | undefined
 let engineFrame: HTMLIFrameElement | undefined
@@ -149,6 +150,11 @@ const connectControl = (port: MessagePort) => {
 
 const invalidateEngine = (generation: number, error: Error) => {
   if (generation !== engineGeneration) return
+  /* The egress worker outlives the engine now, so its in-flight work has to be
+     dropped explicitly. It used to die with the host frame, and an invalidation
+     is usually a playback failure: exactly when a dead session's media fetches
+     must stop occupying the tunnel. */
+  abortPlatformEgress()
   engineCleanup?.()
   engineCleanup = undefined
   const connection = engineConnection
@@ -172,12 +178,46 @@ export const startEngine = () => {
   const generation = ++engineGeneration
   engine = new Promise((resolve, reject) => {
     engineReject = reject
+    /* Started alongside the host frame rather than on its hello, so the broker
+       and relay come up while the frame is still booting - the same overlap the
+       host had when it owned them. Memoized, so this is a no-op after the first
+       engine. */
+    const platformReady = startPlatform()
+    // answerHello is the real handler; this only keeps a platform failure from
+    // surfacing as an unhandled rejection when the engine is invalidated before
+    // the host ever says hello.
+    platformReady.catch(() => {})
+
     const frame = document.createElement('iframe')
     engineFrame = frame
     frame.hidden = true
     frame.src = '/__yt_scramjet__/host.html'
+    /* The host frame builds no egress of its own: it announces itself and this
+       realm hands it a port to the egress worker plus a port back to the
+       extension fetch. Both are opened fresh per engine, so a reset cannot
+       leave the new frame holding a dead peer's channel. */
+    const answerHello = async () => {
+      try {
+        const platform = await platformReady
+        if (generation !== engineGeneration) return
+        const egress = platform.openEgressPort()
+        const extFetch = platform.openExtFetchPort()
+        frame.contentWindow?.postMessage(
+          { type: HOST_BOOTSTRAP } satisfies HostBootstrap,
+          location.origin,
+          [egress, extFetch],
+        )
+      } catch (error) {
+        invalidateEngine(generation, error instanceof Error ? error : new Error(String(error)))
+      }
+    }
     const onMessage = (event: MessageEvent) => {
-      if (event.origin !== location.origin || event.source !== frame.contentWindow || event.data?.type !== ENGINE_READY) return
+      if (event.origin !== location.origin || event.source !== frame.contentWindow) return
+      if (event.data?.type === HOST_HELLO) {
+        void answerHello()
+        return
+      }
+      if (event.data?.type !== ENGINE_READY) return
       engineCleanup?.()
       engineCleanup = undefined
       if (event.data.error) {

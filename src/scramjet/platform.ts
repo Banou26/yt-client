@@ -1,0 +1,209 @@
+import type { ExtFetchRequest, ExtFetchResponse, TransportResponse } from './protocol'
+
+import { EGRESS_ABORT_ALL, EGRESS_KEY } from './protocol'
+
+/* The FKN platform, owned by the APP realm rather than by the engine.
+
+   `@fkn/lib` used to be imported inside the Scramjet host frame, next to the
+   thing that consumes it. That looked tidy and cost two capabilities:
+
+   1. Importing the lib injects an `fkn.app/api` broker iframe into the
+      importing document, and the broker is not only an RPC channel: it renders
+      the platform's own trusted UI (the connect popup that mints a premium
+      token, the relay picker, the quota toast, the extension install prompt).
+      The host frame is `hidden`, so that iframe lived inside a `display: none`
+      subtree, where it can neither be seen nor clicked, and where its overlay
+      rAF loop does not tick. Connecting an account from this client was
+      therefore impossible, which left every WebVPN session on free-tier
+      pacing - and free-tier pacing is what carries SABR media.
+
+   2. The host frame is destroyed on every engine reset, taking the broker, the
+      lib, the relay session and the egress worker's libcurl wasm with it. A
+      reset is what playback failure DOES, so the recovery path was paying a
+      full cold platform start at the worst possible moment.
+
+   Both follow from the same placement, so both are fixed by moving the lib up
+   here and handing the engine ports instead. The engine keeps a DIRECT port to
+   the egress worker, so the media path gains no hop.
+
+   THIS REALM IS A RELAY, so it does not make cloud calls of its own. Calling
+   `relayWorker` hands the window's `fkn-api` osra channel to the worker; a
+   realm that then also talks cloud over that same channel is contending with
+   its own relay, which is the recorded cause of the reverted host-side
+   cloud-fetch experiment. The rule is not "be careful", it is structural: the
+   only lib surface used here is the EXTENSION one, which talks to the content
+   script and never reaches the broker at all. All cloud egress happens in the
+   worker, at the far end of the relay.
+
+   If this realm ever does need cloud calls, the answer is a SEPARATE osra
+   channel to the broker (its own key over its own MessageChannel), never the
+   relayed one. */
+
+const BROKER_URL = 'https://fkn.app/api'
+const BROKER_TIMEOUT_MS = 15_000
+
+/* Appended synchronously, and before `@fkn/lib` is imported, because the lib
+   adopts an existing `iframe[src=...]` at module-evaluation time and injects
+   its own otherwise. Owning the element is what makes this realm the overlay
+   host: the lib binds hit-test retargeting to whoever mounted the iframe, and
+   a clipped-out region has to retarget onto the real app to be pass-through.
+
+   Deliberately unstyled: the lib stamps the whole overlay baseline on it
+   (fixed, full viewport, `clip-path: inset(100%)` when idle, z-index max, all
+   `!important`). Setting `hidden` here is what broke it before. */
+const mountBroker = () => {
+  const element = document.createElement('iframe')
+  element.src = BROKER_URL
+  const loaded = new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('yt-client: FKN broker load timed out')), BROKER_TIMEOUT_MS)
+    element.addEventListener('load', () => {
+      clearTimeout(timeout)
+      resolve()
+    }, { once: true })
+    element.addEventListener('error', () => {
+      clearTimeout(timeout)
+      reject(new Error('yt-client: FKN broker failed to load'))
+    }, { once: true })
+  })
+  document.body.appendChild(element)
+  return loaded
+}
+
+const create = async () => {
+  const worker = new Worker(new URL('./egress.worker.ts', import.meta.url), { type: 'module' })
+  const relayAbort = new AbortController()
+  window.addEventListener('pagehide', () => {
+    relayAbort.abort()
+    worker.terminate()
+  }, { once: true })
+
+  /* mountBroker appends the iframe SYNCHRONOUSLY, so the lib adopts it whichever
+     of these settles first. Waiting for the load before touching the lib is
+     what keeps the broker from being messaged too early, which surfaces as a
+     target-origin warning rather than as a failure. */
+  const brokerLoaded = mountBroker()
+  const [, lib] = await Promise.all([brokerLoaded, import('@fkn/lib')])
+  /* This realm is a relay from here on. Nothing below may reach the broker.
+
+     The install prompt is disabled for the same reason: it is the one way the
+     extension surface can pull the broker in, and a missing extension is the
+     ORDINARY case here - the tunnel is a complete answer, not a degraded one,
+     so there is nothing to prompt about. */
+  lib.setMissingExtensionHandler(null)
+  lib.relayWorker(worker, { unregisterSignal: relayAbort.signal })
+
+  /* One live engine at a time, so the worker rotates: handing it a new port
+     releases the previous engine's, whose frame is already gone. Without that
+     every reset would strand another osra listener in the worker. */
+  const openEgressPort = () => {
+    const channel = new MessageChannel()
+    worker.postMessage({ type: EGRESS_KEY, port: channel.port1 }, [channel.port1])
+    return channel.port2
+  }
+
+  let lastEgressMode: boolean | undefined
+  const runExtFetch = async (request: Extract<ExtFetchRequest, { type: 'fetch' }>, signal: AbortSignal) => {
+    const exposed = lib.isExtensionExposed()
+    if (exposed !== lastEgressMode) {
+      lastEgressMode = exposed
+      console.info(`[yt-client] egress → ${exposed ? 'FKN extension (direct native fetch)' : 'FKN relay + webvpn tunnel'}`)
+    }
+    if (!exposed) return null
+    /* `extension.fetch`, NOT the root `fetch`. The root one is the auto-select
+       layer (extension, then desktop, then cloud, re-checked per call), so a
+       flip in exposure between the gate above and the call below would put a
+       CLOUD request in the relaying realm - the one thing this module must not
+       do. The extension binding cannot fall through, so the property holds
+       structurally rather than by the gate being lucky.
+
+       `redirect` is forced to follow: the extension fetches natively, outside
+       Scramjet's manual-redirect rewriting, so it resolves redirects itself. */
+    const response = await lib.extension.fetch(request.url, {
+      method: request.options.method,
+      headers: request.options.headers,
+      body: request.options.body ?? undefined,
+      redirect: 'follow',
+      signal,
+    })
+    return {
+      status: response.status,
+      statusText: response.statusText,
+      headers: [...response.headers] as [string, string][],
+      body: response.body,
+    } satisfies TransportResponse
+  }
+
+  let extFetchPort: MessagePort | undefined
+  const openExtFetchPort = () => {
+    // Same one-engine-at-a-time rule as the egress port, on the side we can
+    // actually close: the previous engine's frame is gone with its half.
+    extFetchPort?.close()
+    const channel = new MessageChannel()
+    const port = channel.port1
+    extFetchPort = port
+    const aborts = new Map<number, AbortController>()
+    port.addEventListener('message', (event) => {
+      const request = event.data as ExtFetchRequest
+      if (request.type === 'cancel') {
+        aborts.get(request.id)?.abort()
+        aborts.delete(request.id)
+        return
+      }
+      const abort = new AbortController()
+      aborts.set(request.id, abort)
+      void runExtFetch(request, abort.signal).then(
+        (response) => {
+          aborts.delete(request.id)
+          /* The BODY transfers (a ReadableStream cannot be cloned), the
+             REQUEST body never does: the caller reuses the same options object
+             on the tunnelled fallback when this answers null, and a
+             transferred ArrayBuffer would reach it detached. */
+          port.postMessage(
+            { id: request.id, response } satisfies ExtFetchResponse,
+            response?.body ? [response.body] : [],
+          )
+        },
+        (error) => {
+          aborts.delete(request.id)
+          port.postMessage({
+            id: request.id,
+            error: error instanceof Error ? error.message : String(error),
+          } satisfies ExtFetchResponse)
+        },
+      )
+    })
+    port.start()
+    return channel.port2
+  }
+
+  return {
+    openEgressPort,
+    openExtFetchPort,
+    abortEgress: () => worker.postMessage({ type: EGRESS_ABORT_ALL }),
+  }
+}
+
+let platform: ReturnType<typeof create> | undefined
+
+/**
+ * Starts the FKN platform for this document, once.
+ *
+ * Deliberately memoized rather than tied to the engine: surviving engine
+ * resets is half the point of living up here. A FAILED start is not memoized,
+ * though - the host frame used to get a fresh broker attempt on every boot, and
+ * caching the rejection would turn one transient failure into a dead client
+ * until reload.
+ */
+export const startPlatform = () => (platform ??= create().catch((error: unknown) => {
+  platform = undefined
+  throw error
+}))
+
+/** Drops the egress worker's in-flight requests. Safe before the first start. */
+export const abortPlatformEgress = () => {
+  void platform?.then((api) => api.abortEgress()).catch(() => {})
+}
+
+// Kept for the engine-facing side of the handshake, so client.ts does not have
+// to know the shape of what it is transferring.
+export type Platform = Awaited<ReturnType<typeof create>>
