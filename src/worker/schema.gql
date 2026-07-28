@@ -282,6 +282,10 @@ type WatchMeta {
   likeStatus: LikeStatus
   channel: Channel
   related: [Video!]!
+  # Present when the sidebar has more to load. Pass it to `relatedVideos`, the
+  # same shape `Comment.repliesCursor` uses: `related` stays a plain list so the
+  # busiest query in the app keeps its selection unchanged.
+  relatedCursor: String
   # Null unless the watch query passed a playlistId.
   playlist: WatchPlaylist
 }
@@ -436,6 +440,9 @@ type Query {
   # Replies to one comment. The cursor comes from `Comment.repliesCursor` and
   # names its thread, so no video or comment id is needed alongside it.
   commentReplies(cursor: String!): CommentPage!
+  # More of the watch sidebar. The cursor comes from `WatchMeta.relatedCursor`
+  # and names the video it belongs to, so no id is needed alongside it.
+  relatedVideos(cursor: String!): VideoPage!
   # Signed-in only, like `subscriptions` and `history`: the library aggregation
   # browse is refused before the network call when signed out.
   playlists(cursor: String): PlaylistListPage!

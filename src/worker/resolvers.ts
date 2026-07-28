@@ -43,6 +43,7 @@ export const resolvers = {
     comments: (_, { videoId, sort, cursor }, context) =>
       context.source.comments(videoId, sort ?? undefined, cursor ?? undefined),
     commentReplies: (_, { cursor }, context) => context.source.commentReplies(cursor),
+    relatedVideos: (_, { cursor }, context) => context.source.relatedVideos(cursor),
     playlists: (_, { cursor }, context) => context.source.playlists(cursor ?? undefined),
     playlist: (_, { id, cursor }, context) => context.source.playlist(id, cursor ?? undefined),
     notifications: (_, { cursor }, context) => context.source.notifications(cursor ?? undefined),

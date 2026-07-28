@@ -244,27 +244,52 @@ const createFakeClient = () => {
       execute: async (endpoint: string, args?: Record<string, unknown>) => {
         calls.push(endpoint)
         payloads.push({ endpoint, args })
+        const relatedNext = {
+          call: async () => ({
+            on_response_received_endpoints_memo: new Map<string, unknown[]>([
+              ['CompactVideo', [{ video_id: 'related-next', title: { text: 'More like this' } }]],
+            ]),
+          }),
+        }
         const memo: [string, unknown[]][] = [
           ['VideoPrimaryInfo', [{ view_count: { view_count: { text: '42 views' } } }]],
+          /* ONE entry carrying both halves. A Map keeps the last value for a
+             duplicate key, so pushing a second TwoColumnWatchNextResults below
+             would silently hide this one and make the two cases untestable
+             together. The sidebar's continuation is the last item of
+             secondary_results. */
+          ['TwoColumnWatchNextResults', [{
+            /* Mirrors the real nesting: secondary_results holds an ItemSection
+               whose contents carry the rows and the trailing ContinuationItem.
+               A flat fixture here would pass while the real response does not. */
+            secondary_results: [
+              { contents: [
+                { video_id: 'rel1', title: { text: 'Related one' } },
+                { endpoint: relatedNext },
+              ] },
+            ],
+            ...(args?.playlistId
+              ? {
+                  playlist: {
+                    id: args.playlistId,
+                    title: 'Queue',
+                    author: { name: 'Owner' },
+                    contents: [
+                      { video_id: 'q1', title: { text: 'First' }, thumbnail: [{ url: 'q1.jpg', width: 320 }], duration: { seconds: 61 } },
+                      { primary: { video_id: 'q2', title: { text: 'Second' } } },
+                      { playlist_video: {} },
+                    ],
+                    current_index: args.playlistIndex ?? 0,
+                    is_infinite: false,
+                  },
+                }
+              : {}),
+          }]],
+          /* A ContinuationItem also sits in the memo for the COMMENTS entry.
+             Reading the first one out of the memo instead of off
+             secondary_results would page comments into the video sidebar. */
+          ['ContinuationItem', [{ endpoint: { call: async () => ({}) } }]],
         ]
-        // The queue panel only comes back when /next was asked for one, and it
-        // rides on the same TwoColumnWatchNextResults the memo already holds.
-        if (args?.playlistId) {
-          memo.push(['TwoColumnWatchNextResults', [{
-            playlist: {
-              id: args.playlistId,
-              title: 'Queue',
-              author: { name: 'Owner' },
-              contents: [
-                { video_id: 'q1', title: { text: 'First' }, thumbnail: [{ url: 'q1.jpg', width: 320 }], duration: { seconds: 61 } },
-                { primary: { video_id: 'q2', title: { text: 'Second' } } },
-                { playlist_video: {} },
-              ],
-              current_index: args.playlistIndex ?? 0,
-              is_infinite: false,
-            },
-          }]])
-        }
         return {
           success: true,
           // `playlistId` is optional on the wire: playlist/create is the only
@@ -631,8 +656,12 @@ describe('youtube source', () => {
   /* commentReplies is deliberately absent: this table encodes "leading
      arguments, then the cursor", and its ONLY argument is the cursor. There is
      no first-page call to make before one can be rejected, so it gets its own
-     test below rather than a fake entry here. */
-  const CURSOR_CASES: Record<Exclude<keyof typeof SOURCE_CURSOR_ARGUMENT, 'commentReplies'>, string[]> = {
+     test below rather than a fake entry here. relatedVideos is the same shape:
+     its cursor comes off WatchMeta rather than from a call of its own. */
+  const CURSOR_CASES: Record<
+    Exclude<keyof typeof SOURCE_CURSOR_ARGUMENT, 'commentReplies' | 'relatedVideos'>,
+    string[]
+  > = {
     home: [undefined as unknown as string],
     subscriptions: [],
     history: [],
@@ -955,8 +984,24 @@ describe('youtube source', () => {
     // table by accident still fails here. commentReplies is covered by its own
     // test: its only argument is the cursor, so there are no leading arguments
     // for the table to pin and no first-page call to make first.
-    const covered = [...Object.keys(CURSOR_CASES), 'commentReplies']
+    const covered = [...Object.keys(CURSOR_CASES), 'commentReplies', 'relatedVideos']
     expect(covered.sort()).toEqual(Object.keys(SOURCE_CURSOR_ARGUMENT).sort())
+  })
+
+  it('pages the watch sidebar from its own continuation', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    const meta = await source.watch('abc')
+    expect(meta?.relatedCursor).toBeTruthy()
+    const more = await source.relatedVideos(meta!.relatedCursor!)
+    expect(more.items[0]?.id).toBe('related-next')
+    // Unknown cursors report the same way every other feed reports them, and a
+    // cursor from a real video feed is a different mistake.
+    await expect(source.relatedVideos('youtube:bogus')).rejects.toThrow('unknown continuation')
+    const channel = await source.channel('c')
+    await expect(source.relatedVideos(channel.videos.cursor!)).rejects.toThrow('not a watch sidebar')
   })
 
   it('takes only a replies cursor, and says so when handed another feed\'s', async () => {

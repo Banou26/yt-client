@@ -198,6 +198,7 @@ export type SourceWatchMeta = {
   likeStatus?: SourceLikeStatus
   channel?: SourceChannel
   related: SourceVideo[]
+  relatedCursor?: string
   playlist?: SourceWatchPlaylist
 }
 
@@ -323,6 +324,8 @@ export type Source = {
   // next one. There is no videoId argument because the cursor already names
   // exactly which thread it belongs to.
   commentReplies(cursor: string): Promise<SourceCommentPage>
+  // More of the watch sidebar. The cursor already names its video.
+  relatedVideos(cursor: string): Promise<SourceVideoPage>
   // The library aggregation is signed-in only; a single playlist is not, so a
   // public one opens anonymously.
   playlists(cursor?: string): Promise<SourcePlaylistListPage>
@@ -379,6 +382,7 @@ export const SOURCE_METHODS = [
   'watch',
   'comments',
   'commentReplies',
+  'relatedVideos',
   'playlists',
   'playlist',
   'notifications',
@@ -424,6 +428,7 @@ export const SOURCE_CURSOR_ARGUMENT = {
   channel: 4,
   comments: 2,
   commentReplies: 0,
+  relatedVideos: 0,
   communityPosts: 1,
   notifications: 0,
   playlists: 0,
@@ -455,6 +460,7 @@ export const SOURCE_REPLAY = {
   watch: 'always',
   comments: 'unless-cursor',
   commentReplies: 'unless-cursor',
+  relatedVideos: 'unless-cursor',
   playlists: 'unless-cursor',
   playlist: 'unless-cursor',
   notifications: 'unless-cursor',

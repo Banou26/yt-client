@@ -1,4 +1,6 @@
 import type { PlaylistPanelData } from '../components/playlist-panel'
+import type { RelatedVideosQuery } from '../generated/graphql'
+
 import type { VideoCardData } from '../components/video-card'
 
 import { css } from '@emotion/react'
@@ -15,6 +17,7 @@ import PlaylistPanel from '../components/playlist-panel'
 import SaveMenu from '../components/save-menu'
 import ShareDialog from '../components/share-dialog'
 import SubscribeButton from '../components/subscribe-button'
+import { FeedSentinel } from '../components/use-infinite-feed'
 import { VideoCardCompact, VideoCardCompactSkeleton } from '../components/video-card-compact'
 import { gql } from '../generated'
 import VideoPlayer from '../player/video-player'
@@ -49,6 +52,7 @@ const WATCH_META_QUERY = gql(`
       descriptionRuns { text url videoId startSeconds browseId }
       likeStatus
       channel { id name avatar handle subscriberCountText isSubscribed notificationLevel }
+      relatedCursor
       related {
         id
         title
@@ -308,6 +312,26 @@ const style = css`
   }
 `
 
+const RELATED_MORE_QUERY = gql(`
+  query RelatedVideos($cursor: String!) {
+    relatedVideos(cursor: $cursor) {
+      items {
+        id
+        title
+        thumbnail
+        durationSeconds
+        viewCount
+        publishedText
+        isLive
+        channel { id name }
+      }
+      cursor
+    }
+  }
+`)
+
+type RelatedPage = RelatedVideosQuery['relatedVideos']
+
 const RELATED_SKELETON_KEYS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 
 // /watch carries the id in the query string, matching youtube.com, so a pasted
@@ -354,6 +378,12 @@ const WatchPage = () => {
     setTheater((value) => updateSettings({ theater: !value }).theater)
   }, [])
 
+  // A new video means a new sidebar: its pages and its cursor both belong to
+  // the video that produced them.
+  useEffect(() => {
+    setRelatedPages([])
+    setWantMoreRelated(false)
+  }, [videoId])
   // The share sheet closes when the video changes: it is about the video it was
   // opened over, and leaving it up would copy a link to a different one.
   useEffect(() => setSharing(false), [videoId])
@@ -365,7 +395,22 @@ const WatchPage = () => {
   // against the contracts the components actually publish, which is the only
   // place that mismatch can be caught: a field dropped from the document would
   // otherwise surface as an undefined at runtime.
+  /* The sidebar pages from its own cursor rather than the watch query, so
+     loading more never re-runs /next: that call also drives the player's page
+     data, and re-executing it would restart the whole watch. */
+  const [wantMoreRelated, setWantMoreRelated] = useState(false)
+  const [relatedPages, setRelatedPages] = useState<RelatedPage[]>([])
+  const relatedCursor = relatedPages[relatedPages.length - 1]?.cursor ?? watch?.relatedCursor
+  const [{ data: moreData, fetching: moreFetching }] = useQuery({
+    query: RELATED_MORE_QUERY,
+    variables: { cursor: relatedCursor ?? '' },
+    pause: !wantMoreRelated || !relatedCursor,
+  })
+  const morePage = moreData?.relatedVideos
   const related: VideoCardData[] | undefined = watch?.related
+    ? [...watch.related, ...relatedPages.flatMap(entry => entry.items)]
+      .filter((video, index, all) => all.findIndex(other => other.id === video.id) === index)
+    : undefined
   /* Gated on the URL, not just on the response. WatchMeta is keyed by video id
      in graphcache and WatchPlaylist is embedded in it, so watching a video
      inside a queue writes the panel onto the same entity a plain ?v= read links
@@ -529,6 +574,19 @@ const WatchPage = () => {
             {related
               ? related.map(item => <VideoCardCompact key={item.id} video={item} />)
               : RELATED_SKELETON_KEYS.map(key => <VideoCardCompactSkeleton key={key} />)}
+            {relatedCursor
+              ? (
+                <FeedSentinel
+                  onVisible={() => {
+                    if (!wantMoreRelated) setWantMoreRelated(true)
+                    else if (morePage && !moreFetching) {
+                      setRelatedPages(pages => pages[pages.length - 1] === morePage ? pages : [...pages, morePage])
+                    }
+                  }}
+                  disabled={moreFetching}
+                />
+              )
+              : undefined}
           </aside>
         )
         : undefined}

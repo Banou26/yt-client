@@ -115,6 +115,21 @@ type CommentActionNode = {
   reply_command?: { dialog?: { reply_button?: { endpoint?: EndpointNode } } }
 }
 
+type WatchNextContainer = {
+  contents_memo?: { get(type: string): unknown[] | undefined }
+}
+
+// A ContinuationItem hangs its next page off its own endpoint on the first
+// hop and off a "Load more" button afterwards.
+const findContinuation = (nodes: Iterable<unknown>): EndpointNode | undefined => {
+  for (const node of nodes) {
+    const item = node as ContinuationNode
+    const endpoint = item?.button?.endpoint ?? item?.endpoint
+    if (endpoint) return endpoint
+  }
+  return undefined
+}
+
 type ContinuationResponse = {
   on_response_received_endpoints_memo?: Map<string, unknown[]>
 }
@@ -651,6 +666,36 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
     return result
   }
 
+  /* The sidebar pages through the same registry as every other video feed. Its
+     rows are the same CompactVideo and LockupView kinds the first page carried,
+     so they run through the same two normalizers. */
+  const relatedPage = (kind: string, memo: Map<string, unknown[]> | undefined): SourceVideoPage => {
+    const seen = new Set<string>()
+    const items: SourceVideo[] = []
+    const add = (video: SourceVideo | undefined) => {
+      if (video && !seen.has(video.id)) {
+        seen.add(video.id)
+        items.push(video)
+      }
+    }
+    for (const node of memo?.get('CompactVideo') ?? []) add(normalizeFeedVideo(node))
+    for (const node of memo?.get('LockupView') ?? []) add(normalizeLockupVideo(node))
+    const result: SourceVideoPage = { items }
+    const next = findContinuation(memo?.get('ContinuationItem') ?? [])
+    if (next) result.cursor = registerRelated(kind.replace(/^related:/, ''), next)
+    return result
+  }
+
+  const registerRelated = (videoId: string, endpoint: EndpointNode): string => {
+    const kind = `related:${videoId}`
+    return videoContinuations.register(kind, async () => {
+      const response = await endpoint.call((await client).actions, { parse: true }) as ContinuationResponse
+      // A watch-next continuation answers on the same memo the replies path
+      // uses, not on contents_memo.
+      return relatedPage(kind, response.on_response_received_endpoints_memo)
+    })
+  }
+
   const postPage = (kind: string, feed: PostsFeed): SourcePostPage => {
     const result: SourcePostPage = {
       items: [...(feed.posts ?? [])].map(normalizeCommunityPost).filter((post) => post !== undefined),
@@ -963,8 +1008,8 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
     // playback (which fetches /player separately): one tunneled round trip. In
     // playlist context that same response also brings the queue panel back, so
     // opening a video inside a playlist costs no extra request.
-    watch: async (id, playlistId, playlistIndex) => normalizeWatchMeta(
-      await (await client).actions.execute('/next', {
+    watch: async (id, playlistId, playlistIndex) => {
+      const response = await (await client).actions.execute('/next', {
         videoId: id,
         racyCheckOk: true,
         contentCheckOk: true,
@@ -973,9 +1018,34 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
         ...(playlistId ? { playlistId } : {}),
         ...(playlistIndex === undefined ? {} : { playlistIndex }),
         parse: true,
-      }),
-      id,
-    ),
+      })
+      const meta = normalizeWatchMeta(response, id)
+      if (!meta) return undefined
+      /* The sidebar's continuation is the LAST item of secondary_results, and
+         it has to be captured here while the parsed node is in hand: its api
+         path lives on the endpoint, and normalizeWatchMeta is pure so it never
+         touches a live node. Read off secondary_results rather than the memo,
+         which also holds the comments entry's ContinuationItem: taking the
+         first one out of the memo would page comments into the video sidebar. */
+      const watchNext = (response as WatchNextContainer).contents_memo?.get('TwoColumnWatchNextResults')?.[0]
+      const secondary = (watchNext as { secondary_results?: unknown[] } | undefined)?.secondary_results ?? []
+      /* One level deeper than it looks. secondary_results holds an ItemSection
+         whose `contents` carry the rows AND the trailing ContinuationItem;
+         youtubei.js's own VideoInfo reaches it the same way
+         (firstOfType(ItemSection).contents, then pops the last item). Searching
+         only the top level finds the rows' section and no continuation. */
+      const nested = secondary.flatMap((node) => [...((node as { contents?: unknown[] })?.contents ?? [])])
+      const continuation = findContinuation([...secondary, ...nested])
+      if (!continuation) return meta
+      return { ...meta, relatedCursor: registerRelated(id, continuation) }
+    },
+    relatedVideos: async (cursor) => {
+      const kind = videoContinuations.kindOf(cursor)
+      if (kind !== undefined && !kind.startsWith('related:')) {
+        throw new Error(`youtube: continuation ${cursor} belongs to ${kind}, not a watch sidebar`)
+      }
+      return videoContinuations.resolve(kind ?? 'related:unknown', cursor)
+    },
     // No videoId or comment id argument: the cursor was minted for exactly one
     // thread and already names it.
     commentReplies: async (cursor) => {
