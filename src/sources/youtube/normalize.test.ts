@@ -550,6 +550,24 @@ describe('youtube normalization', () => {
     })
   })
 
+  it('falls back to a playlist custom thumbnail', () => {
+    // The `Playlist` renderer a channel's Releases and Podcasts tabs serve puts
+    // its cover on thumbnail_renderer when the playlist has a custom one, and
+    // leaves `thumbnails` empty. Reading only `thumbnails` gave every release a
+    // blank cover.
+    expect(normalizeGridPlaylist({
+      id: 'PL123',
+      title: { text: 'Bossa Lofi' },
+      thumbnail_renderer: { thumbnail: [{ url: 'custom-small', width: 100 }, { url: 'custom', width: 480 }] },
+      video_count: { text: '27 videos' },
+    })).toMatchObject({
+      id: 'PL123',
+      title: 'Bossa Lofi',
+      thumbnail: 'custom',
+      videoCountText: '27 videos',
+    })
+  })
+
   it('reads a legacy playlist byline that is a Text rather than an Author', () => {
     expect(normalizeGridPlaylist({
       id: 'PL123',

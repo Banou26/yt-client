@@ -6,6 +6,7 @@ import { useQuery } from 'urql'
 import { Link, useLocation, useSearch } from 'wouter'
 
 import { useDocumentTitle } from '../app'
+import { PlaylistCard } from '../components/playlist-card'
 import { SubscribeButton } from '../components/subscribe-button'
 import { FeedSentinel, useInfiniteFeed } from '../components/use-infinite-feed'
 import { VideoCardCompact } from '../components/video-card-compact'
@@ -85,6 +86,13 @@ const CHANNEL_VIEW_QUERY = gql(`
           isUpcoming
           badges
         }
+        playlists {
+          id
+          title
+          thumbnail
+          videoCountText
+          updatedText
+        }
         cursor
       }
       availableTabs
@@ -110,6 +118,17 @@ const TAB_LABELS: Record<ChannelTab, string> = {
   COMMUNITY: 'Community',
   ABOUT: 'About',
   SEARCH: 'Search',
+}
+
+/* What an empty tab should say it is missing. Built off the tab's own label so
+   a tab added to the enum gets a sentence rather than being forgotten, with the
+   three video-shaped tabs named explicitly because "no Videos" reads worse than
+   "no videos". */
+const emptyMessageFor = (tab?: ChannelTab) => {
+  if (tab === undefined || tab === 'VIDEOS' || tab === 'HOME') return 'This channel has no videos.'
+  if (tab === 'SHORTS') return 'This channel has no shorts.'
+  if (tab === 'LIVE') return 'This channel has no live streams.'
+  return `This channel has nothing under ${TAB_LABELS[tab]}.`
 }
 
 const style = css`
@@ -253,6 +272,15 @@ const style = css`
 
   .videos {
     margin-top: 2.4rem;
+  }
+
+  /* Matches the video grid's column sizing so a Playlists tab lines up with the
+     Videos tab beside it in the strip. */
+  .playlist-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(25.6rem, 1fr));
+    column-gap: 1.6rem;
+    row-gap: 2.4rem;
   }
 
   /* A single readable column rather than a grid: a post is a body of text, and
@@ -424,6 +452,13 @@ export const ChannelPage = ({ params }: { params: { channelId: string } }) => {
   const { items, cursor } = useInfiniteFeed({
     pages: page ? [...pages, page] : pages,
     key: video => video.id
+  })
+  // The Playlists, Releases and Podcasts tabs are made of playlist rows rather
+  // than videos, so they accumulate alongside the grid on the same pages and
+  // are deduped the same way.
+  const { items: playlists } = useInfiniteFeed({
+    pages: (page ? [...pages, page] : pages).map(entry => ({ items: entry.playlists, cursor: entry.cursor })),
+    key: playlist => playlist.id,
   })
   useDocumentTitle(channel?.name ?? 'Channel')
   const handle = channel?.handle
@@ -617,8 +652,27 @@ export const ChannelPage = ({ params }: { params: { channelId: string } }) => {
             <>
               <div className='videos'>
                 <VideoGrid videos={items} fetching={fetching && items.length === 0} variant='channel' />
-                {data && !fetching && !error && items.length === 0
-                  ? <p className='status'>This channel has no videos.</p>
+                {playlists.length > 0
+                  ? (
+                    <div className='playlist-grid'>
+                      {playlists.map(playlist => (
+                        <PlaylistCard
+                          key={playlist.id}
+                          id={playlist.id}
+                          title={playlist.title}
+                          thumbnail={playlist.thumbnail}
+                          videoCountText={playlist.videoCountText}
+                          updatedText={playlist.updatedText}
+                        />
+                      ))}
+                    </div>
+                  )
+                  : undefined}
+                {/* Named for what the tab actually holds. "This channel has no
+                    videos" was rendered under Playlists, Releases and Podcasts
+                    too, where it described the wrong thing entirely. */}
+                {data && !fetching && !error && items.length === 0 && playlists.length === 0
+                  ? <p className='status'>{emptyMessageFor(tab)}</p>
                   : undefined}
               </div>
               {fetching && items.length > 0 ? <p className='status'>Loading more…</p> : undefined}

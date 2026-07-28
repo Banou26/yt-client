@@ -141,11 +141,16 @@ type PlaylistVideoNode = FeedVideo & {
 // GridPlaylist and the legacy Playlist node share every field this reads. They
 // differ only in `author`: GridPlaylist always builds an Author, while Playlist
 // hands back a bare Text byline when the response carries a simple one.
+/* Also describes the legacy `Playlist` renderer, which a channel's Releases and
+   Podcasts tabs still serve: it declares the same field names, and differs only
+   in putting its cover on a thumbnail_renderer when the playlist has a custom
+   one rather than a video still. */
 type GridPlaylistNode = {
   id?: string
   title?: string | Text
   thumbnails?: Thumbnail[]
   sidebar_thumbnails?: Thumbnail[]
+  thumbnail_renderer?: { thumbnail?: Thumbnail[] }
   video_count?: Text
   video_count_short?: Text
   author?: Author | Text
@@ -799,7 +804,9 @@ export const normalizeGridPlaylist = (input: unknown): SourcePlaylist | undefine
   return {
     id,
     title,
-    thumbnail: thumbnail(node.thumbnails, STILL_WIDTH) ?? thumbnail(node.sidebar_thumbnails, STILL_WIDTH),
+    thumbnail: thumbnail(node.thumbnails, STILL_WIDTH)
+      ?? thumbnail(node.sidebar_thumbnails, STILL_WIDTH)
+      ?? thumbnail(node.thumbnail_renderer?.thumbnail, STILL_WIDTH),
     // `video_count` is the long form ("50 videos"); the short one is the bare
     // number, which only reads correctly next to a label the card supplies.
     videoCountText: presentText(node.video_count) ?? presentText(node.video_count_short),

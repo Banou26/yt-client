@@ -347,6 +347,29 @@ const pageItems = (feed: Feed, { includeShorts = true }: { includeShorts?: boole
   return items
 }
 
+/* The playlist half of the same feed. Both node kinds are read because a
+   channel's own tabs still serve the legacy GridPlaylist while the modern grid
+   sends LockupView, and normalizeLockupVideo rejects every non-VIDEO lockup, so
+   nothing else on the page picks these up. */
+const pagePlaylists = (feed: Feed) => {
+  const seen = new Set<string>()
+  const playlists: SourcePlaylist[] = []
+  const add = (playlist: SourcePlaylist | undefined) => {
+    if (playlist && !seen.has(playlist.id)) {
+      seen.add(playlist.id)
+      playlists.push(playlist)
+    }
+  }
+  for (const node of feed.memo?.get('LockupView') ?? []) add(normalizePlaylistLockup(node))
+  for (const node of feed.memo?.get('GridPlaylist') ?? []) add(normalizeGridPlaylist(node))
+  // Releases and Podcasts serve the legacy `Playlist` renderer, which declares
+  // the same fields as GridPlaylist and so needs no normalizer of its own. It
+  // was simply never read, which is why those two tabs stayed empty even once
+  // playlists had somewhere to go.
+  for (const node of feed.memo?.get('Playlist') ?? []) add(normalizeGridPlaylist(node))
+  return playlists
+}
+
 // Cursors used to be one-shot: reading one deleted it, so any repeat of the same
 // query threw `unknown continuation`. urql re-executes queries on remount and on
 // back-navigation, so the second page of a feed died as soon as the user opened a
@@ -830,7 +853,7 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
   }
 
   const page = (kind: string, feed: Feed): SourceVideoPage => {
-    const result: SourceVideoPage = { items: pageItems(feed) }
+    const result: SourceVideoPage = { items: pageItems(feed), playlists: pagePlaylists(feed) }
     if (feed.has_continuation) {
       result.cursor = videoContinuations.register(kind, async () => page(kind, await feed.getContinuation()))
     }
@@ -919,7 +942,9 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
     }
     for (const node of memo?.get('CompactVideo') ?? []) add(normalizeFeedVideo(node))
     for (const node of memo?.get('LockupView') ?? []) add(normalizeLockupVideo(node))
-    const result: SourceVideoPage = { items }
+    // The watch sidebar renders a video rail, so playlist lockups in it stay
+    // dropped rather than being surfaced as rows the aside cannot lay out.
+    const result: SourceVideoPage = { items, playlists: [] }
     const next = findContinuation(memo?.get('ContinuationItem') ?? [])
     if (next) result.cursor = registerRelated(kind.replace(/^related:/, ''), next)
     return result

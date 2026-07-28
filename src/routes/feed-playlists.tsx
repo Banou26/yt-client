@@ -1,15 +1,15 @@
-import type { PlaylistIcon } from '../components/playlist'
 import type { LibraryPlaylistsQuery } from '../generated/graphql'
 
 import { css } from '@emotion/react'
-import { CircleUserRound, Clock, ListVideo, ThumbsUp } from 'lucide-react'
+import { CircleUserRound, Clock, ThumbsUp } from 'lucide-react'
 import { useState } from 'preact/hooks'
 import { useQuery } from 'urql'
-import { Link, useLocation } from 'wouter'
+import { useLocation } from 'wouter'
 
 import { useDocumentTitle } from '../app'
 import { readable } from '../components/format'
-import { LIKED_VIDEOS_ID, playlistHrefFor, restrictedPrivacyIcon, WATCH_LATER_ID } from '../components/playlist'
+import { LIKED_VIDEOS_ID, WATCH_LATER_ID } from '../components/playlist'
+import { PlaylistCard } from '../components/playlist-card'
 import { FeedSentinel, useInfiniteFeed } from '../components/use-infinite-feed'
 import { gql } from '../generated'
 import { useSession } from '../session'
@@ -206,54 +206,6 @@ const style = css`
     }
   }
 `
-
-const PlaylistCard = (
-  { id, title, thumbnail, videoCountText, updatedText, privacy, channelName, fallbackIcon: FallbackIcon }: {
-    id: string
-    title: string
-    thumbnail?: string | null
-    videoCountText?: string | null
-    updatedText?: string | null
-    privacy?: string | null
-    channelName?: string | null
-    fallbackIcon?: PlaylistIcon
-  },
-) => {
-  // A card list is mostly public playlists, so PUBLIC stays bare here and only
-  // a restricted visibility earns the icon.
-  const Privacy = restrictedPrivacyIcon(privacy)
-  const meta = [channelName, updatedText].filter(part => part !== undefined && part !== null && part !== '')
-  return (
-    // One link over the whole card: a channel link nested inside it would be an
-    // anchor inside an anchor, which the parser flattens.
-    <Link href={playlistHrefFor(id)} className='card'>
-      <div className='cover'>
-        {thumbnail
-          ? <img src={thumbnail} alt='' loading='lazy' />
-          : (
-            <span className='cover-fallback'>
-              {FallbackIcon
-                ? <FallbackIcon size={40} strokeWidth={1.5} />
-                : <ListVideo size={40} strokeWidth={1.5} />}
-            </span>
-          )}
-        {videoCountText
-          ? (
-            <span className='count'>
-              <ListVideo size={14} strokeWidth={1.5} />
-              {videoCountText}
-            </span>
-          )
-          : undefined}
-      </div>
-      <h3 className='card-title'>{title}</h3>
-      <div className='card-meta'>
-        {Privacy ? <Privacy size={14} strokeWidth={1.5} /> : undefined}
-        <span>{meta.length > 0 ? meta.join(' • ') : 'View full playlist'}</span>
-      </div>
-    </Link>
-  )
-}
 
 const cardSkeletonStyle = css`
   min-width: 0;

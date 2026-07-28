@@ -43,6 +43,13 @@ export type SourceVideo = {
 
 export type SourceVideoPage = {
   items: SourceVideo[]
+  /* Playlist rows on the same page. A channel's Playlists, Releases and
+     Podcasts tabs are made ENTIRELY of these, so a page shaped as videos alone
+     described those three tabs as empty no matter what upstream sent.
+
+     Required rather than optional so the compiler names every page builder
+     rather than letting one quietly answer without them. */
+  playlists: SourcePlaylist[]
   cursor?: string
 }
 

@@ -61,6 +61,10 @@ type Video {
 
 type VideoPage {
   items: [Video!]!
+  # Playlist rows carried by the same page. A channel's Playlists, Releases and
+  # Podcasts tabs consist only of these, so a page that could describe videos
+  # alone reported all three as empty.
+  playlists: [Playlist!]!
   cursor: String
 }
 
