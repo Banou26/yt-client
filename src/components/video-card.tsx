@@ -1,3 +1,5 @@
+import type { TargetedPointerEvent } from 'preact'
+
 import type { Channel, SavePlaylistsQuery, Video } from '../generated/graphql'
 
 import { css } from '@emotion/react'
@@ -14,6 +16,7 @@ import { Link, useLocation } from 'wouter'
    that removes this import is lifting the save panel out of save-menu.tsx into
    a component both surfaces render. */
 import { AddToPlaylistDocument, SavePlaylistsDocument } from '../generated/graphql'
+import { HoverPreview } from '../player/hover-preview'
 import { usePrefetchOnIntent } from '../player/prefetch'
 import { useSession } from '../session'
 import { formatDuration, formatMeta, readable } from './format'
@@ -30,6 +33,7 @@ export type VideoCardData =
   & {
     isLive?: boolean | null
     isShort?: boolean | null
+    isUpcoming?: boolean | null
     channel?: (Pick<Channel, 'id' | 'name'> & Partial<Pick<Channel, 'avatar'>>) | null
   }
 
@@ -494,10 +498,27 @@ export const VideoCard = (
   const progress = resumePercent(video.progressPercent)
   const prefetch = usePrefetchOnIntent(video.id)
   const classes = [variant, video.isShort ? 'short' : undefined].filter(Boolean).join(' ')
+  const [previewing, setPreviewing] = useState(false)
+  /* Pointer type rather than a media query: a touch device reports hover events
+     on tap, which would start a session on the way to opening the video. An
+     upcoming premiere has a page but nothing to play, so it has no preview
+     either. */
+  const canPreview = video.isUpcoming !== true && video.isLive !== true
   return (
-    <article css={style} className={classes || undefined} {...prefetch}>
+    <article
+      css={style}
+      className={classes || undefined}
+      {...prefetch}
+      onPointerEnter={(event: TargetedPointerEvent<HTMLElement>) => {
+        if (canPreview && event.pointerType === 'mouse') setPreviewing(true)
+      }}
+      onPointerLeave={() => setPreviewing(false)}
+    >
       <Link href={watchHref} className='thumb' tabIndex={-1} aria-hidden='true'>
         {video.thumbnail ? <img src={video.thumbnail} alt='' loading='lazy' /> : undefined}
+        {/* Mounted only while hovering: the component owns the session, so
+            unmounting it is what tears the session down. */}
+        {previewing ? <HoverPreview videoId={video.id} /> : undefined}
         {video.isLive
           ? <span className='badge live'>LIVE</span>
           : duration ? <span className='badge'>{duration}</span> : undefined}
