@@ -162,6 +162,21 @@ describe('youtube normalization', () => {
     })
   })
 
+  it('derives a still for a short whose own image field is empty', () => {
+    // The home shelf returns shorts whose title and view count parse while the
+    // image comes back empty, which rendered a rail of blank boxes.
+    expect(normalizeShortsLockup({
+      on_tap_endpoint: { payload: { videoId: 'abc123' } },
+      overlay_metadata: { primary_text: { text: 'A Short' } },
+    })?.thumbnail).toBe('https://i.ytimg.com/vi/abc123/hqdefault.jpg')
+    // A real image on the node always wins over the derived one.
+    expect(normalizeShortsLockup({
+      on_tap_endpoint: { payload: { videoId: 'abc123' } },
+      overlay_metadata: { primary_text: { text: 'A Short' } },
+      content_image: { image: [{ url: 'real', width: 480 }] },
+    })?.thumbnail).toBe('real')
+  })
+
   it('falls back to the entity id and drops a short with no title', () => {
     expect(normalizeShortsLockup({
       entity_id: 'shorts-entity',

@@ -644,6 +644,10 @@ export const normalizeShortsLockup = (input: unknown): SourceVideo | undefined =
   const node = input as {
     entity_id?: string
     thumbnail?: Thumbnail[]
+    // Seen empty in practice on the home shelf while overlay_metadata reads
+    // fine, so the image is looked for in the other places a lockup can carry
+    // one before falling back below.
+    content_image?: { image?: Thumbnail[], primary_thumbnail?: { image?: Thumbnail[] } }
     on_tap_endpoint?: { payload?: { videoId?: string } }
     overlay_metadata?: { primary_text?: Text, secondary_text?: Text }
     accessibility_text?: string
@@ -654,10 +658,20 @@ export const normalizeShortsLockup = (input: unknown): SourceVideo | undefined =
   // is a whole sentence ('Title, 1.2M views') and is used only as a last resort.
   const title = presentText(node?.overlay_metadata?.primary_text) ?? node?.accessibility_text
   if (!id || !title) return undefined
+  /* The node's own image comes back empty on the home shelf even though its
+     title and view count parse, so the canonical still is derived from the
+     video id when none is present. That URL is not invented: i.ytimg.com serves
+     it for every public video id, it is what YouTube's own markup points at,
+     and the id here came off a real watch endpoint. A short's still is the
+     vertical frame letterboxed into 16:9, so the 9:16 card crops back to the
+     content rather than showing bars. */
+  const image = thumbnail(node?.thumbnail)
+    ?? thumbnail(node?.content_image?.primary_thumbnail?.image ?? node?.content_image?.image)
+    ?? `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`
   return {
     id,
     title,
-    thumbnail: thumbnail(node?.thumbnail),
+    thumbnail: image,
     // Shorts carry no length anywhere on this node, and inventing one would put
     // a duration badge on a card that should not have one.
     viewCount: presentText(node?.overlay_metadata?.secondary_text),
