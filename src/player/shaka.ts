@@ -285,7 +285,29 @@ export const startShakaPlayback = async ({
          ABR is left to find the rate the pipe supports, which is the job it
          exists to do. */
       activePlayer.configure({
-        streaming: { bufferingGoal: 12, rebufferingGoal: 2, bufferBehind: 15 },
+        streaming: {
+          bufferingGoal: 12,
+          rebufferingGoal: 2,
+          bufferBehind: 15,
+          /* Jump gaps aggressively, and treat a frozen playhead as a stall.
+
+             The server answers every segment request with its CURRENT edge
+             regardless of the segment Shaka asked for, so appended media does
+             not always land where the timeline says it should and a hole opens
+             at the playhead. Measured: the playhead sat frozen for the better
+             part of a minute while the buffer grew to 20s AHEAD of it, with no
+             session refresh involved, until Shaka's own gap logic eventually
+             stepped over it. That is the "plays 20s, hiccups, repeats" pattern.
+
+             Detecting the gap sooner and stepping further past it turns a long
+             freeze into a skip. Left at the VOD defaults, which are tuned for a
+             timeline that is exact, live spends most of its time waiting. */
+          gapDetectionThreshold: 0.3,
+          gapPadding: 0.1,
+          stallEnabled: true,
+          stallThreshold: 0.5,
+          stallSkip: 0.2,
+        },
         /* Start ABR pessimistic and let it climb. Its default estimate is
            tuned for a VOD start, where a fat first segment measures the pipe
            quickly; a live edge never hands over enough at once to correct an
