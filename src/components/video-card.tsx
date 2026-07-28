@@ -350,13 +350,13 @@ const style = css`
      row, or every neighbouring card would shuffle under the pointer while the
      reader is aiming at one of them. The card is lifted so it overlaps its
      neighbours instead of pushing them. */
-  &.previewing .thumb {
+  &.expanded .thumb {
     scale: 1.18;
     box-shadow: 0 0.8rem 2.4rem rgb(0 0 0 / 45%);
     z-index: 2;
   }
 
-  &.previewing {
+  &.expanded {
     position: relative;
     z-index: 2;
   }
@@ -370,7 +370,7 @@ const style = css`
 
   /* A portrait card is already tall and narrow; scaling it as much as a 16/9
      one would push it well past its column. */
-  &.short.previewing .thumb {
+  &.short.expanded .thumb {
     scale: 1.08;
   }
 
@@ -542,10 +542,20 @@ export const VideoCard = (
   const progress = resumePercent(video.progressPercent)
   const prefetch = usePrefetchOnIntent(video.id)
   const [previewing, setPreviewing] = useState(false)
-  // Separate from `previewing`: the card grows only once the preview is really
-  // playing, which is a second or so after the pointer arrives.
-  const [previewReady, setPreviewReady] = useState(false)
-  const classes = [variant, video.isShort ? 'short' : undefined, previewReady ? 'previewing' : undefined]
+  /* Separate from `previewing` because it answers a different question.
+
+     The card grows the moment the pointer lands, not when the preview finally
+     plays: a session takes a dwell delay plus a tunneled round trip to produce
+     a first frame, and a card that sits inert for seconds before acknowledging
+     the pointer reads as an unresponsive page rather than a loading one. The
+     thumbnail is already the right picture, so it is what grows first and the
+     video arrives inside it.
+
+     It is also not gated on `canPreview`: a live or upcoming card has nothing
+     to play but is still hovered, and growing only some of the cards in a grid
+     would read as the others being broken. */
+  const [expanded, setExpanded] = useState(false)
+  const classes = [variant, video.isShort ? 'short' : undefined, expanded ? 'expanded' : undefined]
     .filter(Boolean)
     .join(' ')
   /* Pointer type rather than a media query: a touch device reports hover events
@@ -559,18 +569,20 @@ export const VideoCard = (
       className={classes || undefined}
       {...prefetch}
       onPointerEnter={(event: TargetedPointerEvent<HTMLElement>) => {
-        if (canPreview && event.pointerType === 'mouse') setPreviewing(true)
+        if (event.pointerType !== 'mouse') return
+        setExpanded(true)
+        if (canPreview) setPreviewing(true)
       }}
       onPointerLeave={() => {
         setPreviewing(false)
-        setPreviewReady(false)
+        setExpanded(false)
       }}
     >
       <Link href={watchHref} className='thumb' tabIndex={-1} aria-hidden='true'>
         {video.thumbnail ? <img src={video.thumbnail} alt='' loading='lazy' /> : undefined}
         {/* Mounted only while hovering: the component owns the session, so
             unmounting it is what tears the session down. */}
-        {previewing ? <HoverPreview videoId={video.id} onReady={setPreviewReady} /> : undefined}
+        {previewing ? <HoverPreview videoId={video.id} /> : undefined}
         {video.isLive
           ? <span className='badge live'>LIVE</span>
           : duration ? <span className='badge'>{duration}</span> : undefined}

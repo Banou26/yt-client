@@ -110,17 +110,10 @@ const style = css`
  * design: this is a hover affordance over a thumbnail that is already correct,
  * so an error card in its place would be worse than no preview.
  */
-export const HoverPreview = (
-  { videoId, onReady }: { videoId: string, onReady?: (ready: boolean) => void },
-) => {
+export const HoverPreview = ({ videoId }: { videoId: string }) => {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [progress, setProgress] = useState(0)
   const [ready, setReady] = useState(false)
-  /* Held in a ref so the effect below does not depend on the callback: the card
-     passes an inline arrow, so a dependency on it would tear the session down
-     and rebuild it on every parent render. */
-  const onReadyRef = useRef(onReady)
-  onReadyRef.current = onReady
 
   useEffect(() => {
     const video = videoRef.current
@@ -154,10 +147,6 @@ export const HoverPreview = (
         // starts paused still rolls.
         void video.play().catch(() => {})
         setReady(true)
-        // The card grows once there is something to grow around. Signalled from
-        // here rather than from the hover itself so sweeping a grid does not
-        // make every card jump on the way past.
-        onReadyRef.current?.(true)
       })().catch(() => {
         // Silent: the thumbnail underneath is still the right thing to show.
       })
@@ -172,14 +161,13 @@ export const HoverPreview = (
       clearTimeout(timer)
       abort.abort()
       video.removeEventListener('timeupdate', onTime)
-      onReadyRef.current?.(false)
       void controller?.destroy()
     }
   }, [videoId])
 
-  // Dragging anywhere on the bar seeks, rather than only a press on the handle:
-  // the strip is 12px tall over a card, so requiring precision would make it
-  // unusable at the size it actually renders.
+  // Dragging anywhere on the strip seeks, rather than only a press on the drawn
+  // line: the line is a few pixels tall over a card, so requiring precision
+  // would make it unusable at the size it actually renders.
   const seekFromPointer = (event: PointerEvent) => {
     const video = videoRef.current
     if (!video || !video.duration) return
@@ -208,7 +196,7 @@ export const HoverPreview = (
               event.preventDefault()
               event.stopPropagation()
               // Captured so a drag that leaves the strip keeps seeking rather
-              // than stopping the moment the pointer slips off a 12px target.
+              // than stopping the moment the pointer slips off a short target.
               ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
               seekFromPointer(event)
             }}
