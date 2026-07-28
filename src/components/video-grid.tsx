@@ -6,14 +6,21 @@ import { css } from '@emotion/react'
 
 import { VideoCard, VideoCardSkeleton } from './video-card'
 
+/* Column width measured against upstream rather than picked: at a 1650px
+   viewport they fit THREE across on both the home and channel grids, with
+   thumbnails 438px and 420px wide and a 16px gutter. The 31rem/25.6rem minimums
+   here fit four of roughly 300px in the same space, which is why every video
+   read as small next to theirs - the cards were never the problem, the column
+   count was. 38rem is the smallest minimum that lands on three where they land
+   on three, and it degrades the same way theirs does as the window narrows. */
 const style = css`
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(31rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(38rem, 1fr));
   column-gap: 1.6rem;
   row-gap: 4rem;
 
   &.channel {
-    grid-template-columns: repeat(auto-fill, minmax(25.6rem, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(38rem, 1fr));
     row-gap: 2.4rem;
   }
 

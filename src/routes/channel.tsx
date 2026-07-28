@@ -278,7 +278,7 @@ const style = css`
      Videos tab beside it in the strip. */
   .playlist-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(25.6rem, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(38rem, 1fr));
     column-gap: 1.6rem;
     row-gap: 2.4rem;
   }

@@ -59,6 +59,15 @@ const globalStyles = css`
        them: the brand mark is red in both themes, and anything drawn over a
        thumbnail or the video surface sits on media rather than on the page. */
     --brand: #ff0000;
+    /* The progress red, which is NOT the logo red: upstream draws its playhead
+       and played track in #ff0033, measured off their inline preview, and the
+       mark itself in #ff0000.
+
+       This existed only as four var(--brand-red) references with nothing
+       defining it, so every one of them computed to an invalid background and
+       painted NOTHING: the preview's played fill and its playhead knob, the
+       search filter dot and the notifications badge were all invisible. */
+    --brand-red: #ff0033;
     --bg-scrim: rgba(0, 0, 0, 0.5);
     --bg-badge: rgba(0, 0, 0, 0.8);
     --text-on-media: #ffffff;
