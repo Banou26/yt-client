@@ -327,7 +327,14 @@ const style = css`
     border-radius: 1.2rem;
     overflow: hidden;
     background: var(--bg-elevated);
-    transition: transform 0.18s ease, box-shadow 0.18s ease;
+    /* `scale` rather than `transform`, and the transition names it directly.
+
+       The two are not interchangeable here. A transition on `transform` holds
+       that property at its start value for the duration, and reading it back
+       mid-flight reports no scaling at all, which made this look inert. The
+       independent `scale` property is not entangled with any other transform
+       this element might carry, so nothing else can reset it. */
+    transition: scale 0.18s ease, box-shadow 0.18s ease;
   }
 
   /* The hovered card grows, the way upstream's inline preview does.
@@ -343,7 +350,7 @@ const style = css`
      reader is aiming at one of them. The card is lifted so it overlaps its
      neighbours instead of pushing them. */
   &.previewing .thumb {
-    transform: scale(1.18);
+    scale: 1.18;
     box-shadow: 0 0.8rem 2.4rem rgb(0 0 0 / 45%);
     z-index: 2;
   }
@@ -363,7 +370,7 @@ const style = css`
   /* A portrait card is already tall and narrow; scaling it as much as a 16/9
      one would push it well past its column. */
   &.short.previewing .thumb {
-    transform: scale(1.08);
+    scale: 1.08;
   }
 
   @media (prefers-reduced-motion: reduce) {
