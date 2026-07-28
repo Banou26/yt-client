@@ -338,14 +338,26 @@ export const startShakaPlayback = async ({
     // Falling back to muted playback is what every player does, but the mute is
     // the browser's choice, not the viewer's, so it is never written back to
     // settings: the stored volume survives and one click restores sound.
-    try {
-      await video.play()
-    } catch {
-      if (!video.muted) {
-        video.muted = true
-        await video.play().catch(() => {})
+    const start = async () => {
+      try {
+        await video.play()
+      } catch {
+        if (!video.muted) {
+          video.muted = true
+          await video.play().catch(() => {})
+        }
       }
     }
+    /* Live does not WAIT for playback to begin.
+
+       play() resolves when the element actually starts, and a live element that
+       is gap-jumping can leave that promise pending indefinitely. Awaiting it
+       meant startShakaPlayback never returned, so the "Loading player" status
+       stayed pinned over a video that was visibly playing at 1280x720 and the
+       control bar never rendered at all. Starting playback is best-effort here
+       exactly as it is for VOD, where a rejection is already non-fatal. */
+    if (session.isLive) void start()
+    else await start()
 
     // Heights come from the SABR session rather than from Shaka: the session is
     // the side that has to serve the format, so anything it cannot serve must
