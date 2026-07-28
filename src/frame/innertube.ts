@@ -5,8 +5,6 @@ import { Constants, Innertube, Platform, Types, UniversalCache, Utils, YT } from
 
 import type { PlaybackFormat } from './protocol'
 
-import { LIVE_UNSUPPORTED } from './protocol'
-
 import { mintPoToken, recoverPoTokenSession, warmPoTokenSession } from './botguard'
 import type { Storyboard } from './storyboard'
 
