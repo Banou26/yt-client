@@ -1,7 +1,13 @@
 import { css } from '@emotion/react'
+import { Volume2, VolumeX } from 'lucide-react'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
+import type { Storyboard } from '../frame/protocol'
+
+import { bestStoryboard, storyboardFrame } from '../frame/storyboard'
+
 import { startEngine } from '../scramjet/client'
+import { clock } from './controls'
 import { warmShaka } from './prefetch'
 
 // Type-only, so it is erased at build and adds no runtime edge back to the
@@ -28,6 +34,12 @@ let activeToken = 0
 // About as long as a deliberate pause. Shorter turns an accidental sweep into a
 // burst of sessions; longer reads as the preview being broken.
 const DWELL_MS = 700
+
+/* Carried between previews so unmuting one card does not have to be repeated on
+   the next, and NOT persisted: the rule is that a feed may never start talking
+   on its own, which is about the default, not about forgetting a choice the
+   viewer just made. A fresh page load starts silent again. */
+let preferMuted = true
 
 const style = css`
   position: absolute;
@@ -69,6 +81,7 @@ const style = css`
   }
 
   .track {
+    position: relative;
     width: 100%;
     height: 0.4rem;
     background: rgba(255, 255, 255, 0.3);
@@ -81,9 +94,59 @@ const style = css`
     height: 0.6rem;
   }
 
+  /* Buffered sits UNDER played and over the track, the same three-layer stack
+     the watch controls use, so the bar reads as "have it / played it / neither"
+     rather than as one bar that only knows about the playhead. */
+  .buffered {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: rgba(255, 255, 255, 0.5);
+  }
+
   .fill {
-    height: 100%;
+    position: absolute;
+    inset: 0 auto 0 0;
     background: var(--brand-red);
+  }
+
+  /* The knob is what makes the bar look grabbable before it is grabbed. It sits
+     outside the track's overflow so it can be taller than the 4px line. */
+  .knob {
+    position: absolute;
+    bottom: -0.3rem;
+    width: 1.2rem;
+    height: 1.2rem;
+    margin-left: -0.6rem;
+    border-radius: 50%;
+    background: var(--brand-red);
+    pointer-events: none;
+  }
+
+  /* Storyboard scrub preview: the sheet frame plus its timestamp, centred on
+     the pointer and clamped inside the card. Identical treatment to the watch
+     scrubber (white border, time underneath) because it is the same gesture. */
+  .preview {
+    position: absolute;
+    bottom: 100%;
+    margin-bottom: 0.6rem;
+    transform: translateX(-50%);
+    pointer-events: none;
+    text-align: center;
+  }
+
+  .preview-frame {
+    border: 2px solid #ffffff;
+    border-radius: 0.4rem;
+    background-color: #000;
+    background-repeat: no-repeat;
+  }
+
+  .preview-time {
+    margin-top: 0.2rem;
+    font-size: 1.2rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 1px 3px #000;
   }
 
   .muted {
@@ -95,11 +158,16 @@ const style = css`
     justify-content: center;
     width: 2.8rem;
     height: 2.8rem;
+    padding: 0;
     border: none;
     border-radius: 50%;
     background: rgba(0, 0, 0, 0.6);
     color: #fff;
     cursor: pointer;
+  }
+
+  .muted:hover {
+    background: rgba(0, 0, 0, 0.8);
   }
 `
 
@@ -113,7 +181,19 @@ const style = css`
 export const HoverPreview = ({ videoId }: { videoId: string }) => {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [progress, setProgress] = useState(0)
+  const [buffered, setBuffered] = useState(0)
   const [ready, setReady] = useState(false)
+  const [muted, setMuted] = useState(preferMuted)
+  const [storyboards, setStoryboards] = useState<Storyboard[]>([])
+  /* Where the pointer is over the strip, which is NOT the playhead: the frame
+     under the pointer is what a scrub is aiming at, and showing the playhead
+     instead would make the preview lag the gesture it exists to guide.
+
+     Carries pixels rather than a ratio because the frame has to be clamped
+     inside the card, and a card is a fraction of the width the watch scrubber
+     gets: a sheet tile centred on ratio 0 hangs half its width off the left
+     edge, over the neighbouring card. */
+  const [hover, setHover] = useState<{ x: number, width: number, time: number } | undefined>()
 
   useEffect(() => {
     const video = videoRef.current
@@ -121,10 +201,11 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
     const token = ++activeToken
     const abort = new AbortController()
     let controller: Awaited<ReturnType<typeof startShakaPlayback>> | undefined
-    // Never persisted and never read from settings: a preview is muted because
+    // Never read from settings and never persisted: a preview is muted because
     // a feed that starts talking when the pointer rests on it is hostile, not
-    // because the viewer chose it.
-    video.muted = true
+    // because the viewer chose it. `preferMuted` only carries a choice the
+    // viewer made a moment ago, in this session.
+    video.muted = preferMuted
 
     const timer = setTimeout(() => {
       void (async () => {
@@ -146,6 +227,7 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
         // here rather than relied on from startShakaPlayback so a preview that
         // starts paused still rolls.
         void video.play().catch(() => {})
+        setStoryboards(controller.storyboards)
         setReady(true)
       })().catch(() => {
         // Silent: the thumbnail underneath is still the right thing to show.
@@ -154,13 +236,25 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
 
     const onTime = () => {
       if (video.duration > 0) setProgress(video.currentTime / video.duration)
+      // The range that CONTAINS the playhead, not the last one: a seek leaves
+      // earlier ranges behind, and taking the final one would draw a buffer
+      // that has nothing to do with where playback actually is.
+      const ranges = video.buffered
+      for (let index = 0; index < ranges.length; index += 1) {
+        if (ranges.start(index) <= video.currentTime && video.currentTime <= ranges.end(index)) {
+          if (video.duration > 0) setBuffered(ranges.end(index) / video.duration)
+          break
+        }
+      }
     }
     video.addEventListener('timeupdate', onTime)
+    video.addEventListener('progress', onTime)
 
     return () => {
       clearTimeout(timer)
       abort.abort()
       video.removeEventListener('timeupdate', onTime)
+      video.removeEventListener('progress', onTime)
       void controller?.destroy()
     }
   }, [videoId])
@@ -168,15 +262,38 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
   // Dragging anywhere on the strip seeks, rather than only a press on the drawn
   // line: the line is a few pixels tall over a card, so requiring precision
   // would make it unusable at the size it actually renders.
+  const ratioFromPointer = (event: PointerEvent) => {
+    const bar = event.currentTarget as HTMLElement
+    const box = bar.getBoundingClientRect()
+    return Math.min(1, Math.max(0, (event.clientX - box.left) / box.width))
+  }
+
   const seekFromPointer = (event: PointerEvent) => {
     const video = videoRef.current
     if (!video || !video.duration) return
-    const bar = event.currentTarget as HTMLElement
-    const box = bar.getBoundingClientRect()
-    const ratio = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width))
+    const ratio = ratioFromPointer(event)
     video.currentTime = ratio * video.duration
     setProgress(ratio)
   }
+
+  // Tracked on every move, pressed or not, so the storyboard frame follows the
+  // pointer before a drag starts - which is the whole point of a scrub preview.
+  const trackHover = (event: PointerEvent) => {
+    const video = videoRef.current
+    if (!video?.duration) return
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    const ratio = ratioFromPointer(event)
+    setHover({ x: event.clientX - box.left, width: box.width, time: ratio * video.duration })
+  }
+
+  const board = bestStoryboard(storyboards)
+  const frame = board && hover ? storyboardFrame(board, hover.time) : undefined
+  // Half the tile plus its 2px border, so the clamp accounts for what is
+  // actually painted rather than for the sprite alone.
+  const half = frame ? frame.width / 2 + 2 : 0
+  const previewLeft = hover
+    ? Math.min(Math.max(hover.x, half), Math.max(half, hover.width - half))
+    : 0
 
   return (
     <div css={style}>
@@ -186,8 +303,36 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
       <video ref={videoRef} muted playsInline tabIndex={-1} aria-hidden='true' />
       {ready
         ? (
+          <button
+            type='button'
+            className='muted'
+            aria-label={muted ? 'Unmute preview' : 'Mute preview'}
+            /* Same guard as the scrubber: this is drawn INSIDE the card's watch
+               link, so an unguarded press opens the video instead of toggling
+               sound. */
+            onPointerDown={(event: PointerEvent) => {
+              event.preventDefault()
+              event.stopPropagation()
+            }}
+            onClick={(event: MouseEvent) => {
+              event.preventDefault()
+              event.stopPropagation()
+              const video = videoRef.current
+              if (!video) return
+              video.muted = !video.muted
+              preferMuted = video.muted
+              setMuted(video.muted)
+            }}
+          >
+            {muted ? <VolumeX size={16} strokeWidth={2} /> : <Volume2 size={16} strokeWidth={2} />}
+          </button>
+        )
+        : undefined}
+      {ready
+        ? (
           <div
             className='scrubber'
+            onPointerLeave={() => setHover(undefined)}
             onPointerDown={(event: PointerEvent) => {
               /* The preview is drawn INSIDE the card's watch link, so a press
                  here would otherwise open the video: scrubbing and clicking
@@ -201,6 +346,7 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
               seekFromPointer(event)
             }}
             onPointerMove={(event: PointerEvent) => {
+              trackHover(event)
               if (event.buttons !== 0) seekFromPointer(event)
             }}
             onClick={(event: MouseEvent) => {
@@ -209,8 +355,30 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
             }}
           >
             <div className='track'>
+              <div className='buffered' style={{ width: `${Math.round(buffered * 100)}%` }} />
               <div className='fill' style={{ width: `${Math.round(progress * 100)}%` }} />
+              <div className='knob' style={{ left: `${Math.round(progress * 100)}%` }} />
             </div>
+            {hover
+              ? (
+                <div className='preview' style={{ left: `${previewLeft}px` }}>
+                  {frame
+                    ? (
+                      <div
+                        className='preview-frame'
+                        style={{
+                          width: `${frame.width}px`,
+                          height: `${frame.height}px`,
+                          backgroundImage: `url("${frame.url}")`,
+                          backgroundPosition: `-${frame.x}px -${frame.y}px`,
+                        }}
+                      />
+                    )
+                    : undefined}
+                  <div className='preview-time'>{clock(hover.time)}</div>
+                </div>
+              )
+              : undefined}
           </div>
         )
         : undefined}
