@@ -1,4 +1,4 @@
-import type { SourceChannel, SourceChannelAbout, SourceNotification, SourceTextRun, SourceComment, SourceLikeStatus, SourcePost, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourceSession, SourceVideo, SourceWatchMeta, SourceWatchPlaylist } from '../types'
+import type { SourceChannel, SourceChannelAbout, SourceNotification, SourceTextRun, SourceComment, SourceLikeStatus, SourceLiveChatMessage, SourceLiveChatRun, SourcePost, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourceSession, SourceVideo, SourceWatchMeta, SourceWatchPlaylist } from '../types'
 
 type Thumbnail = {
   url?: string
@@ -1066,3 +1066,91 @@ export const normalizeCommentView = (input: unknown): SourceComment | undefined 
 
 export const normalizeCommentThread = (input: unknown): SourceComment | undefined =>
   normalizeCommentView((input as CommentThread | undefined)?.comment)
+
+/* A live chat line.
+
+   Chat items are a small family of node types rather than one: a plain message,
+   a paid one (a Super Chat), a paid sticker and a membership announcement. They
+   share an id, an author and a timestamp, and differ in whether they carry an
+   amount and their own colours, so one normalizer covers all of them and the
+   paid fields simply stay absent for the common case. */
+type LiveChatItemNode = {
+  type?: string
+  id?: string
+  message?: Text
+  header_subtext?: Text
+  author?: Author & {
+    badges?: { icon_type?: string, tooltip?: string, custom_thumbnail?: Thumbnail[] }[]
+    is_moderator?: boolean
+  }
+  timestamp_text?: string
+  purchase_amount?: string
+  header_background_color?: number
+  body_background_color?: number
+}
+
+/* Upstream sends colours as signed 32-bit ARGB integers, which CSS cannot use.
+   The alpha byte is dropped rather than converted: these are backgrounds behind
+   opaque text, and every observed value is fully opaque anyway. */
+const argbColor = (value: number | undefined) => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  return `#${(value >>> 0 & 0xffffff).toString(16).padStart(6, '0')}`
+}
+
+/* An emoji run has no useful text: upstream fills it with a `:shortcut:` that
+   renders as literal punctuation, so the image is the content and the shortcut
+   becomes its alt text. */
+const normalizeLiveChatRuns = (value: Text | undefined): SourceLiveChatRun[] => {
+  const runs = (value as { runs?: (RunNode & { emoji?: { image?: Thumbnail[], shortcuts?: string[], is_custom?: boolean } })[] } | undefined)?.runs
+  if (!runs?.length) return normalizeRuns(value)
+  return runs.flatMap((run) => {
+    const emoji = run.emoji
+    if (emoji) {
+      const url = thumbnail(emoji.image, EMOJI_WIDTH)
+      if (!url) return run.text ? [{ text: run.text }] : []
+      return [{ text: run.text ?? '', emojiUrl: url, emojiLabel: emoji.shortcuts?.[0] ?? run.text ?? '' }]
+    }
+    return run.text ? normalizeRuns({ runs: [run] } as Text) : []
+  })
+}
+
+// Chat emoji render at 24px, so 48 covers them at 2x.
+const EMOJI_WIDTH = 48
+
+const AUTHOR_OWNER_BADGES = new Set(['OWNER'])
+const AUTHOR_MODERATOR_BADGES = new Set(['MODERATOR'])
+
+export const normalizeLiveChatMessage = (input: unknown): SourceLiveChatMessage | undefined => {
+  const item = input as LiveChatItemNode | undefined
+  if (!item?.id) return undefined
+  const badges = item.author?.badges ?? []
+  const iconTypes = badges.flatMap((badge) => (badge.icon_type ? [badge.icon_type] : []))
+  /* A member badge is a CUSTOM image rather than a named icon: sponsors get the
+     channel's own emoji, so there is no icon_type to match on and the presence
+     of a custom thumbnail is the signal. */
+  const isMember = badges.some((badge) => (badge.custom_thumbnail?.length ?? 0) > 0)
+  const body = item.message ?? item.header_subtext
+  return {
+    id: item.id,
+    author: item.author?.id && item.author.name
+      ? {
+          id: item.author.id,
+          name: item.author.name,
+          avatar: thumbnail(item.author.thumbnails, AVATAR_WIDTH),
+          handle: handleFromUrl(item.author.url),
+          isVerified: item.author.is_verified === true ? true : undefined,
+        }
+      : undefined,
+    text: text(body) ?? '',
+    runs: normalizeLiveChatRuns(body),
+    timestampText: item.timestamp_text,
+    isOwner: iconTypes.some((icon) => AUTHOR_OWNER_BADGES.has(icon)) ? true : undefined,
+    isModerator: item.author?.is_moderator === true || iconTypes.some((icon) => AUTHOR_MODERATOR_BADGES.has(icon))
+      ? true
+      : undefined,
+    isMember: isMember ? true : undefined,
+    purchaseAmountText: item.purchase_amount,
+    headerBackgroundColor: argbColor(item.header_background_color),
+    bodyBackgroundColor: argbColor(item.body_background_color),
+  }
+}

@@ -43,6 +43,7 @@ export const resolvers = {
       context.source.watch(id, playlistId ?? undefined, playlistIndex ?? undefined).then((meta) => meta ?? null),
     comments: (_, { videoId, sort, cursor }, context) =>
       context.source.comments(videoId, sort ?? undefined, cursor ?? undefined),
+    liveChat: (_, { videoId, cursor }, context) => context.source.liveChat(videoId, cursor ?? undefined),
     commentReplies: (_, { cursor }, context) => context.source.commentReplies(cursor),
     relatedVideos: (_, { cursor }, context) => context.source.relatedVideos(cursor),
     playlists: (_, { cursor }, context) => context.source.playlists(cursor ?? undefined),
@@ -56,6 +57,7 @@ export const resolvers = {
     removeFromHistory: (_, { videoId }, context) => context.source.removeFromHistory(videoId),
     markNotificationRead: (_, { id }, context) => context.source.markNotificationRead(id),
     postComment: (_, { videoId, text }, context) => context.source.postComment(videoId, text),
+    sendLiveChatMessage: (_, { videoId, text }, context) => context.source.sendLiveChatMessage(videoId, text),
     replyToComment: (_, { actionsToken, text }, context) => context.source.replyToComment(actionsToken, text),
     rateComment: (_, { actionsToken, status }, context) => context.source.rateComment(actionsToken, status),
     setSubscribed: (_, { channelId, subscribed }, context) => context.source.setSubscribed(channelId, subscribed),

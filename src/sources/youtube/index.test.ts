@@ -157,6 +157,26 @@ const createFakeClient = () => {
   // Writes are verified by what reached the wire, so every outbound call is
   // recorded: the point of these tests is which endpoint fired, not the reply.
   const calls: string[] = []
+  /* A controllable stand-in for youtubei.js's LiveChat emitter, so a test can
+     decide exactly when a message lands and when the stream ends. */
+  type ChatListener = (action: { item?: unknown, target_item_id?: string }) => void
+  const chatListeners: ChatListener[] = []
+  const chatEnders: (() => void)[] = []
+  const liveChat = {
+    on: (event: string, listener: (value: never) => void) => {
+      if (event === 'chat-update') chatListeners.push(listener as ChatListener)
+      if (event === 'end') chatEnders.push(listener as () => void)
+    },
+    start: () => void calls.push('livechat:start'),
+    stop: () => void calls.push('livechat:stop'),
+    sendMessage: async (body: string) => void calls.push(`livechat:send:${body}`),
+  }
+  const emitChat = (action: { item?: unknown, target_item_id?: string }) => {
+    for (const listener of chatListeners) listener(action)
+  }
+  const endChat = () => {
+    for (const ender of chatEnders) ender()
+  }
   // The endpoint alone is not enough for a playlist edit: every one of them
   // POSTs to browse/edit_playlist and differs only in the body, which is also
   // where youtubei.js's own casing defects live.
@@ -166,6 +186,8 @@ const createFakeClient = () => {
   const searchFilters: unknown[] = []
   return {
     calls,
+    emitChat,
+    endChat,
     payloads,
     searchFilters,
     getHomeFeed: async () => feed('first', async () => feed('second')),
@@ -236,6 +258,16 @@ const createFakeClient = () => {
       return channel
     },
     getComments: async () => comments('top', async () => comments('next')),
+    getInfo: async (id: string) => {
+      calls.push(`getInfo:${id}`)
+      // `nochat` stands in for a video with live chat turned off, which is the
+      // case getLiveChat() throws on rather than answering.
+      if (id === 'nochat') return { livechat: undefined, getLiveChat: () => { throw new Error('Live Chat is not available') } }
+      return {
+        livechat: {},
+        getLiveChat: () => liveChat,
+      }
+    },
     getPlaylists: async () => playlists('PLone', async () => playlists('PLtwo')),
     getNotifications: async () => notifications('n1', async () => notifications('n2')),
     getUnseenNotificationsCount: async () => 3,
@@ -502,6 +534,97 @@ describe('youtube channel tabs', () => {
 })
 
 describe('youtube source', () => {
+  // The source attaches its listeners inside an async open, so a test that
+  // emits synchronously would fire into a chat nobody is listening to yet.
+  // start() runs immediately after the listeners are attached, so its call is
+  // the signal that emitting is safe.
+  const chatStarted = async (client: { calls: string[] }) => {
+    for (let attempt = 0; attempt < 100 && !client.calls.includes('livechat:start'); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+  }
+
+  const chatItem = (id: string, message: string) => ({
+    id,
+    message: { runs: [{ text: message }] },
+    author: { id: 'UCchat', name: 'Viewer', thumbnails: [{ url: 'avatar', width: 32 }] },
+    timestamp_text: '1:02',
+  })
+
+  it('buffers live chat between polls and keeps the session running', async () => {
+    /* The transport is one response per request while upstream is an
+       EventEmitter, so the emitter has to outlive any single call. Anything said
+       between two polls would otherwise be lost outright. */
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    const opened = source.liveChat('abc')
+    await chatStarted(client)
+    client.emitChat({ item: chatItem('c1', 'hello') })
+    const first = await opened
+    expect(client.calls).toContain('livechat:start')
+    expect(first.items.map((item) => item.id)).toEqual(['c1'])
+    expect(first.cursor).toBeTruthy()
+
+    // Said while nothing was polling. It must still arrive.
+    client.emitChat({ item: chatItem('c2', 'still here') })
+    const second = await source.liveChat('abc', first.cursor)
+    expect(second.items.map((item) => item.id)).toEqual(['c2'])
+    // One session, not one per poll.
+    expect(client.calls.filter((call) => call === 'livechat:start')).toHaveLength(1)
+  })
+
+  it('carries a removal as its own instruction', async () => {
+    // The client holds the transcript, so it cannot notice a message going
+    // missing from a later page: a deletion has to travel explicitly.
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    const opened = source.liveChat('abc')
+    await chatStarted(client)
+    client.emitChat({ item: chatItem('c1', 'oops') })
+    const first = await opened
+    client.emitChat({ target_item_id: 'c1' })
+    const second = await source.liveChat('abc', first.cursor)
+    expect(second.removedIds).toEqual(['c1'])
+    expect(second.items).toEqual([])
+  })
+
+  it('stops polling once the stream ends', async () => {
+    // No cursor is what tells the client to stop. Handing one back would poll a
+    // finished chat forever.
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    const opened = source.liveChat('abc')
+    await chatStarted(client)
+    client.emitChat({ item: chatItem('c1', 'bye') })
+    const first = await opened
+    client.endChat()
+    const second = await source.liveChat('abc', first.cursor)
+    expect(second.cursor).toBeUndefined()
+    expect(client.calls).toContain('livechat:stop')
+  })
+
+  it('reports chat being unavailable rather than throwing', async () => {
+    /* getLiveChat() THROWS when a video carries no chat, so absence is checked
+       before calling it. A video with chat turned off is an ordinary answer and
+       the panel says so, rather than the query failing. */
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    const page = await source.liveChat('nochat')
+    expect(page).toEqual({ items: [], disabled: true })
+    expect(client.calls).not.toContain('livechat:start')
+  })
+
+  it('sends through the session the panel already has open', async () => {
+    const client = createFakeClient()
+    const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
+    // Sending before the panel has loaded is a failure rather than a silent
+    // no-op, because a second session would poll the same stream twice.
+    await expect(source.sendLiveChatMessage('abc', 'hi')).rejects.toThrow('live chat is not open')
+    await source.liveChat('abc')
+    await source.sendLiveChatMessage('abc', 'hi')
+    expect(client.calls).toContain('livechat:send:hi')
+  })
+
   it('keeps continuations opaque and replayable', async () => {
     const client = createFakeClient()
     let continuationCalls = 0
@@ -766,6 +889,8 @@ describe('youtube source', () => {
     search: ['query', undefined as unknown as string],
     channel: ['c', undefined as unknown as string, undefined as unknown as string, undefined as unknown as string],
     comments: ['abc', undefined as unknown as string],
+    // `videoId` names the chat the cursor drains.
+    liveChat: ['abc'],
     communityPosts: ['c'],
     notifications: [],
     playlists: [],

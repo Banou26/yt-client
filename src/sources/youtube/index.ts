@@ -1,8 +1,8 @@
-import type { Source, SourceChannel, SourceChannelPage, SourceChannelTab, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourcePlaylistListPage, SourcePlaylistPage, SourcePlaylistPrivacy, SourceSearchFeature, SourceSearchFilters, SourceSearchPage, SourceSearchResult, SourceHomePage, SourceNotificationPage, SourcePostPage, SourceSectionedVideoPage, SourceShort, SourceShortsPage, SourceVideo, SourceVideoPage } from '../types'
+import type { Source, SourceChannel, SourceChannelPage, SourceChannelTab, SourceCommentPage, SourceLikeStatus, SourceLiveChatMessage, SourceLiveChatPage, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourcePlaylistListPage, SourcePlaylistPage, SourcePlaylistPrivacy, SourceSearchFeature, SourceSearchFilters, SourceSearchPage, SourceSearchResult, SourceHomePage, SourceNotificationPage, SourcePostPage, SourceSectionedVideoPage, SourceShort, SourceShortsPage, SourceVideo, SourceVideoPage } from '../types'
 
 import { Innertube } from 'youtubei.js/web'
 
-import { normalizeChannel, normalizeCommentThread, normalizeCommentView, normalizeFeedChannel, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizeNotification, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizeChannelAbout, normalizeCommunityPost, normalizeSearchChannel, normalizeSession, normalizeShortsLockup, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
+import { normalizeChannel, normalizeCommentThread, normalizeCommentView, normalizeLiveChatMessage, normalizeFeedChannel, normalizeFeedVideo, normalizeGridPlaylist, normalizeLockupVideo, normalizeNotification, normalizePlaylistDetails, normalizePlaylistItem, normalizePlaylistLockup, normalizeChannelAbout, normalizeCommunityPost, normalizeSearchChannel, normalizeSession, normalizeShortsLockup, normalizeVideoDetails, normalizeWatchMeta } from './normalize'
 
 type Feed = {
   videos: Iterable<unknown>
@@ -196,6 +196,30 @@ type PlaylistsFeed = {
 // every node the page carries and THROWS on anything outside its expected
 // union: one stray recommended video detonates the whole list. The memo is read
 // directly instead, which is the same set without the cast.
+/* youtubei.js's LiveChat is an EventEmitter driven by its own polling loop.
+   Only the members this source drives are declared, the same structural-subset
+   approach the rest of this client interface uses. */
+type LiveChatEmitter = {
+  on(event: 'chat-update', listener: (action: LiveChatAction) => void): void
+  on(event: 'error', listener: (error: Error) => void): void
+  on(event: 'end', listener: () => void): void
+  start(): void
+  stop(): void
+  sendMessage(text: string): Promise<unknown>
+}
+
+type LiveChatAction = {
+  type?: string
+  item?: unknown
+  target_item_id?: string
+}
+
+type VideoInfoWithChat = {
+  // Absent when the video has no chat, which is what getLiveChat() throws on.
+  livechat?: unknown
+  getLiveChat(): LiveChatEmitter
+}
+
 type PlaylistFeed = {
   info?: unknown
   memo?: Map<string, unknown[]>
@@ -236,6 +260,10 @@ export type YoutubeClient = {
   // metadata, and /reel/reel_watch_sequence for the shorts that follow it.
   getShortsVideoInfo(id: string): Promise<ShortsSequence>
   getChannel(id: string): Promise<ChannelFeed>
+  /* The FULL video info, not getBasicInfo. Live chat hangs off the /next half
+     of the response, and getBasicInfo only issues /player, so its result has no
+     `livechat` and getLiveChat() throws on it. */
+  getInfo(id: string): Promise<VideoInfoWithChat>
   getComments(videoId: string, sortBy?: 'TOP_COMMENTS' | 'NEWEST_FIRST'): Promise<CommentsFeed>
   getNotifications(): Promise<NotificationsFeed>
   getUnseenNotificationsCount(): Promise<number>
@@ -577,6 +605,150 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
   const postContinuations = createContinuations<SourcePostPage>()
   const commentActions = createActionRegistry()
   const notificationContinuations = createContinuations<SourceNotificationPage>()
+  const liveChatContinuations = createContinuations<SourceLiveChatPage>()
+
+  /* Live chat sessions, one per video, kept running between polls.
+
+     Upstream is an EventEmitter and everything above this is one response per
+     request, so the emitter runs here and each poll drains what it has buffered
+     since the last one. The session outlives any single call, which is the only
+     reason a message said between two polls is not lost. */
+  type LiveChatSession = {
+    chat: LiveChatEmitter
+    buffer: SourceLiveChatMessage[]
+    removed: string[]
+    ended: boolean
+    failure?: Error
+    lastReadAt: number
+    // Resolved whenever anything lands, so a poll can wait instead of spinning.
+    wake: () => void
+    arrived: Promise<void>
+  }
+  const liveChatSessions = new Map<string, LiveChatSession>()
+
+  /* A poll that returned the moment it found nothing would spin the client at
+     request rate, so it waits for traffic instead. The ceiling keeps the
+     request from looking hung to anything upstream and gives the UI a heartbeat
+     on a quiet chat. */
+  const LIVE_CHAT_WAIT_MS = 6_000
+  /* The FIRST call waits only briefly. The emitter's opening fetch usually
+     carries the backlog everyone else already has on screen, and catching it
+     opens the panel populated. But a quiet chat has nothing to catch, and
+     waiting the full poll interval for it would hold the panel blank for six
+     seconds before rendering anything at all. */
+  const LIVE_CHAT_OPEN_GRACE_MS = 1_000
+  // A chat nobody has polled for this long has been navigated away from.
+  const LIVE_CHAT_IDLE_MS = 60_000
+  // Roughly a screenful of scrollback per poll. A chat can outrun any reader,
+  // and holding an unbounded backlog would grow without limit on a busy stream.
+  const LIVE_CHAT_BUFFER_LIMIT = 300
+
+  const closeLiveChat = (videoId: string) => {
+    const session = liveChatSessions.get(videoId)
+    if (!session) return
+    liveChatSessions.delete(videoId)
+    session.ended = true
+    try {
+      session.chat.stop()
+    } catch {}
+    session.wake()
+  }
+
+  const armLiveChatWake = (session: LiveChatSession) => {
+    session.arrived = new Promise<void>((resolve) => {
+      session.wake = resolve
+    })
+  }
+
+  const openLiveChat = async (videoId: string) => {
+    const existing = liveChatSessions.get(videoId)
+    if (existing) return existing
+    const info = await (await client).getInfo(videoId)
+    // getLiveChat() THROWS when the video carries no chat, so absence is checked
+    // rather than caught: a video with chat turned off is an ordinary answer.
+    if (!info.livechat) return undefined
+    const session: LiveChatSession = {
+      chat: info.getLiveChat(),
+      buffer: [],
+      removed: [],
+      ended: false,
+      lastReadAt: Date.now(),
+      wake: () => {},
+      arrived: Promise.resolve(),
+    }
+    armLiveChatWake(session)
+    const push = (action: LiveChatAction) => {
+      if (action.target_item_id) {
+        // A deletion travels as its own instruction because the client holds the
+        // transcript: it cannot notice a message going missing from a later page.
+        session.removed.push(action.target_item_id)
+      } else if (action.item) {
+        const message = normalizeLiveChatMessage(action.item)
+        if (!message) return
+        session.buffer.push(message)
+        if (session.buffer.length > LIVE_CHAT_BUFFER_LIMIT) {
+          session.buffer.splice(0, session.buffer.length - LIVE_CHAT_BUFFER_LIMIT)
+        }
+      } else return
+      session.wake()
+    }
+    session.chat.on('chat-update', push)
+    session.chat.on('error', (error) => {
+      session.failure = error
+      session.wake()
+    })
+    session.chat.on('end', () => {
+      session.ended = true
+      session.wake()
+    })
+    liveChatSessions.set(videoId, session)
+    session.chat.start()
+    return session
+  }
+
+  const drainLiveChat = (videoId: string, session: LiveChatSession): SourceLiveChatPage => {
+    session.lastReadAt = Date.now()
+    const items = session.buffer.splice(0, session.buffer.length)
+    const removedIds = session.removed.splice(0, session.removed.length)
+    const page: SourceLiveChatPage = { items }
+    if (removedIds.length) page.removedIds = removedIds
+    // No cursor once the stream is over: that is what stops the client polling.
+    if (session.ended) {
+      closeLiveChat(videoId)
+      return page
+    }
+    const kind = `livechat:${videoId}`
+    page.cursor = liveChatContinuations.register(kind, async () => {
+      const current = liveChatSessions.get(videoId)
+      // The session can be reaped between two polls of a backgrounded tab.
+      if (!current) {
+        const reopened = await openLiveChat(videoId)
+        if (!reopened) return { items: [], disabled: true }
+        return drainLiveChat(videoId, reopened)
+      }
+      if (!current.buffer.length && !current.removed.length && !current.ended) {
+        const waited = current.arrived
+        armLiveChatWake(current)
+        await Promise.race([waited, new Promise((resolve) => setTimeout(resolve, LIVE_CHAT_WAIT_MS))])
+      }
+      if (current.failure) {
+        const failure = current.failure
+        current.failure = undefined
+        throw failure
+      }
+      return drainLiveChat(videoId, current)
+    })
+    return page
+  }
+
+  // Reaping is driven by reads rather than by a timer, so a source with no live
+  // chat in play never holds one open.
+  const reapIdleLiveChats = (keep: string) => {
+    const now = Date.now()
+    for (const [videoId, session] of liveChatSessions) {
+      if (videoId !== keep && now - session.lastReadAt > LIVE_CHAT_IDLE_MS) closeLiveChat(videoId)
+    }
+  }
   /* One browse per channel rather than one per tab. A youtubei.js Channel holds
      every tab it has, and none of getVideos/getPlaylists/getAbout/getCommunity
      mutates it (each returns a new feed), so the same fetched object serves
@@ -1244,6 +1416,35 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
        Comment would mean inventing an id, and a made-up id in a normalized
        cache is worse than no entity at all. The composer prepends its own row
        from the session identity. */
+    liveChat: async (videoId, cursor) => {
+      reapIdleLiveChats(videoId)
+      if (cursor) return liveChatContinuations.resolve(`livechat:${videoId}`, cursor)
+      const session = await openLiveChat(videoId)
+      // Chat is off for this video, or it never had any. Distinct from an empty
+      // page, so the panel can say so instead of sitting blank.
+      if (!session) return { items: [], disabled: true }
+      // Catch the opening backlog if it is already in flight, but do not hold
+      // the panel blank waiting for a chat that simply has nothing to say.
+      if (!session.buffer.length && !session.ended) {
+        const waited = session.arrived
+        armLiveChatWake(session)
+        await Promise.race([waited, new Promise((resolve) => setTimeout(resolve, LIVE_CHAT_OPEN_GRACE_MS))])
+      }
+      return drainLiveChat(videoId, session)
+    },
+
+    sendLiveChatMessage: async (videoId, textBody) => {
+      const active = await client
+      requireSignIn(active, 'send a live chat message')
+      /* Reuses the session the panel already has running rather than opening a
+         second one: sending is an action on a chat you are watching, and a
+         private session would poll the same stream twice. */
+      const session = liveChatSessions.get(videoId)
+      if (!session) throw new Error('youtube: live chat is not open for this video')
+      await session.chat.sendMessage(textBody)
+      return true
+    },
+
     postComment: async (videoId, textBody) => {
       const active = await client
       requireSignIn(active, 'post a comment')

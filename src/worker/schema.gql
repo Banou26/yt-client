@@ -357,6 +357,48 @@ type Comment {
   actionsToken: String
 }
 
+# One rendered line of live chat. Paid messages (Super Chats) carry an amount
+# and their own colours; everything else leaves those absent.
+type LiveChatMessage {
+  id: ID!
+  author: Channel
+  text: String!
+  # Segmented, because a chat line is mostly custom emoji: those arrive as runs
+  # with an image and no meaningful text.
+  runs: [LiveChatRun!]!
+  timestampText: String
+  isOwner: Boolean
+  isModerator: Boolean
+  isMember: Boolean
+  purchaseAmountText: String
+  headerBackgroundColor: String
+  bodyBackgroundColor: String
+}
+
+# A text run, or a custom emoji, which renders as an image.
+type LiveChatRun {
+  text: String!
+  url: String
+  videoId: String
+  startSeconds: Int
+  browseId: String
+  emojiUrl: String
+  emojiLabel: String
+}
+
+type LiveChatPage {
+  items: [LiveChatMessage!]!
+  # Poll this for whatever arrives next. Absent once the chat has ended, which
+  # is what tells the client to stop.
+  cursor: String
+  # Ids the server retracted. The client holds the transcript, so a removal has
+  # to travel as its own instruction rather than as an absence from a later page.
+  removedIds: [ID!]
+  # Chat is off for this video. Distinct from an empty page, which just means
+  # nothing was said since the last poll.
+  disabled: Boolean
+}
+
 type CommentPage {
   items: [Comment!]!
   cursor: String
@@ -465,6 +507,11 @@ type Query {
   # A cursor is bound to the sort that minted it: switching order has to start a
   # new feed rather than page the previous ordering's results.
   comments(videoId: ID!, sort: CommentSort, cursor: String): CommentPage!
+  # Polled rather than subscribed: the whole transport is one response per
+  # request. Call without a cursor to open the chat, then follow the cursor it
+  # returns. A poll parks on the server until something arrives or it times out,
+  # so an empty page is a heartbeat rather than a reason to back off.
+  liveChat(videoId: ID!, cursor: String): LiveChatPage!
   # Replies to one comment. The cursor comes from `Comment.repliesCursor` and
   # names its thread, so no video or comment id is needed alongside it.
   commentReplies(cursor: String!): CommentPage!
@@ -499,6 +546,9 @@ type Mutation {
   # opaque response carrying no parseable comment, and a fabricated id would
   # poison the normalized cache. The composer prepends its own row instead.
   postComment(videoId: ID!, text: String!): Boolean!
+  # Sends through the chat session the panel already has open, so it fails
+  # rather than silently opening a second poll of the same stream.
+  sendLiveChatMessage(videoId: ID!, text: String!): Boolean!
   replyToComment(actionsToken: String!, text: String!): Boolean!
   rateComment(actionsToken: String!, status: LikeStatus!): Comment!
   # Resolves to the notification id so the cache can mark just that row read.

@@ -242,6 +242,50 @@ export type SourceTextRun = {
   browseId?: string
 }
 
+/* One rendered line of live chat.
+
+   Emoji are the reason this carries runs rather than a string: a chat message is
+   mostly custom emoji, which arrive as separate nodes with image URLs and have
+   no textual form worth showing. `text` stays alongside for anything that only
+   needs something plain, the same split `SourceComment` already uses. */
+export type SourceLiveChatMessage = {
+  id: string
+  author?: SourceChannel
+  text: string
+  runs: SourceLiveChatRun[]
+  timestampText?: string
+  isOwner?: boolean
+  isModerator?: boolean
+  isMember?: boolean
+  /* A paid message (a Super Chat) or a paid sticker. The amount is the whole
+     reason the line looks different, so its presence is what the renderer
+     branches on rather than a separate kind field. */
+  purchaseAmountText?: string
+  // Upstream picks these per amount tier, so they are carried rather than
+  // recomputed: a locally invented scale would not match what viewers know.
+  headerBackgroundColor?: string
+  bodyBackgroundColor?: string
+}
+
+// A text run, or a custom emoji, which has an image and no meaningful text.
+export type SourceLiveChatRun = SourceTextRun & {
+  emojiUrl?: string
+  emojiLabel?: string
+}
+
+export type SourceLiveChatPage = {
+  items: SourceLiveChatMessage[]
+  // Poll this to get whatever has arrived since. Absent once the chat ends.
+  cursor?: string
+  /* Ids the server retracted, from a moderator deletion or an author ban. The
+     client holds the transcript, so a removal has to travel as its own
+     instruction rather than as an absence from the next page. */
+  removedIds?: string[]
+  // Live chat is off for this video, or it has no chat at all. Distinct from an
+  // empty page, which just means nothing was said since the last poll.
+  disabled?: boolean
+}
+
 export type SourceComment = {
   id: string
   author?: SourceChannel
@@ -362,6 +406,16 @@ export type Source = {
   // next one. There is no videoId argument because the cursor already names
   // exactly which thread it belongs to.
   commentReplies(cursor: string): Promise<SourceCommentPage>
+  /* Live chat, polled rather than streamed.
+
+     Upstream is an EventEmitter, and the whole stack from here up is one
+     response per request: the frame bridge resolves once, every SourceApi
+     method returns a single Promise, and urql runs cacheExchange plus
+     fetchExchange with no subscription transport. So the emitter is kept
+     running inside the source and each call drains what it has buffered since
+     the previous cursor. Opening without one starts the chat and returns its
+     first batch. */
+  liveChat(videoId: string, cursor?: string): Promise<SourceLiveChatPage>
   // More of the watch sidebar. The cursor already names its video.
   relatedVideos(cursor: string): Promise<SourceVideoPage>
   // The library aggregation is signed-in only; a single playlist is not, so a
@@ -381,6 +435,10 @@ export type Source = {
   // Resolves to the id so the cache can mark just that row read.
   markNotificationRead(id: string): Promise<string>
   postComment(videoId: string, text: string): Promise<boolean>
+  /* Sends to the chat this video already has running. It reuses that session
+     rather than opening its own, so a send before the panel has loaded is a
+     failure rather than a silent no-op. */
+  sendLiveChatMessage(videoId: string, text: string): Promise<boolean>
   replyToComment(actionsToken: string, text: string): Promise<boolean>
   rateComment(actionsToken: string, status: SourceLikeStatus): Promise<SourceComment>
   setSubscribed(channelId: string, subscribed: boolean): Promise<SourceChannel>
@@ -421,6 +479,7 @@ export const SOURCE_METHODS = [
   'watch',
   'comments',
   'commentReplies',
+  'liveChat',
   'relatedVideos',
   'playlists',
   'playlist',
@@ -431,6 +490,7 @@ export const SOURCE_METHODS = [
   'removeFromHistory',
   'markNotificationRead',
   'postComment',
+  'sendLiveChatMessage',
   'replyToComment',
   'rateComment',
   'setSubscribed',
@@ -469,6 +529,8 @@ export const SOURCE_CURSOR_ARGUMENT = {
   channel: 4,
   comments: 2,
   commentReplies: 0,
+  // Behind `videoId`, which names the chat the cursor drains.
+  liveChat: 1,
   relatedVideos: 0,
   communityPosts: 1,
   notifications: 0,
@@ -502,6 +564,11 @@ export const SOURCE_REPLAY = {
   watch: 'always',
   comments: 'unless-cursor',
   commentReplies: 'unless-cursor',
+  /* A cursorless open is safe to replay: it just restarts the chat on the
+     rebuilt engine. A cursored poll is not, and it is worse than the usual
+     case: the cursor named a buffer inside the frame that died, so replaying
+     it would silently drop every message that buffer held. */
+  liveChat: 'unless-cursor',
   relatedVideos: 'unless-cursor',
   playlists: 'unless-cursor',
   playlist: 'unless-cursor',
@@ -512,6 +579,7 @@ export const SOURCE_REPLAY = {
   removeFromHistory: 'never',
   markNotificationRead: 'never',
   postComment: 'never',
+  sendLiveChatMessage: 'never',
   replyToComment: 'never',
   rateComment: 'never',
   setSubscribed: 'never',

@@ -27,7 +27,12 @@ const callSource = async <Result>(call: (api: SourceApi) => Promise<Result>, ret
     if (!(error instanceof Error && error.message.startsWith('yt-client:'))) throw error
     const next = await startEngine()
     setSource(next)
-    if (!retry) throw new Error('youtube: continuation expired after engine restart')
+    /* Carry the cause. Without it every non-replayable failure reads as
+       "the engine restarted", which sends the reader looking at engine
+       lifecycle for what is usually an ordinary error underneath. */
+    if (!retry) {
+      throw new Error(`youtube: continuation expired after engine restart (${error.message})`, { cause: error })
+    }
     return call(next)
   }
 }

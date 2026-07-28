@@ -13,6 +13,7 @@ import { useDocumentTitle } from '../app'
 import Comments from '../components/comments'
 import DescriptionBox from '../components/description-box'
 import { parseStartSeconds, readable } from '../components/format'
+import LiveChat from '../components/live-chat'
 import PlaylistPanel from '../components/playlist-panel'
 import SaveMenu from '../components/save-menu'
 import ShareDialog from '../components/share-dialog'
@@ -610,10 +611,14 @@ const WatchPage = () => {
       {/* `playlist` only widens this condition when the URL carried a list, so
           the no-queue page keeps rendering (and not rendering) the column on
           exactly the terms it did before. */}
-      {watchFetching || playlist || (related && related.length > 0)
+      {watchFetching || playlist || watch?.isLive || (related && related.length > 0)
         ? (
           <aside className='secondary'>
             {playlist ? <PlaylistPanel playlist={playlist} /> : undefined}
+            {/* Above the related rail, the way upstream places it, and keyed on
+                the video so switching streams starts a new transcript rather
+                than appending to the previous one. */}
+            {watch?.isLive ? <LiveChat key={`chat:${videoId}`} videoId={videoId} /> : undefined}
             {related
               ? related.map(item => <VideoCardCompact key={item.id} video={item} />)
               : RELATED_SKELETON_KEYS.map(key => <VideoCardCompactSkeleton key={key} />)}
