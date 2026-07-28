@@ -2,16 +2,20 @@ import type shaka from 'shaka-player'
 
 import type { Storyboard } from '../frame/protocol'
 
+// Type-only, so it is erased at build and adds no runtime edge back to the
+// chunk this file deliberately loads on demand.
+import type { startShakaPlayback } from './shaka'
+
 import { LIVE_UNSUPPORTED } from '../frame/protocol'
 
 import { css } from '@emotion/react'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 
 import { resetEngine, startEngine } from '../scramjet/client'
+import { warmShaka } from './prefetch'
 import { registerSeek, clearSeek } from './seek'
 import { getSettings, updateSettings } from '../settings'
 import { isTypingTarget, PlayerControls } from './controls'
-import { startShakaPlayback } from './shaka'
 import { usePlayerState } from './use-player-state'
 
 const playerStyle = css`
@@ -163,7 +167,11 @@ const VideoPlayer = (
     }
     setStatus('Loading player')
     void (async () => {
-      const api = await startEngine()
+      // Imported here rather than at the top so Shaka stays out of the entry
+      // chunk. `warmShaka` has normally already resolved this, so it is a
+      // registry hit; the await is what makes a cold path correct rather than
+      // fast.
+      const [api, { startShakaPlayback }] = await Promise.all([startEngine(), warmShaka()])
       controller = await startShakaPlayback({
         api,
         video,

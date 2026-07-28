@@ -14,11 +14,22 @@ import { startEngine } from '../scramjet/client'
 // and the later route-resolution prefetch land on the same key.
 const prefetched = new Set<string>()
 
+/* Shaka is split out of the entry chunk, so it has to be WARMED rather than
+   left to load when the player mounts: fetching it inside the mount effect
+   would put a chunk download in front of first frame. Warming it here means it
+   downloads alongside the watch-page prefetch, on the same hover intent, and is
+   already in the module registry by the time the effect asks for it.
+
+   Only the FIRST call does any work; after that the browser's module registry
+   dedupes and this is a no-op returning the cached promise. */
+export const warmShaka = () => import('./shaka')
+
 export const prefetchPlayback = (videoId: string) => {
   if (!videoId || prefetched.has(videoId)) return
   prefetched.add(videoId)
   // Keep the dedup set from growing without bound over a long browse session.
   if (prefetched.size > 128) prefetched.delete(prefetched.values().next().value!)
+  void warmShaka().catch(() => {})
   void startEngine().then((api) => api.prefetchPlayback(videoId)).catch(() => {})
 }
 

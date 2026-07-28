@@ -2,7 +2,11 @@ import { css } from '@emotion/react'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 import { startEngine } from '../scramjet/client'
-import { startShakaPlayback } from './shaka'
+import { warmShaka } from './prefetch'
+
+// Type-only, so it is erased at build and adds no runtime edge back to the
+// chunk this file deliberately loads on demand.
+import type { startShakaPlayback } from './shaka'
 
 /* An inline preview is a REAL playback session: it opens a SABR session in the
    frame, mints a token and streams media, the same as the watch page. Three
@@ -102,7 +106,9 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
 
     const timer = setTimeout(() => {
       void (async () => {
-        const api = await startEngine()
+        // Loaded on demand so Shaka stays out of the entry chunk. The card's
+        // own hover prefetch has normally warmed it already.
+        const [api, { startShakaPlayback }] = await Promise.all([startEngine(), warmShaka()])
         // A newer hover has taken over while the engine was coming up.
         if (abort.signal.aborted || token !== activeToken) return
         controller = await startShakaPlayback({

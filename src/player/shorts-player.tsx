@@ -1,11 +1,15 @@
 import type { TargetedMouseEvent, TargetedPointerEvent } from 'preact'
 
+// Type-only, so it is erased at build and adds no runtime edge back to the
+// chunk this file deliberately loads on demand.
+import type { startShakaPlayback } from './shaka'
+
 import { css } from '@emotion/react'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 import { startEngine } from '../scramjet/client'
+import { warmShaka } from './prefetch'
 import { getSettings, updateSettings } from '../settings'
-import { startShakaPlayback } from './shaka'
 
 const playerStyle = css`
   position: relative;
@@ -174,7 +178,11 @@ const ShortsPlayer = (
     setReady(false)
     setStatus('')
     void (async () => {
-      const api = await startEngine()
+      // Imported here rather than at the top so Shaka stays out of the entry
+      // chunk. `warmShaka` has normally already resolved this, so it is a
+      // registry hit; the await is what makes a cold path correct rather than
+      // fast.
+      const [api, { startShakaPlayback }] = await Promise.all([startEngine(), warmShaka()])
       controller = await startShakaPlayback({
         api,
         video,

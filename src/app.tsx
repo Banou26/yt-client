@@ -1,4 +1,5 @@
 import { css } from '@emotion/react'
+import { lazy, Suspense } from 'preact/compat'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { Redirect, Route, Switch, useLocation, useSearch } from 'wouter'
 
@@ -7,18 +8,23 @@ import Guide from './components/guide'
 import Header from './components/header'
 import ErrorBoundary from './components/ui/error-boundary'
 import PersistentPlayer from './player/persistent-player'
-import ChannelPage from './routes/channel'
-import FeedHistoryPage from './routes/feed-history'
-import FeedPlaylistsPage from './routes/feed-playlists'
-import FeedSubscriptionsPage from './routes/feed-subscriptions'
 import HomePage from './routes/home'
-import PlaylistPage from './routes/playlist'
-import SearchPage from './routes/search'
-import SettingsPage from './routes/settings'
-import ShortsPage from './routes/shorts'
-import SignInPage from './routes/signin'
-import WatchPage from './routes/watch'
 import { getSettings, updateSettings } from './settings'
+
+/* Every route except Home loads on demand. Home stays static because it is the
+   landing page: routing it through Suspense would put a chunk fetch in front of
+   the very first paint, which is the one navigation that has no previous page
+   to keep showing. */
+const ChannelPage = lazy(() => import('./routes/channel'))
+const FeedHistoryPage = lazy(() => import('./routes/feed-history'))
+const FeedPlaylistsPage = lazy(() => import('./routes/feed-playlists'))
+const FeedSubscriptionsPage = lazy(() => import('./routes/feed-subscriptions'))
+const PlaylistPage = lazy(() => import('./routes/playlist'))
+const SearchPage = lazy(() => import('./routes/search'))
+const SettingsPage = lazy(() => import('./routes/settings'))
+const ShortsPage = lazy(() => import('./routes/shorts'))
+const SignInPage = lazy(() => import('./routes/signin'))
+const WatchPage = lazy(() => import('./routes/watch'))
 
 const style = css`
   min-height: 100vh;
@@ -42,6 +48,13 @@ const style = css`
   .not-found {
     padding: 2.4rem 1.6rem;
     color: var(--text-secondary);
+  }
+
+  /* Deliberately blank rather than a spinner. Chunks are local and resolve in
+     a frame or two, and a spinner that flashes on every navigation reads as
+     the app being slower than it is. */
+  .route-loading {
+    min-height: 60vh;
   }
 `
 
@@ -184,7 +197,11 @@ export const App = () => {
         <div className={guideVariant ? `page guide-${guideVariant}` : 'page'}>
           {/* Keyed on the route so navigating away from a failed page clears
               the error instead of pinning the whole app to it. */}
+          {/* A chunk that fails to load (a stale deploy, a dropped
+              connection) throws into the boundary above rather than blanking
+              the page. */}
           <ErrorBoundary key={route}>
+            <Suspense fallback={<div className='route-loading' />}>
             <Switch>
               <Route path='/' component={HomePage} />
               <Route path='/results' component={SearchPage} />
@@ -209,6 +226,7 @@ export const App = () => {
                 <p className='not-found'>Not found</p>
               </Route>
             </Switch>
+            </Suspense>
           </ErrorBoundary>
         </div>
       </div>

@@ -243,11 +243,34 @@ const presentText = (value: string | Text | undefined) => {
   return result === 'N/A' ? undefined : result
 }
 
-const thumbnail = (items: Thumbnail[] | undefined) =>
-  items
+/* Upstream publishes several sizes of every image and this used to take the
+   widest of them unconditionally, so a 12-card grid pulled maxres (1280x720)
+   stills into 360px slots and 800px channel photos into 24px avatars.
+
+   `minWidth` is the narrowest candidate that still covers the slot the image
+   renders into, at 2x for a HiDPI display. The smallest candidate at or above
+   it wins; if upstream publishes nothing that large, the widest is still the
+   best available. Omitting it keeps the old widest-wins behaviour for the
+   places that genuinely want the full-size asset. */
+const thumbnail = (items: Thumbnail[] | undefined, minWidth?: number) => {
+  const sorted = items
     ?.filter((item): item is Thumbnail & { url: string } => Boolean(item.url))
-    .sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0]
-    ?.url
+    .sort((a, b) => (a.width ?? 0) - (b.width ?? 0))
+  if (!sorted?.length) return undefined
+  const covering = minWidth === undefined
+    ? undefined
+    : sorted.find((item) => (item.width ?? 0) >= minWidth)
+  return (covering ?? sorted[sorted.length - 1])?.url
+}
+
+// A channel photo renders at 24px in a comment, 40px on a watch page and 80px
+// on a channel header, so 160 covers the largest of them at 2x.
+const AVATAR_WIDTH = 160
+
+// A grid card is roughly 360px wide and the watch sidebar's is roughly 168px,
+// so 720 covers the larger at 2x. maxres beyond that is a download nothing on
+// screen can show.
+const STILL_WIDTH = 720
 
 const durationSeconds = (value: string | undefined) => {
   const parts = value?.split(':').map(Number)
@@ -305,7 +328,7 @@ const authorChannel = (author: Author | undefined): SourceChannel | undefined =>
   return {
     id,
     name,
-    avatar: thumbnail(author?.thumbnails),
+    avatar: thumbnail(author?.thumbnails, AVATAR_WIDTH),
     handle: handleFromUrl(author?.url),
     isVerified: author?.is_verified === true ? true : undefined,
   }
@@ -352,7 +375,7 @@ const lockupChannel = (lockup: LockupVideo, parts: (Text | undefined)[]): Source
   const id = parts[0]?.endpoint?.payload?.browseId
     ?? lockup.metadata?.image?.renderer_context?.command_context?.on_tap?.payload?.browseId
   if (!id || !name) return undefined
-  return { id, name, avatar: thumbnail(lockup.metadata?.image?.avatar?.image) }
+  return { id, name, avatar: thumbnail(lockup.metadata?.image?.avatar?.image, AVATAR_WIDTH) }
 }
 
 export const normalizeChannel = (input: unknown, fallbackId?: string): SourceChannel => {
@@ -367,9 +390,9 @@ export const normalizeChannel = (input: unknown, fallbackId?: string): SourceCha
   return {
     id,
     name: channel.metadata?.title ?? id,
-    avatar: thumbnail(channel.metadata?.avatar ?? channel.metadata?.thumbnail)
-      ?? thumbnail(header?.author?.thumbnails)
-      ?? thumbnail(view?.image?.avatar?.image ?? view?.image?.image),
+    avatar: thumbnail(channel.metadata?.avatar ?? channel.metadata?.thumbnail, AVATAR_WIDTH)
+      ?? thumbnail(header?.author?.thumbnails, AVATAR_WIDTH)
+      ?? thumbnail(view?.image?.avatar?.image ?? view?.image?.image, AVATAR_WIDTH),
     handle,
     subscriberCountText: text(header?.subscribers) ?? details[0],
     videoCountText: text(header?.videos_count) ?? details[1],
@@ -396,7 +419,7 @@ export const normalizeFeedChannel = (input: unknown): SourceChannel | undefined 
   return {
     id,
     name,
-    avatar: thumbnail(node.author?.thumbnails),
+    avatar: thumbnail(node.author?.thumbnails, AVATAR_WIDTH),
     handle: handleFromUrl(node.author?.url),
     subscriberCountText: presentText(node.subscribers),
     videoCountText: presentText(node.video_count),
@@ -430,7 +453,7 @@ export const normalizeSearchChannel = (input: unknown): SourceChannel | undefine
   return {
     id,
     name,
-    avatar: thumbnail(node.author?.thumbnails),
+    avatar: thumbnail(node.author?.thumbnails, AVATAR_WIDTH),
     handle: handle?.startsWith('@') ? handle : undefined,
     subscriberCountText: presentText(node.video_count),
     description: presentText(node.description_snippet),
@@ -586,8 +609,8 @@ export const normalizeNotification = (input: unknown): SourceNotification | unde
     // `thumbnails` is the channel avatar and `video_thumbnails` the still. They
     // are separate fields rather than one list, and swapping them puts a 16:9
     // frame in a round avatar slot.
-    avatar: thumbnail(node?.thumbnails),
-    thumbnail: thumbnail(node?.video_thumbnails),
+    avatar: thumbnail(node?.thumbnails, AVATAR_WIDTH),
+    thumbnail: thumbnail(node?.video_thumbnails, STILL_WIDTH),
     videoId: node?.endpoint?.payload?.videoId,
     read: node?.read === true ? true : undefined,
   }
@@ -622,7 +645,7 @@ export const normalizeFeedVideo = (input: unknown): SourceVideo | undefined => {
     title,
     description: video.description ?? text(video.description_snippet),
     descriptionSnippet: text(video.description_snippet),
-    thumbnail: video.best_thumbnail?.url ?? thumbnail(video.thumbnails),
+    thumbnail: video.best_thumbnail?.url ?? thumbnail(video.thumbnails, STILL_WIDTH),
     durationSeconds: duration(video),
     viewCount: text(video.short_view_count ?? video.view_count),
     publishedText: text(video.published),
@@ -687,7 +710,7 @@ export const normalizeVideoDetails = (input: unknown): SourceVideo | undefined =
     id: video.id,
     title: video.title,
     description: video.short_description,
-    thumbnail: thumbnail(video.thumbnail),
+    thumbnail: thumbnail(video.thumbnail, STILL_WIDTH),
     durationSeconds: video.duration,
     viewCount: video.view_count === undefined ? undefined : String(video.view_count),
     isLive: video.is_live === true ? true : undefined,
@@ -721,7 +744,7 @@ export const normalizeLockupVideo = (input: unknown): SourceVideo | undefined =>
   return {
     id,
     title,
-    thumbnail: thumbnail(image?.image),
+    thumbnail: thumbnail(image?.image, STILL_WIDTH),
     durationSeconds: badges
       .map((badge) => durationSeconds(badge.text))
       .find((seconds) => seconds !== undefined),
@@ -758,7 +781,7 @@ export const normalizePlaylistLockup = (input: unknown): SourcePlaylist | undefi
   return {
     id,
     title,
-    thumbnail: thumbnail(image?.image),
+    thumbnail: thumbnail(image?.image, STILL_WIDTH),
     // Only the badge is read for the count. The metadata rows carry a localized
     // mix of counts and update dates with nothing to tell them apart, so
     // picking one would be a guess that renders "Updated today" as a count.
@@ -775,7 +798,7 @@ export const normalizeGridPlaylist = (input: unknown): SourcePlaylist | undefine
   return {
     id,
     title,
-    thumbnail: thumbnail(node.thumbnails) ?? thumbnail(node.sidebar_thumbnails),
+    thumbnail: thumbnail(node.thumbnails, STILL_WIDTH) ?? thumbnail(node.sidebar_thumbnails, STILL_WIDTH),
     // `video_count` is the long form ("50 videos"); the short one is the bare
     // number, which only reads correctly next to a label the card supplies.
     videoCountText: presentText(node.video_count) ?? presentText(node.video_count_short),
@@ -793,7 +816,7 @@ export const normalizePlaylistDetails = (input: unknown, id: string): SourcePlay
     id,
     title: presentText(info?.title) ?? id,
     description: presentText(info?.description),
-    thumbnail: thumbnail(info?.thumbnails),
+    thumbnail: thumbnail(info?.thumbnails, STILL_WIDTH),
     // The three stats stringify to 'N/A' when the sidebar is absent, so they go
     // through presentText rather than being surfaced as literal text.
     videoCountText: presentText(info?.total_items),
@@ -863,7 +886,7 @@ export const normalizePlaylistPanelVideo = (input: unknown): SourceVideo | undef
   return {
     id,
     title,
-    thumbnail: thumbnail(row?.thumbnail),
+    thumbnail: thumbnail(row?.thumbnail, STILL_WIDTH),
     // Already in seconds, but it comes from parsing 'N/A' when the row carries
     // no length, which yields NaN rather than an absent value.
     durationSeconds: Number.isFinite(row?.duration?.seconds) ? row?.duration?.seconds : undefined,
@@ -976,7 +999,7 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
       ? {
           id: author.id,
           name: author.name,
-          avatar: thumbnail(author.thumbnails),
+          avatar: thumbnail(author.thumbnails, AVATAR_WIDTH),
           handle: handleFromUrl(author.url),
           subscriberCountText: text(owner?.subscriber_count),
           isSubscribed: subscribeButton?.subscribed,
@@ -1005,7 +1028,7 @@ export const normalizeSession = (input: unknown): SourceSession => {
   return {
     signedIn: true,
     name: presentText(account?.account_name),
-    avatar: thumbnail(account?.account_photo),
+    avatar: thumbnail(account?.account_photo, AVATAR_WIDTH),
     handle: presentText(account?.channel_handle),
   }
 }
@@ -1022,7 +1045,7 @@ export const normalizeCommentView = (input: unknown): SourceComment | undefined 
       ? {
           id: comment.author.id,
           name: comment.author.name,
-          avatar: thumbnail(comment.author.thumbnails),
+          avatar: thumbnail(comment.author.thumbnails, AVATAR_WIDTH),
           handle: handleFromUrl(comment.author.url) ?? (comment.author.name.startsWith('@') ? comment.author.name : undefined),
           isVerified: comment.author.is_verified === true ? true : undefined,
         }

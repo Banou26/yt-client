@@ -270,6 +270,49 @@ describe('youtube normalization', () => {
     expect(normalizeVideoDetails({ id: 'abc', title: 'T' })?.badges).toEqual([])
   })
 
+  it('picks an image that covers its slot rather than the widest published', () => {
+    /* Taking the widest unconditionally is what made a 12-card grid download
+       maxres stills into 360px slots and 800px channel photos into 24px
+       avatars. The still wants the smallest candidate at or above the card's
+       2x width, and the avatar a much smaller one, so the two must not resolve
+       to the same asset. */
+    const video = normalizeFeedVideo({
+      video_id: 'abc',
+      title: { text: 'T' },
+      thumbnails: [
+        { url: 'mq.jpg', width: 320 },
+        { url: 'hq.jpg', width: 480 },
+        { url: 'sd.jpg', width: 640 },
+        { url: 'hd.jpg', width: 1280 },
+        { url: 'maxres.jpg', width: 1920 },
+      ],
+      author: {
+        id: 'UC1',
+        name: 'Chan',
+        thumbnails: [
+          { url: 'a48.jpg', width: 48 },
+          { url: 'a176.jpg', width: 176 },
+          { url: 'a800.jpg', width: 800 },
+        ],
+      },
+    })
+    // 720 is the target, so 1280 is the narrowest candidate that covers it.
+    expect(video?.thumbnail).toBe('hd.jpg')
+    // 160 is the target, so 176 covers it and 800 is four times too wide.
+    expect(video?.channel?.avatar).toBe('a176.jpg')
+  })
+
+  it('falls back to the widest image when nothing published covers the slot', () => {
+    // A channel whose largest photo is smaller than the target still needs an
+    // avatar: covering is a preference, not a requirement.
+    const video = normalizeFeedVideo({
+      video_id: 'abc',
+      title: { text: 'T' },
+      author: { id: 'UC1', name: 'Chan', thumbnails: [{ url: 'a32.jpg', width: 32 }, { url: 'a68.jpg', width: 68 }] },
+    })
+    expect(video?.channel?.avatar).toBe('a68.jpg')
+  })
+
   it('normalizes feed videos', () => {
     expect(normalizeFeedVideo({
       video_id: 'abc',
