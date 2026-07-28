@@ -327,13 +327,14 @@ const style = css`
     border-radius: 1.2rem;
     overflow: hidden;
     background: var(--bg-elevated);
-    /* `scale` rather than `transform`, and the transition names it directly.
+    /* The independent scale property rather than a transform, and the
+       transition names it directly.
 
-       The two are not interchangeable here. A transition on `transform` holds
+       The two are not interchangeable here. A transition on transform holds
        that property at its start value for the duration, and reading it back
        mid-flight reports no scaling at all, which made this look inert. The
-       independent `scale` property is not entangled with any other transform
-       this element might carry, so nothing else can reset it. */
+       scale property is not entangled with any other transform this element
+       might carry, so nothing else can reset it. */
     transition: scale 0.18s ease, box-shadow 0.18s ease;
   }
 
