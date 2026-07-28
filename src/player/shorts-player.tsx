@@ -7,6 +7,7 @@ import type { startShakaPlayback } from './shaka'
 import { css } from '@emotion/react'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
+import { LIVE_UNSUPPORTED } from '../frame/protocol'
 import { startEngine } from '../scramjet/client'
 import { warmShaka } from './prefetch'
 import { getSettings, updateSettings } from '../settings'
@@ -162,6 +163,13 @@ const ShortsPlayer = (
   const [muted, setMuted] = useState(() => getSettings().muted)
   const [progress, setProgress] = useState(0)
   const [scrubbing, setScrubbing] = useState(false)
+  const [attempt, setAttempt] = useState(0)
+
+  // A slide that failed once starts over when it becomes active again, so a
+  // swipe back is a fresh try rather than a permanently dead slide.
+  useEffect(() => {
+    if (!active) setAttempt(0)
+  }, [active])
 
   useEffect(() => {
     const video = videoRef.current
@@ -175,8 +183,26 @@ const ShortsPlayer = (
     video.loop = true
     const abort = new AbortController()
     let controller: Awaited<ReturnType<typeof startShakaPlayback>> | undefined
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
     setReady(false)
     setStatus('')
+    /* Bounded retry, the same shape the watch player has. Without it a single
+       transient upstream answer killed the slide for good: the watch-page
+       scrape occasionally comes back without a player response, and there was
+       nothing to try again. Observed live, so this is not a hypothetical.
+
+       Live is the one refusal not worth retrying, because it cannot succeed. */
+    const fail = (error: unknown) => {
+      if (abort.signal.aborted || retryTimer !== undefined) return
+      const message = error instanceof Error ? error.message : String(error)
+      if (attempt >= 2 || message === LIVE_UNSUPPORTED) {
+        setStatus(message)
+        return
+      }
+      retryTimer = setTimeout(() => {
+        if (!abort.signal.aborted) setAttempt((value) => value + 1)
+      }, 400)
+    }
     void (async () => {
       // Imported here rather than at the top so Shaka stays out of the entry
       // chunk. `warmShaka` has normally already resolved this, so it is a
@@ -189,24 +215,32 @@ const ShortsPlayer = (
         videoId,
         startTime: 0,
         signal: abort.signal,
-        onError: (error) => {
-          if (abort.signal.aborted) return
-          setStatus(error instanceof Error ? error.message : String(error))
-        },
+        onError: fail,
       })
       if (abort.signal.aborted) return
       setReady(true)
-    })().catch((error) => {
-      if (abort.signal.aborted) return
-      setStatus(error instanceof Error ? error.message : String(error))
-    })
+      /* Pin a format that COVERS the box instead of leaving it to ABR.
+         Measured: in an 818px-tall box on a 1.5x display (1227 device px) ABR
+         settled on the 360x640 variant, a 1.9x upscale on the surface that IS
+         the page. Portrait tiers step 640 -> 1080 -> 1280, so the smallest one
+         at or above the display height is the right pick.
+
+         Routed through selectQuality rather than Shaka's own restrictions
+         because quality here is TWO coordinated moves: the frame's SABR session
+         has to serve the format before Shaka may select it, and configuring
+         only the Shaka half leaves the session advertising the old one. */
+      const displayHeight = Math.ceil(video.getBoundingClientRect().height * devicePixelRatio)
+      const covering = [...controller.heights].sort((a, b) => a - b).find((height) => height >= displayHeight)
+      if (covering) await controller.selectQuality(covering).catch(() => {})
+    })().catch(fail)
     return () => {
       abort.abort()
+      clearTimeout(retryTimer)
       setReady(false)
       // Closing the session is the point of tearing down an inactive slide.
       void controller?.destroy()
     }
-  }, [videoId, active])
+  }, [videoId, active, attempt])
 
   useEffect(() => {
     const video = videoRef.current
@@ -256,7 +290,7 @@ const ShortsPlayer = (
       {/* Kept until the first frame is decodable so a slide never flashes black
           between the poster and playback. */}
       {poster && !ready ? <img className='poster' src={poster} alt='' /> : undefined}
-      <video ref={videoRef} playsInline preload='auto' />
+      <video key={attempt} ref={videoRef} playsInline preload='auto' />
       {active && !ready && !status ? <div className='spinner' /> : undefined}
       {status ? <p className='status'>{status}</p> : undefined}
       {ready && paused

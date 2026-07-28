@@ -53,12 +53,24 @@ const FALLBACK_CLIENT_VERSION = '2.20260618.05.00'
 
 ;(Constants as unknown as { CLIENTS: { WEB: { VERSION: string } } }).CLIENTS.WEB.VERSION = FALLBACK_CLIENT_VERSION
 
-Platform.shim.eval = async (data: Types.BuildScriptResult, env: Record<string, Types.VMPrimative>) => {
-  const properties: string[] = []
-  if (env.n) properties.push(`n: exportedVars.nFunction("${env.n}")`)
-  if (env.sig) properties.push(`sig: exportedVars.sigFunction("${env.sig}")`)
-  return new Function(`${data.output}\nreturn { ${properties.join(', ')} }`)()
-}
+/* Runs the extracted player script, which is how a stream URL's `n` and `sig`
+   parameters get descrambled. A shim is needed at all because youtubei.js's
+   default one reaches for a VM this realm does not have.
+
+   The whole body is what youtubei.js already built. Player.decipher appends its
+   own processor to `data.output`, ending in `return process(n, sp, s)` with the
+   values baked in, so this function only has to evaluate that and hand back
+   what it returns. `env` carries the same three values and is deliberately
+   unused: they are already in the script.
+
+   This used to append a second `return` of its own that read
+   `exportedVars.nFunction` and `exportedVars.sigFunction`. Both were dead: the
+   appended `return process(...)` above them always fired first, and neither
+   name exists in youtubei.js 17.0.1, whose only export is `nsigFunction`. It
+   worked by accident, and would have thrown the moment upstream stopped
+   appending its own return. */
+Platform.shim.eval = async (data: Types.BuildScriptResult, _env: Record<string, Types.VMPrimative>) =>
+  new Function(data.output)()
 
 const readVisitorData = () => {
   try {
