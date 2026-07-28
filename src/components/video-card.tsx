@@ -340,25 +340,48 @@ const style = css`
 
   /* The hovered card grows, the way upstream's inline preview does.
 
-     Not decoration. The preview's scrubber is a strip pinned to the bottom edge
-     of this box, and at the grid's resting size that strip is roughly 12px of a
-     186px thumbnail: a target under 7% of the card tall, sitting on its very
-     last pixels. Growing the box grows the strip with it, which is most of what
-     makes scrubbing possible at all.
-
      A transform rather than a width or a grid change: it must not reflow the
      row, or every neighbouring card would shuffle under the pointer while the
      reader is aiming at one of them. The card is lifted so it overlaps its
-     neighbours instead of pushing them. */
+     neighbours instead of pushing them.
+
+     The amount is small on purpose, and was measured off upstream rather than
+     guessed: their thumbnail goes 533px to 553px on hover, about 4%, which is
+     enough to read as "this one" while still landing inside the grid gutter so
+     the neighbours stay whole. An earlier 1.18 here was sized to make the
+     preview's scrubber grabbable, and that reasoning is obsolete: the strip is
+     2.4rem tall in its own right now, so it no longer needs the card grown
+     around it. What 1.18 actually did was take a 435px card to 525px and paint
+     it over both neighbours, including their duration badges. */
   &.expanded .thumb {
-    scale: 1.18;
-    box-shadow: 0 0.8rem 2.4rem rgb(0 0 0 / 45%);
+    scale: 1.04;
     z-index: 2;
   }
 
   &.expanded {
     position: relative;
     z-index: 2;
+  }
+
+  /* The surface behind the WHOLE card, thumbnail and metadata together.
+
+     This is what upstream has and what the grown card was missing: without it
+     an enlarged thumbnail is just a picture that has outgrown its own caption
+     and spilled toward whatever is next to it. With it, the card reads as one
+     object lifted off the page, and the panel edge is what separates it from
+     its neighbours rather than the neighbours simply being covered.
+
+     Inset negatively so it reaches into the gutter, and drawn behind the card's
+     own content: the root establishes the stacking context, so a negative
+     z-index here sits under the thumbnail and text without escaping the card. */
+  &.expanded::before {
+    content: '';
+    position: absolute;
+    inset: -0.8rem -0.8rem -1.2rem;
+    z-index: -1;
+    border-radius: 1.6rem;
+    background: var(--bg-elevated);
+    box-shadow: 0 0.8rem 2.4rem rgb(0 0 0 / 45%);
   }
 
   /* Shorts are vertical, and a 16/9 box would letterbox one into a slot mostly
@@ -368,10 +391,10 @@ const style = css`
     aspect-ratio: 9 / 16;
   }
 
-  /* A portrait card is already tall and narrow; scaling it as much as a 16/9
-     one would push it well past its column. */
+  /* A portrait card is already tall and narrow, so the same 4% costs it more
+     absolute height than it costs a 16/9 card width. */
   &.short.expanded .thumb {
-    scale: 1.08;
+    scale: 1.03;
   }
 
   @media (prefers-reduced-motion: reduce) {
