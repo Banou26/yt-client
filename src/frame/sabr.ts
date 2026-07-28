@@ -41,6 +41,12 @@ const MAX_HARVESTED_SEGMENT_BYTES = 32 * 1024 * 1024
 const MAX_MEDIA_CACHE_BYTES = 64 * 1024 * 1024
 const START_TIME_TOLERANCE_MS = 2
 const REFRESH_ERROR = 'SabrSessionRefreshError'
+/* How long a live request will wait for the segment it actually named. The
+   ceiling is Shaka's own 30s segment timeout: giving up first turns a wait into
+   a retry we control instead of a network error it reports. */
+const LIVE_SEGMENT_WAIT_MS = 20_000
+// Segments kept in the advertised timeline, which is also the rewind window.
+const LIVE_TIMELINE_LIMIT = 48
 
 const bytes = (value: ArrayBuffer | ArrayBufferView | null | undefined) => {
   if (!value) return undefined
@@ -266,6 +272,9 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
   if (!initialVideoFormat || !initialAudioFormat) throw new Error('youtube: no supported audio and video formats')
   let videoFormat: PlaybackFormat = initialVideoFormat
   let audioFormat: PlaybackFormat = initialAudioFormat
+  // Every live stream measured used 5s segments; the formats' own figure wins
+  // wherever they publish one.
+  const targetDurationMs = initialVideoFormat.targetDurationMs ?? initialAudioFormat.targetDurationMs ?? 5_000
 
   const byKey = new Map(source.formats.map((format) => [FormatKeyUtils.fromFormat(format), format]))
   const playbackByKey = new Map(source.playbackFormats.map((format) => [format.key, format]))
@@ -305,6 +314,32 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
   }
   const mediaCache = new Map<string, CachedMedia>()
   let mediaCacheBytes = 0
+  /* The live timeline, recorded from what the transport actually delivered.
+
+     A live MPD can only honestly describe segments the session can serve, and
+     the session can only serve what it has already received: the server ignores
+     the address on a request and answers with its current edge, so a timeline
+     extrapolated forward names segments that will never arrive. Video drives it
+     because it is the track a viewer notices stalling; audio fills a sequence in
+     only when video has not reported it yet. */
+  const liveTimeline = new Map<number, { sequenceNumber: number, startMs: number, durationMs: number }>()
+  const recordLiveSegment = (segment: CachedMedia, targetMs: number) => {
+    const { sequenceNumber, startMs, track } = segment
+    if (sequenceNumber === undefined) return
+    if (track === 'audio' && liveTimeline.has(sequenceNumber)) return
+    liveTimeline.set(sequenceNumber, {
+      sequenceNumber,
+      startMs,
+      // A final short segment would leave a hole in the timeline; the target
+      // duration is the stream's own answer for how long a segment covers.
+      durationMs: segment.durationMs && segment.durationMs > 0 ? segment.durationMs : targetMs,
+    })
+    while (liveTimeline.size > LIVE_TIMELINE_LIMIT) {
+      const oldest = liveTimeline.keys().next().value
+      if (oldest === undefined) break
+      liveTimeline.delete(oldest)
+    }
+  }
   let resolveCacheChange: () => void = () => {}
   let cacheChange = new Promise<void>((resolve) => {
     resolveCacheChange = resolve
@@ -346,6 +381,7 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
       track: format.width ? 'video' : 'audio',
     }
     mediaCache.set(cacheKey, cached)
+    if (source.isLive) recordLiveSegment(cached, targetDurationMs)
     mediaCacheBytes += segment.data.byteLength
     while (mediaCacheBytes > MAX_MEDIA_CACHE_BYTES) {
       const oldest = mediaCache.entries().next().value as [string, CachedMedia] | undefined
@@ -354,6 +390,29 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
       mediaCacheBytes -= oldest[1].data.byteLength
     }
     notifyCacheChange()
+  }
+
+  const findCachedSequence = (track: 'audio' | 'video', formatKey: string, sequenceNumber: number) => {
+    for (const segment of mediaCache.values()) {
+      if (segment.track !== track || segment.formatKey !== formatKey) continue
+      if (segment.sequenceNumber === sequenceNumber) return segment
+    }
+  }
+
+  // The span this session can still answer for, per format. Outside it a request
+  // is unservable rather than slow: the transport cannot rewind, and anything
+  // older has already been evicted.
+  const cachedSequenceRange = (track: 'audio' | 'video', formatKey: string) => {
+    let oldest: number | undefined
+    let newest: number | undefined
+    for (const segment of mediaCache.values()) {
+      if (segment.track !== track || segment.formatKey !== formatKey) continue
+      const sequence = segment.sequenceNumber
+      if (sequence === undefined) continue
+      if (oldest === undefined || sequence < oldest) oldest = sequence
+      if (newest === undefined || sequence > newest) newest = sequence
+    }
+    return { oldest, newest }
   }
 
   const findCachedMedia = (track: 'audio' | 'video', formatKey: string, startTimeMs: number) => {
@@ -415,6 +474,13 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     const next = formats.find((format) => format.key === key)
     if (!next) throw new Error(`youtube: unknown ${track} format ${key}`)
     void cancelActiveHarvest()
+    /* The live timeline deliberately SURVIVES a format switch. Sequence numbers
+       are aligned across formats (a sequence covers the same media time in every
+       one of them), so the sequence-to-time mapping is format independent even
+       though the cached bytes are not. Clearing it here re-anchored the whole
+       presentation on every switch: ABR moved ten times in a minute, the
+       manifest re-anchored ten times behind it, and playback collapsed to
+       readyState 0 about five seconds in. */
     if (track === 'video') {
       videoFormat = next
       state.video = byKey.get(next.key)
@@ -608,6 +674,63 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     return output
   }
 
+  /* Live keeps the stream flowing on its own, independent of player demand.
+
+     SABR is a PUSH transport: a request opens a stream the server keeps feeding,
+     and it always feeds from its current edge. A manifest can therefore only
+     honestly advertise segments that have already arrived. That closes a loop
+     if nothing else pulls: the timeline only grows when segments arrive,
+     segments only arrive when something fetches, and the player only fetches
+     what the timeline advertises. Measured, that deadlock is total, two segment
+     requests in fifty-six seconds with an empty buffer.
+
+     So the session consumes the stream continuously and the player reads out of
+     the cache behind it. This is also what the transport wants: one long-lived
+     harvest rather than a fetch per segment. */
+  let livePump: Promise<void> | undefined
+
+  const runLivePump = async () => {
+    while (!closeController.signal.aborted) {
+      try {
+        if (!activeHarvest) {
+          // Ask from the edge we know about, so the server's readahead picks up
+          // where the last harvest left off rather than restarting behind it.
+          const startTimeMs = [...liveTimeline.values()]
+            .reduce((newest, segment) => Math.max(newest, segment.startMs + segment.durationMs), 0)
+          const run = chain.then(() => execute(
+            `sabr://video?key=${encodeURIComponent(videoFormat.key)}`,
+            {},
+            startTimeMs,
+            false,
+            seekGeneration,
+            () => {},
+            closeController.signal,
+          ))
+          chain = run.catch(() => {})
+          serialTail = chain
+          await run
+        }
+        // Harvesting happens off the chain, so player requests stay responsive
+        // while the stream feeds the cache behind them.
+        const harvest = activeHarvest
+        if (harvest) await harvest.done
+        else await wait(Math.round(targetDurationMs / 2), closeController.signal)
+      } catch {
+        if (closeController.signal.aborted) return
+        // A failed pull is not fatal: the next one re-opens from the edge, which
+        // is where the server would have put us anyway.
+        await wait(1_000, closeController.signal).catch(() => {})
+      }
+    }
+  }
+
+  const ensureLivePump = () => {
+    if (!source.isLive || livePump || closeController.signal.aborted) return
+    livePump = runLivePump().finally(() => {
+      livePump = undefined
+    })
+  }
+
   const initFetches = new Map<string, Promise<Uint8Array>>()
   // Init blob fetches are shared between requesters, so they must not die with
   // any single requester's signal, only with the session itself.
@@ -733,7 +856,11 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
           }
         }
         if (request.kind === 'media') {
-          const cached = findCachedMedia(request.track, format.key, request.startTimeMs)
+          // Live names the segment by the server's own sequence, which is exact.
+          // VOD has no sequence and matches on start time instead.
+          const cached = request.sequenceNumber === undefined
+            ? findCachedMedia(request.track, format.key, request.startTimeMs)
+            : findCachedSequence(request.track, format.key, request.sequenceNumber)
           if (!cached) return
           return {
             generation: request.generation,
@@ -823,6 +950,56 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
         }
         throw refreshError(`youtube: ${reason} after ${MAX_SEGMENT_ATTEMPTS} attempts`)
       }
+      /* A live media request resolves the exact sequence it named, or fails.
+
+         The server ignores the address and always answers with its current
+         edge, so returning that answer under the requested segment's name puts
+         media wherever the stream happens to be rather than where the timeline
+         says it belongs. Measured, that is the whole stutter: Shaka asked for
+         the same position fifteen times while the server walked fifteen
+         sequences forward, and the playhead starved in the widening hole.
+
+         A future sequence is worth waiting for, because the stream is producing
+         it in real time. A sequence older than the cache is not: the transport
+         cannot rewind, so it is reported and the refreshed manifest moves the
+         viewer forward instead. */
+      const awaitLiveSequence = async (sequenceNumber: number): Promise<SegmentEnvelope> => {
+        const deadline = Date.now() + LIVE_SEGMENT_WAIT_MS
+        // The pump owns fetching, so this only ever reads. Kicking it here is
+        // what heals a pump that died with the last session refresh.
+        ensureLivePump()
+        for (;;) {
+          // Captured BEFORE the lookup: a segment landing between the miss and
+          // the await would otherwise leave this waiting for the one after it.
+          const changed = cacheChange
+          const cached = getCachedSegment()
+          if (cached) return cached
+          /* Plain errors, NEVER refreshError.
+
+             A refresh tears the SABR session down and builds a new one, which
+             starts with an empty live timeline. The manifest is generated from
+             that timeline, so one unservable segment took out the whole
+             presentation: liveManifest had nothing to describe, Shaka could not
+             reload, and a stream that was merely a few seconds out of position
+             went to a black frame permanently. These conditions mean "ask again"
+             or "look at the refreshed manifest", not "the session is broken". */
+          const { oldest, newest } = cachedSequenceRange(request.track, format.key)
+          if (oldest !== undefined && sequenceNumber < oldest) {
+            throw new Error(`youtube: live segment ${sequenceNumber} is older than the session window`)
+          }
+          if (newest !== undefined && sequenceNumber <= newest) {
+            throw new Error(`youtube: live segment ${sequenceNumber} was not delivered`)
+          }
+          if (Date.now() > deadline) {
+            throw new Error(`youtube: live segment ${sequenceNumber} did not arrive in time`)
+          }
+          progress('live-wait')
+          await withAbort(changed, signal)
+        }
+      }
+      if (request.kind === 'media' && request.sequenceNumber !== undefined) {
+        return awaitLiveSequence(request.sequenceNumber)
+      }
       if (request.kind === 'init' && requestedRange) {
         const cached = getCachedSegment()
         if (cached) return cached
@@ -870,6 +1047,11 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     manifest: source.manifest,
     videoFormats,
     audioFormats,
+    targetDurationMs,
+    // The segments this session can actually serve, which is the only honest
+    // basis for a live manifest.
+    get liveSegments() { return [...liveTimeline.values()] },
+    startLivePump: ensureLivePump,
     get videoFormat() { return videoFormat },
     get audioFormat() { return audioFormat },
     requestSegment,

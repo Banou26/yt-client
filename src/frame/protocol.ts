@@ -7,16 +7,13 @@ import { SOURCE_METHODS } from '../sources/types'
 
 export type { Storyboard, StoryboardFrame } from './storyboard'
 
-/* Live playback is not wired up: the WEB watch page carries no DASH or HLS
-   manifest for a live stream and its direct format URLs are refused, so the
-   only route left is a hand-written dynamic MPD over SABR. The watch page
-   renders its own card instead of mounting a player, and this constant is the
-   backstop for a video that goes live between the page load and the open.
+/* Live plays over SABR now, so nothing in the frame raises this any more. It
+   survives as the terminal marker the players still match on: a video that
+   cannot be played must not spend the whole retry ladder proving it.
 
    Declared here rather than in the frame's innertube module because the app
    realm has to recognize it too, and importing that module would pull
-   youtubei.js into the app bundle for one string. It is terminal: the retry
-   ladder must not spend three attempts on something that cannot succeed. */
+   youtubei.js into the app bundle for one string. */
 export const LIVE_UNSUPPORTED = 'youtube: live streams are not playable in this client yet'
 
 export type PlaybackFormat = {
@@ -76,6 +73,11 @@ export type SegmentRequest = {
   formatKey?: string
   range?: { start: number, end: number }
   startTimeMs: number
+  /* Live only: the SABR sequence the manifest named. It is the server's own
+     address for a segment and the only one the session can resolve exactly,
+     because the transport answers a request for a TIME with whatever its edge
+     currently holds. Absent for VOD, which addresses by byte range. */
+  sequenceNumber?: number
   snapshot: PlaybackSnapshot
 }
 
@@ -103,6 +105,11 @@ export type FrameApi = SourceApi & {
   prefetchPlayback(videoId: string): Promise<void>
   openPlayback(videoId: string, maxHeight?: number): Promise<PlaybackSession>
   requestSegment(request: SegmentRequest): Promise<SegmentEnvelope>
+  /* Regenerates a live manifest from the segments the session now holds. Shaka
+     refetches it on the `minimumUpdatePeriod` cadence, which is how the
+     advertised edge keeps tracking the real one instead of drifting away from
+     it on a wall clock. */
+  liveManifest(sessionId: string): Promise<string>
   cancelSegment(sessionId: string, requestId: string): Promise<void>
   selectVideoFormat(sessionId: string, formatKey: string): Promise<void>
   closePlayback(sessionId: string): Promise<void>
@@ -117,6 +124,7 @@ export const FRAME_METHODS = [
   'prefetchPlayback',
   'openPlayback',
   'requestSegment',
+  'liveManifest',
   'cancelSegment',
   'selectVideoFormat',
   'closePlayback',

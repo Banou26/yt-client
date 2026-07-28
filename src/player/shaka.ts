@@ -19,6 +19,41 @@ const bridges = new Map<string, Bridge>()
 let schemeInstalled = false
 let diagnosticBridgeId: string | undefined
 
+/* Records what the timeline ASKED for against what the transport actually
+   delivered, which is the one measurement that distinguishes a live stall from
+   a slow one. Kept in the app realm because it is the only place that sees both
+   halves: the `start` the manifest computed and the `startMs` the SABR session
+   reports back. Bounded, and only ever read by hand from the console. */
+type SegmentTrace = {
+  at: number
+  kind: string
+  track: string
+  requestedMs: number
+  deliveredMs?: number
+  sequenceNumber?: number
+  driftMs?: number
+}
+const SEGMENT_TRACE_LIMIT = 240
+const segmentTrace: SegmentTrace[] = []
+const traceSegment = (
+  kind: string,
+  track: string,
+  requestedMs: number,
+  segment: { sequenceNumber?: number, startMs?: number },
+) => {
+  segmentTrace.push({
+    at: Math.round(performance.now()),
+    kind,
+    track,
+    requestedMs,
+    deliveredMs: segment.startMs,
+    sequenceNumber: segment.sequenceNumber,
+    driftMs: segment.startMs === undefined ? undefined : segment.startMs - requestedMs,
+  })
+  if (segmentTrace.length > SEGMENT_TRACE_LIMIT) segmentTrace.splice(0, segmentTrace.length - SEGMENT_TRACE_LIMIT)
+  ;(globalThis as { __segmentTrace?: SegmentTrace[] }).__segmentTrace = segmentTrace
+}
+
 const rangeFromRequest = (request: shaka.extern.Request) => {
   const value = request.headers.Range ?? request.headers.range
   const match = value?.match(/^bytes=(\d+)-(\d+)$/)
@@ -63,12 +98,38 @@ const installScheme = () => {
       }
     })
     const response = (async (): Promise<shaka.extern.Response> => {
-      if (requestType !== shaka.net.NetworkingEngine.RequestType.SEGMENT) {
-        throw new Error(`shaka: unsupported SABR request type ${requestType}`)
-      }
       const url = new URL(uri)
       bridge = bridges.get(url.searchParams.get('session') ?? '')
       if (!bridge) throw new Error('shaka: playback session is closed')
+      /* A live manifest is refetched rather than fixed.
+
+         Shaka reloads it every `minimumUpdatePeriod`, and each reload is
+         regenerated from the segments the SABR session has actually received
+         since the last one. That is what keeps the advertised live edge on real
+         media: the previous design anchored one probe to the wall clock and let
+         the two drift apart at real-time rate. A blob URL cannot do this, since
+         its contents are frozen at creation, so live addresses the manifest
+         through this scheme too. */
+      if (requestType === shaka.net.NetworkingEngine.RequestType.MANIFEST) {
+        const manifest = await bridge.api.liveManifest(bridge.session.id)
+        if (isAborted) throw abortError(uri)
+        ;(globalThis as { __liveManifest?: unknown }).__liveManifest = { at: Math.round(performance.now()), manifest }
+        const headers = { 'content-type': 'application/dash+xml' }
+        headersReceived(headers)
+        return {
+          uri,
+          originalUri: uri,
+          originalRequest: request,
+          data: new TextEncoder().encode(manifest).buffer as ArrayBuffer,
+          status: 200,
+          headers,
+          fromCache: false,
+          timeMs: 0,
+        }
+      }
+      if (requestType !== shaka.net.NetworkingEngine.RequestType.SEGMENT) {
+        throw new Error(`shaka: unsupported SABR request type ${requestType}`)
+      }
       const track = url.hostname
       if (track !== 'audio' && track !== 'video') throw new Error(`shaka: unknown track ${track}`)
       const formatKey = url.searchParams.get('key')
@@ -87,6 +148,10 @@ const installScheme = () => {
         formatKey,
         range: rangeFromRequest(request),
         startTimeMs: Number(url.searchParams.get('start') ?? 0),
+        // `n` is the live template's $Number$, which the manifest generator
+        // pins to the SABR sequence. VOD templates carry no `n` and keep
+        // addressing by byte range.
+        sequenceNumber: url.searchParams.has('n') ? Number(url.searchParams.get('n')) : undefined,
         snapshot: {
           currentTimeMs: bridge.video.currentTime * 1_000,
           playbackRate: bridge.video.playbackRate,
@@ -96,6 +161,7 @@ const installScheme = () => {
         },
       })
       if (isAborted) throw abortError(uri)
+      traceSegment(kind, track, Number(url.searchParams.get('start') ?? 0), segment)
       if (segment.end) throw new Error(`youtube: ${track} ended before the DASH timeline`)
       const headers = {
         'content-length': String(segment.data.byteLength),
@@ -234,9 +300,14 @@ export const startShakaPlayback = async ({
 
     const session = await sessionPromise
     if (signal.aborted) throw signal.reason
-    manifestUrl = URL.createObjectURL(new Blob([session.manifest], { type: 'application/dash+xml' }))
     const bridge = { api, generation: 0, player: activePlayer, requestNumber: 0, session, video }
     bridges.set(bridgeId, bridge)
+    /* VOD's manifest never changes, so a blob is exactly right for it. Live's
+       has to be refetchable: Shaka reloads it on the update period and the
+       frame regenerates it from segments that have arrived since. */
+    const loadUrl = session.isLive
+      ? `sabr://manifest?session=${bridgeId}`
+      : (manifestUrl = URL.createObjectURL(new Blob([session.manifest], { type: 'application/dash+xml' })))
     requestFilter = (type, request, context) => {
       if (type !== shaka.net.NetworkingEngine.RequestType.SEGMENT) return
       request.uris = request.uris.map((uri) => {
@@ -255,76 +326,76 @@ export const startShakaPlayback = async ({
       bridge.generation += 1
     }
     video.addEventListener('seeking', seeking)
-    await activePlayer.load(manifestUrl, startTime || undefined, 'application/dash+xml')
-    if (signal.aborted) throw signal.reason
-    /* Live opens wherever the media actually landed.
+    /* Live gets its streaming budget BEFORE load, not after.
 
-       The manifest's presentation timeline is the stream's own clock, so a
-       stream running six hours starts at 24,000s and the element would
-       otherwise sit at 0 while every segment appends at the far end.
-       goToLive() gets the playhead into the right neighbourhood, but not
-       reliably into the media: the server streams from ITS live edge, which has
-       moved on since the probe that dated the manifest, so the computed edge
-       landed ~15s short of the first buffered range and stalled in the hole.
+       The manifest only ever advertises segments that have already arrived, so
+       a lookahead larger than the advertised window just makes Shaka ask for
+       segments that do not exist yet; the frame then holds those requests open
+       waiting for real time to produce them. Keeping the goal inside one update
+       period means Shaka asks for what is there and comes back for more.
 
-       The server decides where the media is, so the playhead follows the
-       buffer rather than the arithmetic. Bounded, and only until the first
-       range appears. */
+       Configuring after load() left the VOD 30s goal in force for the whole
+       initial buffering pass, which is the window where a live stream either
+       settles or starves. */
     if (session.isLive) {
-      /* Live gets its own buffer budget, and keeps ABR.
-
-         The server only ever serves the live EDGE, so Shaka can never build the
-         30s of lookahead the VOD config asks for: measured buffer ahead was
-         ~3s. Against the VOD budget ABR read that permanently-thin buffer as
-         congestion and walked a 1280x720 stream down to 256x144 inside twenty
-         seconds. Pinning the format instead is worse, not better: 720p then
-         held but stalled, playing 10s of media in 25s of wall clock, because
-         the tunnel genuinely cannot sustain it.
-
-         So the goal is lowered to something a live edge can actually reach and
-         ABR is left to find the rate the pipe supports, which is the job it
-         exists to do. */
       activePlayer.configure({
         streaming: {
-          bufferingGoal: 12,
+          bufferingGoal: 10,
           rebufferingGoal: 2,
-          bufferBehind: 15,
-          /* Jump gaps aggressively, and treat a frozen playhead as a stall.
-
-             The server answers every segment request with its CURRENT edge
-             regardless of the segment Shaka asked for, so appended media does
-             not always land where the timeline says it should and a hole opens
-             at the playhead. Measured: the playhead sat frozen for the better
-             part of a minute while the buffer grew to 20s AHEAD of it, with no
-             session refresh involved, until Shaka's own gap logic eventually
-             stepped over it. That is the "plays 20s, hiccups, repeats" pattern.
-
-             Detecting the gap sooner and stepping further past it turns a long
-             freeze into a skip. Left at the VOD defaults, which are tuned for a
-             timeline that is exact, live spends most of its time waiting. */
+          bufferBehind: 30,
+          /* Gaps are no longer expected: every append lands at the position its
+             sequence names. These stay tight so a genuinely dropped segment
+             costs a skip rather than a freeze, but they are a backstop now
+             rather than the mechanism playback relies on. */
           gapDetectionThreshold: 0.3,
           gapPadding: 0.1,
           stallEnabled: true,
           stallThreshold: 0.5,
           stallSkip: 0.2,
         },
-        /* Start ABR pessimistic and let it climb. Its default estimate is
-           tuned for a VOD start, where a fat first segment measures the pipe
-           quickly; a live edge never hands over enough at once to correct an
-           optimistic guess, so it opened at 720p, starved (11.7s of media in
-           30s of wall clock, playhead 3s PAST the buffer) and never recovered.
-           Climbing from a low guess converges on what the tunnel can feed. */
-        abr: { defaultBandwidthEstimate: 400_000 },
+        /* Live runs WITHOUT automatic ABR.
+
+           The SABR session streams one video format at a time, so every switch
+           costs the session its cached readahead and makes the player ask for
+           media it does not yet hold. ABR against a live edge switches
+           constantly, because the buffer is inherently thin and it reads that as
+           congestion: measured, it moved ten times in a minute and playback
+           collapsed to readyState 0 about five seconds in.
+
+           Quality is still selectable, just deliberately: selectQuality below
+           switches both halves together and pays the re-anchor once. */
+        abr: { enabled: false, defaultBandwidthEstimate: 400_000 },
       })
-      try {
-        activePlayer.goToLive()
-      } catch {}
+    }
+    await activePlayer.load(loadUrl, startTime || undefined, 'application/dash+xml')
+    if (signal.aborted) throw signal.reason
+    /* Live opens where the manifest says, and the manifest is now built from
+       media that has already arrived, so that position is real.
+
+       This used to need help. The old timeline was extrapolated forward from a
+       single probe, which put the playhead in a hole the server would never
+       fill, so goToLive() plus a loop that chased video.buffered was what got
+       playback started at all. goToLive() is actively wrong against an honest
+       timeline: it seeks to the availability end, which is where the NEXT
+       segment will begin, not where the newest one is.
+
+       The chase loop stays as a bounded backstop, since it only ever moves the
+       playhead forward and only when it sits before the first buffered range. */
+    if (session.isLive) {
+      /* Pin the player to the format the SESSION is streaming.
+
+         With ABR off Shaka still makes its own opening pick, and any variant
+         other than the session's costs a switch on the very first segment. The
+         Representation id in the generated manifest IS the SABR format key,
+         which is what makes the two sides nameable in the same terms. */
+      const opening = activePlayer.getVariantTracks()
+        .find((track) => track.originalVideoId === session.selectedVideoKey)
+      if (opening && !opening.active) activePlayer.selectVariantTrack(opening, true)
       const settle = Date.now() + 10_000
       while (!destroyed && !signal.aborted && Date.now() < settle) {
         const buffered = video.buffered
         if (buffered.length > 0) {
           const start = buffered.start(0)
-          // Only forward: a playhead already inside the buffer is left alone.
           if (video.currentTime < start) video.currentTime = start + 0.1
           break
         }
