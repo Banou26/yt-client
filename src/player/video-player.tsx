@@ -2,6 +2,8 @@ import type shaka from 'shaka-player'
 
 import type { Storyboard } from '../frame/protocol'
 
+import { LIVE_UNSUPPORTED } from '../frame/protocol'
+
 import { css } from '@emotion/react'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 
@@ -139,7 +141,10 @@ const VideoPlayer = (
     const restart = (error: unknown) => {
       if (abort.signal.aborted || retryTimer !== undefined) return
       resumeAt.current = video.currentTime || resumeAt.current
-      if (attempt >= 3) {
+      // A refusal that cannot succeed is reported once rather than retried
+      // three times over four seconds.
+      const terminal = error instanceof Error && error.message === LIVE_UNSUPPORTED
+      if (terminal || attempt >= 3) {
         void controller?.destroy()
         const message = error instanceof Error ? error.message : String(error)
         setStatus(`Playback failed: ${message}`)

@@ -5,6 +5,8 @@ import { Constants, Innertube, Platform, Types, UniversalCache, Utils, YT } from
 
 import type { PlaybackFormat } from './protocol'
 
+import { LIVE_UNSUPPORTED } from './protocol'
+
 import { mintPoToken, recoverPoTokenSession, warmPoTokenSession } from './botguard'
 import type { Storyboard } from './storyboard'
 
@@ -280,12 +282,6 @@ const playbackFormat = (format: YoutubeFormat): PlaybackFormat | undefined => {
     indexRange: format.index_range,
   }
 }
-
-// The watch page renders its own card for a live stream rather than mounting a
-// player, so this is a backstop: it catches a video that went live between the
-// page load and the open, and it must stay recognizable to the retry ladder,
-// which does not retry it.
-export const LIVE_UNSUPPORTED = 'youtube: live streams are not playable in this client yet'
 
 export type SabrSource = {
   videoId: string

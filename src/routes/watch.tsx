@@ -20,8 +20,8 @@ import SubscribeButton from '../components/subscribe-button'
 import { FeedSentinel } from '../components/use-infinite-feed'
 import { VideoCardCompact, VideoCardCompactSkeleton } from '../components/video-card-compact'
 import { gql } from '../generated'
-import VideoPlayer from '../player/video-player'
 import { prefetchPlayback } from '../player/prefetch'
+import { claimPlayer, closePlayer, openPlayer, setTheater as setPlayerTheater, usePlayerSession } from '../player/session'
 import { Menu, MenuItem } from '../components/ui/menu'
 import { showToast } from '../components/ui/toast'
 import { getSettings, updateSettings } from '../settings'
@@ -95,6 +95,15 @@ const style = css`
     grid-column: 1;
   }
 
+  /* Reserves the player's box. The player is moved in as a child rather than
+     rendered here, so without a size of its own this slot would collapse and
+     the page would jump as the video arrives. */
+  .player-slot,
+  .player-slot > .player-host {
+    display: block;
+    width: 100%;
+  }
+
   /* Sized like the player it stands in for, so the page does not reflow between
      a live video and an ordinary one. */
   .live-notice {
@@ -156,8 +165,12 @@ const style = css`
   /* Keeps a tall window from pushing the title below the fold. Excluded in
      fullscreen: this selector out-specifies the player's own :fullscreen rule,
      so without :not() it would cap the height of a fullscreened player and
-     letterbox it inside a correctly sized container. */
-  &.theater .stage > div:not(:fullscreen) {
+     letterbox it inside a correctly sized container.
+
+     Matched on the player's own attribute rather than on a direct child: the
+     player is moved in through a slot and a host node now, so it is two levels
+     down and a child-combinator selector silently stops matching. */
+  &.theater .stage [data-player-root]:not(:fullscreen) {
     max-height: calc(100vh - var(--header-height) - 8rem);
     border-radius: 0;
   }
@@ -411,9 +424,14 @@ const WatchPage = () => {
   })
   const [, navigate] = useLocation()
   const [rateState, rateVideo] = useMutation(RATE_VIDEO)
-  const [theater, setTheater] = useState(() => getSettings().theater)
+  /* Theater belongs to the player, and the player now lives above the router,
+     so the persisted preference is pushed into the session rather than held
+     here. Reading it here as well keeps the layout in step: `.theater` is a
+     class on this page's grid, not on the player. */
+  const playerSession = usePlayerSession()
+  const theater = playerSession.theater
   const toggleTheater = useCallback(() => {
-    setTheater((value) => updateSettings({ theater: !value }).theater)
+    setPlayerTheater(updateSettings({ theater: !getSettings().theater }).theater)
   }, [])
 
   // A new video means a new sidebar: its pages and its cursor both belong to
@@ -429,6 +447,24 @@ const WatchPage = () => {
   const watch = watchData?.watch
   useDocumentTitle(watch?.title ?? undefined)
   const channel = watch?.channel
+
+  /* Opening is deliberately NOT gated on the watch query. Playback starts from
+     the id alone, and waiting for /next would add a tunneled round trip to
+     every first frame. The title arrives later and is folded in then, because
+     the dock needs it once this page unmounts.
+
+     Liveness also arrives with that query, so a live video does get opened for
+     the moment before it resolves. It is closed here rather than left to fail:
+     the player treats the live refusal as terminal, so nothing retries in the
+     meantime. */
+  useEffect(() => {
+    if (videoId === '') return
+    if (watch?.isLive) {
+      closePlayer()
+      return
+    }
+    openPlayer({ videoId, startAt, title: watch?.title ?? undefined })
+  }, [videoId, startAt, watch?.title, watch?.isLive])
   // Annotated rather than inferred so the two selections above are checked
   // against the contracts the components actually publish, which is the only
   // place that mismatch can be caught: a field dropped from the document would
@@ -503,15 +539,10 @@ const WatchPage = () => {
               </a>
             </div>
           )
-          : (
-            <VideoPlayer
-              key={`player:${videoId}`}
-              videoId={videoId}
-              startAt={startAt}
-              theater={theater}
-              onTheater={toggleTheater}
-            />
-          )}
+          /* The player is NOT mounted here. It lives above the router, and
+             this slot only says where to show it, so leaving the page moves it
+             to the miniplayer dock instead of destroying its SABR session. */
+          : <div className='player-slot' ref={claimPlayer} />}
       </div>
       <div className='primary'>
         {watch?.title ? <h1 className='title'>{watch.title}</h1> : undefined}

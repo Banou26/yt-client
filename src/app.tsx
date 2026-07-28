@@ -6,6 +6,7 @@ import { safeDecode } from './components/format'
 import Guide from './components/guide'
 import Header from './components/header'
 import ErrorBoundary from './components/ui/error-boundary'
+import PersistentPlayer from './player/persistent-player'
 import ChannelPage from './routes/channel'
 import FeedHistoryPage from './routes/feed-history'
 import FeedPlaylistsPage from './routes/feed-playlists'
@@ -212,6 +213,9 @@ export const App = () => {
         </div>
       </div>
       {(overlayOnly || narrow) && drawerOpen ? <Guide variant='drawer' onClose={() => setDrawerOpen(false)} /> : undefined}
+      {/* Outside the <Switch> on purpose: this is the one thing on the page
+          that has to survive a route change. */}
+      <PersistentPlayer />
     </div>
   )
 }

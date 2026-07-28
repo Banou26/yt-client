@@ -7,6 +7,18 @@ import { SOURCE_METHODS } from '../sources/types'
 
 export type { Storyboard, StoryboardFrame } from './storyboard'
 
+/* Live playback is not wired up: the WEB watch page carries no DASH or HLS
+   manifest for a live stream and its direct format URLs are refused, so the
+   only route left is a hand-written dynamic MPD over SABR. The watch page
+   renders its own card instead of mounting a player, and this constant is the
+   backstop for a video that goes live between the page load and the open.
+
+   Declared here rather than in the frame's innertube module because the app
+   realm has to recognize it too, and importing that module would pull
+   youtubei.js into the app bundle for one string. It is terminal: the retry
+   ladder must not spend three attempts on something that cannot succeed. */
+export const LIVE_UNSUPPORTED = 'youtube: live streams are not playable in this client yet'
+
 export type PlaybackFormat = {
   key: string
   itag: number

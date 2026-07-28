@@ -14,6 +14,7 @@ import SubscribeButton from '../components/subscribe-button'
 import useInfiniteFeed from '../components/use-infinite-feed'
 import { gql } from '../generated'
 import ShortsPlayer from '../player/shorts-player'
+import { closePlayer } from '../player/session'
 import { useSession } from '../session'
 
 const SHORTS_FEED_QUERY = gql(`
@@ -422,6 +423,11 @@ const ShortsPage = () => {
   })
 
   useDocumentTitle('Shorts')
+
+  /* The persistent player follows the viewer out of the watch page, and this
+     route starts its own playback, so leaving both alive would play two videos
+     at once. The pager takes over sound entirely. */
+  useEffect(() => closePlayer(), [])
 
   const onMore = useCallback(() => {
     if (!page?.cursor || fetching || error) return
