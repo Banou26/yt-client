@@ -41,6 +41,25 @@ const DWELL_MS = 700
    viewer just made. A fresh page load starts silent again. */
 let preferMuted = true
 
+/* The watch scrubber wants the SHARPEST sheet; a card wants the largest one
+   that FITS. YouTube ships levels roughly 48, 80, 160 and 320 wide, and
+   `bestStoryboard` takes the 320 - which is wider than a grid card, so the tile
+   hangs off both edges and no amount of clamping helps: a clamp can recentre a
+   frame, it cannot shrink one.
+
+   Capped at 60% of the strip so the frame stays clearly a preview OF the card
+   rather than a second card sitting on top of it. Falls back to the smallest
+   level when even that does not fit, which is the least bad of the bad options
+   and still beats overflowing onto the neighbour. */
+const previewStoryboard = (boards: Storyboard[], stripWidth: number) => {
+  const fitting = boards.filter((board) => board.thumbnailWidth <= stripWidth * 0.6)
+  if (fitting.length) return bestStoryboard(fitting)
+  return boards.reduce<Storyboard | undefined>(
+    (best, board) => (!best || board.thumbnailWidth < best.thumbnailWidth ? board : best),
+    undefined,
+  )
+}
+
 const style = css`
   position: absolute;
   inset: 0;
@@ -286,7 +305,7 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
     setHover({ x: event.clientX - box.left, width: box.width, time: ratio * video.duration })
   }
 
-  const board = bestStoryboard(storyboards)
+  const board = hover ? previewStoryboard(storyboards, hover.width) : undefined
   const frame = board && hover ? storyboardFrame(board, hover.time) : undefined
   // Half the tile plus its 2px border, so the clamp accounts for what is
   // actually painted rather than for the sprite alone.
