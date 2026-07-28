@@ -51,6 +51,28 @@ export type SourceVideoSection = {
   items: SourceVideo[]
 }
 
+/* One slide of the Shorts pager.
+   Deliberately NOT a SourceVideo. The reel sequence answers with an id and a
+   still per entry and a full metadata block for only the first one, so a
+   SourceVideo here would need a fabricated title for every slide after it.
+   The pager fetches the real metadata per slide as each becomes active, which
+   is the same watch call the watch page already makes. */
+export type SourceShort = {
+  id: string
+  // The reel endpoint carries the true 1080x1920 portrait frame. A feed lockup
+  // carries the same frame letterboxed into 16:9, so this is the better still
+  // wherever it exists.
+  poster?: string
+  // Present for the seed and the one entry the sequence prefetches; absent for
+  // the rest.
+  title?: string
+}
+
+export type SourceShortsPage = {
+  items: SourceShort[]
+  cursor?: string
+}
+
 export type SourceSectionedVideoPage = {
   sections: SourceVideoSection[]
   cursor?: string
@@ -294,6 +316,15 @@ export type SourceSession = {
 export type Source = {
   id: string
   home(chip?: string, cursor?: string): Promise<SourceHomeFeed>
+  /* The Shorts pager. `seed` names the short to open on and the sequence
+     follows from it, which is how a deep link keeps its place.
+
+     There is no Shorts DESTINATION feed to fall back on: `FEshorts` parses to
+     an empty response (verified against the live endpoint), and youtubei.js
+     offers only the per-video reel sequence. With no seed the first short of
+     the home shelf becomes one, so an anonymous session, whose home is empty,
+     legitimately has no Shorts feed to show. */
+  shorts(seed?: string, cursor?: string): Promise<SourceShortsPage>
   subscriptions(cursor?: string): Promise<SourceVideoPage>
   history(cursor?: string): Promise<SourceSectionedVideoPage>
   subscribedChannels(): Promise<SourceChannel[]>
@@ -370,6 +401,7 @@ export type SourceApi = Omit<Source, 'id'>
 // `Source` without listing it here fails `SourceMethodsAreExhaustive` below.
 export const SOURCE_METHODS = [
   'home',
+  'shorts',
   'subscriptions',
   'history',
   'subscribedChannels',
@@ -420,6 +452,8 @@ export type SourceMethodsAreExhaustive = Exhaustive<Exclude<keyof SourceApi, Sou
 // a call that passes it must fail rather than silently replay from the start.
 export const SOURCE_CURSOR_ARGUMENT = {
   home: 1,
+  // Sits behind `seed`, the same way home's sits behind `chip`.
+  shorts: 1,
   subscriptions: 0,
   history: 0,
   // Both moved when their argument lists grew in front of the cursor: search
@@ -448,6 +482,7 @@ export const SOURCE_CURSOR_ARGUMENT = {
 // method added for mutations MUST be 'never'.
 export const SOURCE_REPLAY = {
   home: 'unless-cursor',
+  shorts: 'unless-cursor',
   subscriptions: 'unless-cursor',
   history: 'unless-cursor',
   subscribedChannels: 'always',

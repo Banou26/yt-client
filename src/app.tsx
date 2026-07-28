@@ -14,6 +14,7 @@ import HomePage from './routes/home'
 import PlaylistPage from './routes/playlist'
 import SearchPage from './routes/search'
 import SettingsPage from './routes/settings'
+import ShortsPage from './routes/shorts'
 import SignInPage from './routes/signin'
 import WatchPage from './routes/watch'
 import { getSettings, updateSettings } from './settings'
@@ -67,11 +68,20 @@ export const useDocumentTitle = (title?: string) => {
 // navigation would remount the player mid-playback and jump the page to the top.
 const POSITION_PARAMS = ['t']
 
+/* The short being watched is a position inside the Shorts pager for exactly
+   the same reason. The pager rewrites the path as slides scroll, and that path
+   is what makes a reload land where the viewer was; but treating each rewrite
+   as a navigation would remount the pager through the keyed ErrorBoundary and
+   tear down the running player on every swipe. */
+const collapsePath = (pathname: string) =>
+  pathname.startsWith('/shorts/') ? '/shorts' : pathname
+
 const routeKeyOf = (pathname: string, search: string) => {
   const params = new URLSearchParams(search)
   for (const param of POSITION_PARAMS) params.delete(param)
   const rest = params.toString()
-  return rest ? `${pathname}?${rest}` : pathname
+  const path = collapsePath(pathname)
+  return rest ? `${path}?${rest}` : path
 }
 
 // The path-param URLs shipped first and are linked from outside the app, so
@@ -181,6 +191,11 @@ export const App = () => {
               {/* No path param: the playlist and the position live in the query
                   string, matching youtube.com. */}
               <Route path='/playlist' component={PlaylistPage} />
+              {/* Both forms are real routes rather than one redirecting to the
+                  other: /shorts is the feed entry and /shorts/:videoId is a
+                  deep link into it, and the pager rewrites the path as it goes. */}
+              <Route path='/shorts' component={ShortsPage} />
+              <Route path='/shorts/:videoId' component={ShortsPage} />
               <Route path='/feed/subscriptions' component={FeedSubscriptionsPage} />
               <Route path='/feed/history' component={FeedHistoryPage} />
               <Route path='/feed/playlists' component={FeedPlaylistsPage} />

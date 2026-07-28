@@ -6,7 +6,10 @@ import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { Link } from 'wouter'
 
 import { formatViews } from './format'
-import { watchHrefFor } from './video-card'
+
+// A short opens the vertical pager, seeded on the one that was clicked, rather
+// than the 16:9 watch page.
+const shortsHrefFor = (id: string) => `/shorts/${encodeURIComponent(id)}`
 
 const style = css`
   /* Spans the whole grid so the shelf is a full-width band between rows rather
@@ -172,14 +175,11 @@ export const ShortsShelf = ({ shorts }: { shorts: readonly VideoCardData[] }) =>
         <div className='track' ref={trackRef}>
           {shorts.map(short => (
             <article className='card' key={short.id}>
-              {/* A short opens on the ordinary watch page: that is the playback
-                  path this client actually has, and a dedicated vertical player
-                  is its own piece of work. */}
-              <Link href={watchHrefFor(short.id)} className='thumb' tabIndex={-1} aria-hidden='true'>
+              <Link href={shortsHrefFor(short.id)} className='thumb' tabIndex={-1} aria-hidden='true'>
                 {short.thumbnail ? <img src={short.thumbnail} alt='' loading='lazy' /> : undefined}
               </Link>
               <h3 className='title'>
-                <Link href={watchHrefFor(short.id)}>{short.title}</Link>
+                <Link href={shortsHrefFor(short.id)}>{short.title}</Link>
               </h3>
               {short.viewCount ? <div className='views'>{formatViews(short.viewCount)}</div> : undefined}
             </article>

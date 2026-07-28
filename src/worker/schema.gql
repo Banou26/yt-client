@@ -64,6 +64,23 @@ type VideoPage {
   cursor: String
 }
 
+# One slide of the Shorts pager, and deliberately not a Video. The reel
+# sequence answers with an id and a portrait still per entry but metadata for
+# only one of them, so `title` is genuinely absent for most slides and the
+# pager fetches the rest per slide as each becomes active.
+type Short {
+  id: ID!
+  # The true 1080x1920 frame. A feed lockup carries the same frame letterboxed
+  # into 16:9, so this is the better still wherever it exists.
+  poster: String
+  title: String
+}
+
+type ShortsPage {
+  items: [Short!]!
+  cursor: String
+}
+
 # A feed that YouTube groups under headings, like History's day boundaries.
 # The grouping is the point of the page, so it is not flattened away.
 type VideoSection {
@@ -405,6 +422,10 @@ type Query {
   # `chip` is a FeedChip.id; omitting it is the All feed. Applying one costs a
   # second browse round trip on top of the base feed.
   home(chip: ID, cursor: String): HomeFeed!
+  # `seed` names the short to open on; the sequence follows from it. With no
+  # seed the home shelf supplies one, so a signed-out session has no Shorts
+  # feed rather than an error.
+  shorts(seed: ID, cursor: String): ShortsPage!
   # Signed-in only. youtubei.js refuses these before the network call when
   # signed out, so callers gate on `session.signedIn` rather than firing a
   # request that cannot succeed.

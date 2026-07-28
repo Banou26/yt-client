@@ -5,6 +5,7 @@ import { SOURCE_CURSOR_ARGUMENT, SOURCE_REPLAY } from '../types'
 
 type FakeFeed = {
   videos: { video_id: string, title: { text: string } }[]
+  memo: Map<string, unknown[]>
   has_continuation: boolean
   getContinuation(): Promise<FakeFeed>
 }
@@ -50,6 +51,10 @@ type FakePlaylists = {
 
 const feed = (id: string, next?: () => Promise<FakeFeed>): FakeFeed => ({
   videos: [{ video_id: id, title: { text: id } }],
+  // The home shelf is where a seedless Shorts feed gets its first short.
+  memo: new Map<string, unknown[]>([['ShortsLockupView', [
+    { on_tap_endpoint: { payload: { videoId: `short-${id}` } }, overlay_metadata: { primary_text: { text: `Short ${id}` } } },
+  ]]]),
   has_continuation: Boolean(next),
   getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
 })
@@ -170,6 +175,34 @@ const createFakeClient = () => {
     },
     getSearchSuggestions: async (query: string) => [`${query} one`, `${query} two`],
     getBasicInfo: async () => ({ basic_info: undefined }),
+    /* Mirrors the real reel sequence rather than a tidied version of it. Three
+       details are load-bearing and each one has burned a normalizer before:
+       the seed's metadata arrives as `basic_info` on the SAME response as the
+       sequence; only ONE entry carries a prefetched title, so the rest are id
+       plus still; and getWatchNextContinuation MUTATES this object and returns
+       `this` rather than handing back a fresh page. */
+    getShortsVideoInfo: async (id: string) => {
+      const entry = (video: string, title?: string) => ({
+        payload: {
+          videoId: video,
+          thumbnail: { thumbnails: [{ url: `${video}-sd.jpg`, width: 480, height: 854 }, { url: `${video}.jpg`, width: 1080, height: 1920 }] },
+          ...(title ? { unserializedPrefetchData: { playerResponse: { videoDetails: { title } } } } : {}),
+        },
+      })
+      let page = 0
+      const sequence = {
+        basic_info: { id, title: `Seed ${id}`, thumbnail: [{ url: 'seed-sd.jpg', width: 320 }, { url: 'seed.jpg', width: 1080 }] },
+        watch_next_feed: [entry('reel-1', 'Prefetched title'), entry('reel-2')],
+        wn_has_continuation: true,
+        getWatchNextContinuation: async () => {
+          page += 1
+          sequence.watch_next_feed = [entry(`reel-page-${page}`)]
+          sequence.wn_has_continuation = page < 2
+          return sequence
+        },
+      }
+      return sequence
+    },
     getChannel: async () => {
       // Real methods rather than arrows, and each one checks its receiver. Every
       // upstream tab opener is a prototype method that reaches for
@@ -494,6 +527,67 @@ describe('youtube source', () => {
     await expect(source.home(undefined, 'youtube:home:999')).rejects.toThrow('unknown continuation')
   })
 
+  it('opens the shorts pager on the short a deep link names', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    const page = await source.shorts('abc')
+    // The seed leads, and the sequence follows it rather than replacing it.
+    expect(page.items.map((item) => item.id)).toEqual(['abc', 'reel-1', 'reel-2'])
+    // The seed's own metadata rides the same response as the sequence, so the
+    // first slide renders its title with no second call.
+    expect(page.items[0]?.title).toBe('Seed abc')
+    // The widest still wins: the reel endpoint carries the true portrait frame,
+    // and picking the first rather than the largest would ship a 480px poster.
+    expect(page.items[1]?.poster).toBe('reel-1.jpg')
+    // Only one entry is prefetched. The rest legitimately have no title, and
+    // inventing one would put a wrong label under a slide.
+    expect(page.items[1]?.title).toBe('Prefetched title')
+    expect(page.items[2]?.title).toBeUndefined()
+  })
+
+  it('pages the shorts sequence even though it continues by mutation', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    const first = await source.shorts('abc')
+    expect(first.cursor).toBeTruthy()
+    /* getWatchNextContinuation overwrites watch_next_feed on the sequence and
+       returns `this`. Reading the page off the RETURN VALUE is what makes that
+       safe; a version that kept the pre-call feed would serve page one forever. */
+    const second = await source.shorts(undefined, first.cursor)
+    expect(second.items.map((item) => item.id)).toEqual(['reel-page-1'])
+    const third = await source.shorts(undefined, second.cursor)
+    expect(third.items.map((item) => item.id)).toEqual(['reel-page-2'])
+    // The sequence reports the end of itself, so the pager stops asking.
+    expect(third.cursor).toBeUndefined()
+  })
+
+  it('seeds a shorts feed with no id from the home shelf', async () => {
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => createFakeClient(),
+    })
+    const page = await source.shorts()
+    // There is no Shorts destination feed to browse, so the home shelf supplies
+    // the short the sequence starts from.
+    expect(page.items[0]?.id).toBe('short-first')
+  })
+
+  it('returns an empty shorts feed rather than failing when signed out', async () => {
+    const client = createFakeClient()
+    client.session.logged_in = false
+    const source = createYoutubeSource({
+      fetch: globalThis.fetch,
+      createClient: async () => client,
+    })
+    // An anonymous home carries no shorts, so there is nothing to seed from.
+    // That is an empty feed, not an error.
+    await expect(source.shorts()).resolves.toEqual({ items: [] })
+  })
+
   it('refuses a cursor issued for a different feed', async () => {
     const source = createYoutubeSource({
       fetch: globalThis.fetch,
@@ -663,6 +757,8 @@ describe('youtube source', () => {
     string[]
   > = {
     home: [undefined as unknown as string],
+    // The `seed` argument sits in front of the cursor.
+    shorts: [undefined as unknown as string],
     subscriptions: [],
     history: [],
     // Both grew arguments in front of the cursor: search gained `filters` and

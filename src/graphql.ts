@@ -43,6 +43,13 @@ const cache = cacheExchange({
     // and refuses to cache the containing query.
     VideoPage: () => null,
     HomeFeed: () => null,
+    /* A Short is NOT keyed on its id even though it has one. It is a thin
+       slide record whose `title` is absent for most entries, so normalizing it
+       would let one page's title-less slide overwrite the title another page
+       supplied for the same short. The pager reads real metadata through the
+       watch query, which is keyed properly. */
+    Short: () => null,
+    ShortsPage: () => null,
     SectionedVideoPage: () => null,
     VideoSection: () => null,
     ChannelPage: () => null,

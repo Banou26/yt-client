@@ -1,4 +1,4 @@
-import type { Source, SourceChannel, SourceChannelPage, SourceChannelTab, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourcePlaylistListPage, SourcePlaylistPage, SourcePlaylistPrivacy, SourceSearchFeature, SourceSearchFilters, SourceSearchPage, SourceSearchResult, SourceHomePage, SourceNotificationPage, SourcePostPage, SourceSectionedVideoPage, SourceVideo, SourceVideoPage } from '../types'
+import type { Source, SourceChannel, SourceChannelPage, SourceChannelTab, SourceCommentPage, SourceLikeStatus, SourceNotificationLevel, SourcePlaylist, SourcePlaylistItem, SourcePlaylistListPage, SourcePlaylistPage, SourcePlaylistPrivacy, SourceSearchFeature, SourceSearchFilters, SourceSearchPage, SourceSearchResult, SourceHomePage, SourceNotificationPage, SourcePostPage, SourceSectionedVideoPage, SourceShort, SourceShortsPage, SourceVideo, SourceVideoPage } from '../types'
 
 import { Innertube } from 'youtubei.js/web'
 
@@ -134,6 +134,42 @@ type ContinuationResponse = {
   on_response_received_endpoints_memo?: Map<string, unknown[]>
 }
 
+/* One row of a reel sequence. Every entry carries an id and a portrait still;
+   only the entry the response prefetches carries a player response, and its
+   videoDetails is the only title the sequence supplies. */
+type ReelEntry = {
+  payload?: {
+    videoId?: string
+    thumbnail?: { thumbnails?: { url?: string, width?: number, height?: number }[] }
+    unserializedPrefetchData?: {
+      playerResponse?: { videoDetails?: { title?: string } }
+    }
+  }
+}
+
+// A ShortFormVideoInfo, narrowed to the sequence half. `basic_info` describes
+// the SEED, not the sequence.
+type ShortsSequence = {
+  basic_info?: unknown
+  watch_next_feed?: ReelEntry[]
+  wn_has_continuation: boolean
+  getWatchNextContinuation(): Promise<ShortsSequence>
+}
+
+const normalizeReelEntry = (entry: ReelEntry): SourceShort | undefined => {
+  const id = entry?.payload?.videoId
+  if (!id) return undefined
+  // Widest first: these come back as a single 1080x1920 entry today, but the
+  // order is not guaranteed and the largest is the one worth showing.
+  const poster = [...(entry.payload?.thumbnail?.thumbnails ?? [])]
+    .sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0]?.url
+  return {
+    id,
+    poster,
+    title: entry.payload?.unserializedPrefetchData?.playerResponse?.videoDetails?.title,
+  }
+}
+
 // NotificationsMenu is NOT a Feed: it exposes `contents` and its own
 // getContinuation, with no has_continuation getter to gate on.
 type NotificationsFeed = {
@@ -196,6 +232,9 @@ export type YoutubeClient = {
   search(query: string, filters?: YoutubeSearchFilters): Promise<SearchFeed>
   getSearchSuggestions(query: string, previousQuery?: string): Promise<string[]>
   getBasicInfo(id: string): Promise<{ basic_info?: unknown }>
+  // Two round trips in one: the reel watch endpoint for the seed's own
+  // metadata, and /reel/reel_watch_sequence for the shorts that follow it.
+  getShortsVideoInfo(id: string): Promise<ShortsSequence>
   getChannel(id: string): Promise<ChannelFeed>
   getComments(videoId: string, sortBy?: 'TOP_COMMENTS' | 'NEWEST_FIRST'): Promise<CommentsFeed>
   getNotifications(): Promise<NotificationsFeed>
@@ -534,6 +573,7 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
   const playlistListContinuations = createContinuations<SourcePlaylistListPage>()
   const searchContinuations = createContinuations<SourceSearchPage>()
   const homeContinuations = createContinuations<SourceHomePage>()
+  const shortsContinuations = createContinuations<SourceShortsPage>()
   const postContinuations = createContinuations<SourcePostPage>()
   const commentActions = createActionRegistry()
   const notificationContinuations = createContinuations<SourceNotificationPage>()
@@ -684,6 +724,48 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
     const next = findContinuation(memo?.get('ContinuationItem') ?? [])
     if (next) result.cursor = registerRelated(kind.replace(/^related:/, ''), next)
     return result
+  }
+
+  /* The reel sequence PAGES BY MUTATION: getWatchNextContinuation() overwrites
+     watch_next_feed on the same object and returns `this`, so the sequence is
+     read immediately after each call rather than from a returned page. The
+     continuation registry memoizes per cursor, so each call happens once and
+     the pages stay in order. */
+  const shortsPage = (info: ShortsSequence, seed?: SourceShort): SourceShortsPage => {
+    const seen = new Set<string>()
+    const items: SourceShort[] = []
+    const add = (short: SourceShort | undefined) => {
+      if (short && !seen.has(short.id)) {
+        seen.add(short.id)
+        items.push(short)
+      }
+    }
+    /* The seed leads, so a deep link opens on the short it names rather than
+       making the viewer scroll to it. Its still comes off basic_info, which is
+       the 16:9 letterboxed frame; when the sequence also lists the seed it
+       carries the true portrait frame for it, so that one wins while the
+       seed's title (which the sequence does not have) is kept. */
+    const own = (info.watch_next_feed ?? []).find((entry) => entry.payload?.videoId === seed?.id)
+    add(seed && { ...seed, poster: normalizeReelEntry(own ?? {})?.poster ?? seed.poster })
+    for (const entry of info.watch_next_feed ?? []) add(normalizeReelEntry(entry))
+    const result: SourceShortsPage = { items }
+    if (info.wn_has_continuation) {
+      result.cursor = shortsContinuations.register('shorts', async () => {
+        return shortsPage(await info.getWatchNextContinuation())
+      })
+    }
+    return result
+  }
+
+  /* With no seed the pager needs a short to start from, and the sequence
+     endpoint has no "just give me shorts" mode. The home shelf is the only
+     general source of shorts the client has, so its first row seeds the feed.
+     An anonymous home carries none, which is why an anonymous Shorts feed is
+     legitimately empty rather than broken. */
+  const seedShort = async (active: YoutubeClient) => {
+    if (!active.session.logged_in) return undefined
+    const feed = await active.getHomeFeed()
+    return shortsItems(feed)[0]?.id
   }
 
   const registerRelated = (videoId: string, endpoint: EndpointNode): string => {
@@ -921,6 +1003,32 @@ export const createYoutubeSource = ({ fetch, createClient, signedIn }: YoutubeSo
         }),
         cursor: result.cursor,
       }
+    },
+    /* The Shorts pager runs off the reel sequence, which is what the real
+       Shorts UI uses. Its entries carry an id and a portrait still, and the
+       seed's own metadata arrives on the same response as `basic_info`, so the
+       first slide renders its title with no extra call.
+
+       Playback is deliberately NOT taken from the sequence even though it
+       prefetches a player response for one entry: that block is a /player-shaped
+       response, and the ordinary watch-HTML path is already proven to serve
+       shorts (verified against a live short: portrait formats, real manifest).
+       Using the prefetch would trade a proven path for a preview-tier one. */
+    shorts: async (seed, cursor) => {
+      if (cursor) return shortsContinuations.resolve('shorts', cursor)
+      const active = await client
+      const from = seed ?? await seedShort(active)
+      if (!from) return { items: [] }
+      const info = await active.getShortsVideoInfo(from)
+      const details = (info.basic_info ?? {}) as { id?: string, title?: string, thumbnail?: { url?: string, width?: number }[] }
+      const seeded: SourceShort | undefined = details.id
+        ? {
+            id: details.id,
+            title: details.title,
+            poster: [...(details.thumbnail ?? [])].sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0]?.url,
+          }
+        : undefined
+      return shortsPage(info, seeded)
     },
     subscriptions: async (cursor) => {
       if (cursor) return videoContinuations.resolve('subscriptions', cursor)

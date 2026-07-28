@@ -30,9 +30,9 @@ type GuideEntry = {
 
 const MAIN_ENTRIES: GuideEntry[] = [
   { label: 'Home', href: '/', Icon: House, match: '/' },
-  // No Shorts route exists yet (Phase 7), so this lands on Home instead of
+  // The Shorts pager seeds itself from the home shelf, so the entry needs no
   // linking to a page that is not there. No `match`: it is never the current page.
-  { label: 'Shorts', href: '/', Icon: Clapperboard },
+  { label: 'Shorts', href: '/shorts', Icon: Clapperboard },
   { label: 'Subscriptions', href: '/feed/subscriptions', Icon: ListVideo, match: '/feed/subscriptions' }
 ]
 
