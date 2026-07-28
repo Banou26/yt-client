@@ -84,7 +84,13 @@ export const Dialog = (
     // from the tab order by the time this unmounts otherwise.
     const previous = document.activeElement as HTMLElement | null
     const panel = panelRef.current
-    panel?.querySelector<HTMLElement>(FOCUSABLE)?.focus() ?? panel?.focus()
+    /* Not `first?.focus() ?? panel?.focus()`: focus() returns undefined, so `??`
+       always evaluated its right side too and the panel took focus straight back
+       off the control that had just received it. Opening a dialog left focus on
+       the panel every time, so the first control was never the one focused. */
+    const first = panel?.querySelector<HTMLElement>(FOCUSABLE)
+    if (first) first.focus()
+    else panel?.focus()
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     const onKeyDown = (event: KeyboardEvent) => {
