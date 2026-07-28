@@ -1,0 +1,50 @@
+diff --git a/node_modules/youtubei.js/dist/src/parser/classes/comments/CommentReplies.js b/node_modules/youtubei.js/dist/src/parser/classes/comments/CommentReplies.js
+index cd38089..47a3898 100644
+--- a/node_modules/youtubei.js/dist/src/parser/classes/comments/CommentReplies.js
++++ b/node_modules/youtubei.js/dist/src/parser/classes/comments/CommentReplies.js
+@@ -11,7 +11,16 @@ export default class CommentReplies extends YTNode {
+     has_channel_owner_replied;
+     constructor(data) {
+         super();
+-        this.contents = Parser.parseArray(data.contents);
++        // The replies continuation moved out of `contents` and into a new
++        // `subThreads` key: a thread now arrives as
++        // { viewReplies, hideReplies, targetId, subThreads: [continuationItemRenderer] }
++        // with no `contents` at all, and `viewReplies` is a plain buttonRenderer
++        // carrying text and an icon but NO endpoint. Reading only `contents` left
++        // every thread with an empty continuation list, so replies were
++        // unopenable everywhere and CommentThread.getReplies() threw
++        // "Replies continuation not found." Falling back keeps the old shape
++        // working if it returns.
++        this.contents = Parser.parseArray(data.contents || data.subThreads);
+         this.view_replies = Parser.parseItem(data.viewReplies, Button);
+         this.hide_replies = Parser.parseItem(data.hideReplies, Button);
+         this.view_replies_creator_thumbnail = Thumbnail.fromResponse(data.viewRepliesCreatorThumbnail);
+diff --git a/node_modules/youtubei.js/dist/src/parser/classes/comments/CommentView.js b/node_modules/youtubei.js/dist/src/parser/classes/comments/CommentView.js
+index 727d2d1..cc1d60d 100644
+--- a/node_modules/youtubei.js/dist/src/parser/classes/comments/CommentView.js
++++ b/node_modules/youtubei.js/dist/src/parser/classes/comments/CommentView.js
+@@ -77,10 +77,21 @@ export default class CommentView extends YTNode {
+                     a11y: comment.author.A11y
+                 };
+             }
++            // The comment entity payload no longer carries `avatar`: its keys are
++            // now key/properties/author/toolbar/readMoreLogging/loggingDirectives,
++            // and the avatar url plus the channel endpoint ride on `author`
++            // instead. Reading comment.avatar.endpoint threw a TypeError that
++            // escaped the Comments constructor, so a single renderer change took
++            // down the whole comments page for every video. The old shape is still
++            // preferred when present so this stays correct if it comes back.
++            const avatar_size = Number((/=s(\d+)/.exec(comment.author.avatarThumbnailUrl || '') || [])[1]) || undefined;
++            const avatar_image = comment.avatar?.image || (comment.author.avatarThumbnailUrl ? {
++                thumbnails: [{ url: comment.author.avatarThumbnailUrl, width: avatar_size, height: avatar_size }]
++            } : undefined);
+             this.author = new Author({
+                 simpleText: comment.author.displayName,
+-                navigationEndpoint: comment.avatar.endpoint
+-            }, comment.author, comment.avatar.image, comment.author.channelId);
++                navigationEndpoint: comment.avatar?.endpoint || comment.author.channelPageEndpoint
++            }, comment.author, avatar_image, comment.author.channelId);
+         }
+         if (toolbar_state) {
+             this.is_hearted = toolbar_state.heartState === 'TOOLBAR_HEART_STATE_HEARTED';
