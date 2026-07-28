@@ -281,6 +281,12 @@ const playbackFormat = (format: YoutubeFormat): PlaybackFormat | undefined => {
   }
 }
 
+// The watch page renders its own card for a live stream rather than mounting a
+// player, so this is a backstop: it catches a video that went live between the
+// page load and the open, and it must stay recognizable to the retry ladder,
+// which does not retry it.
+export const LIVE_UNSUPPORTED = 'youtube: live streams are not playable in this client yet'
+
 export type SabrSource = {
   videoId: string
   durationMs: number
@@ -330,6 +336,22 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
     throw new Error(`youtube: ${info.playability_status?.reason ?? info.playability_status?.status ?? 'not playable'}`)
   }
   const streaming = info.streaming_data
+  /* Live is refused here, ahead of any SABR work, so it fails as one clear
+     statement rather than as a toDash exception three retries deep.
+
+     What was measured (2026-07-28, against a live stream): the WEB watch page
+     carries NO dashManifestUrl and NO hlsManifestUrl, only
+     serverAbrStreamingUrl. The per-format `url` values it does carry answer 403
+     with an empty body on every variant tried: bare, with &sq, with a minted
+     &pot, with &alr=yes, and with &cpn/&c/&cver. So neither of the two cheap
+     routes exists for this client: there is no manifest to proxy, and the
+     direct segment URLs are not served. Live on web is SABR, and reaching it
+     means driving the SABR session with live semantics behind a hand-written
+     dynamic MPD, which is its own piece of work.
+
+     `is_live` rather than `is_live_content`, which stays true for the VOD a
+     finished stream leaves behind. */
+  if (info.basic_info?.is_live) throw new Error(LIVE_UNSUPPORTED)
   if (!streaming?.server_abr_streaming_url) throw new Error('youtube: SABR URL is missing')
   const rawFormats = playableFormats(streaming.adaptive_formats ?? []) as unknown as YoutubeFormat[]
   const playbackFormats = rawFormats.map(playbackFormat).filter((format) => format !== undefined)
@@ -390,3 +412,4 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
     recoverMint: () => recoverPoTokenSession(context),
   }
 }
+

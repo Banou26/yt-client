@@ -287,6 +287,13 @@ type WatchPlaylist {
 
 type WatchMeta {
   id: ID!
+  # The watch page branches on this instead of mounting a player: live playback
+  # is not wired, and letting the player try produces three failed attempts and
+  # an internal error string.
+  isLive: Boolean
+  # Viewers watching now, which upstream carries in place of a total view count
+  # while a stream is live.
+  concurrentViewers: Int
   title: String
   viewCountText: String
   publishedDateText: String

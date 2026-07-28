@@ -896,7 +896,10 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
   const first = (type: string) => memo.get(type)?.[0]
   const primary = first('VideoPrimaryInfo') as {
     title?: Text
-    view_count?: { view_count?: Text, short_view_count?: Text }
+    /* `is_live` sits on the VIEW COUNT rather than on the info block: upstream
+       models a live stream as a view count that is a concurrent-viewer count,
+       and `original_view_count` is that number. */
+    view_count?: { view_count?: Text, short_view_count?: Text, is_live?: boolean, original_view_count?: number }
     published?: Text
     relative_date?: Text
   } | undefined
@@ -958,6 +961,8 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
   return {
     id,
     title: text(primary?.title),
+    isLive: primary?.view_count?.is_live === true,
+    concurrentViewers: primary?.view_count?.original_view_count,
     viewCountText: text(primary?.view_count?.view_count ?? primary?.view_count?.short_view_count),
     publishedDateText: text(primary?.published) ?? text(primary?.relative_date),
     likeCountText: likeCount,

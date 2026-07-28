@@ -210,6 +210,13 @@ export type SourceWatchPlaylist = {
 
 export type SourceWatchMeta = {
   id: string
+  // Live playback is not wired yet, so this is what the watch page branches on
+  // to render an explanation instead of a player that cannot start.
+  isLive?: boolean
+  // Concurrent viewers rather than total views. Upstream models a live stream
+  // as a view count that is a watching-now count, so the two share a field
+  // there and are separated here.
+  concurrentViewers?: number
   title?: string
   viewCountText?: string
   publishedDateText?: string

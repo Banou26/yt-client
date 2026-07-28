@@ -4,7 +4,7 @@ import type { RelatedVideosQuery } from '../generated/graphql'
 import type { VideoCardData } from '../components/video-card'
 
 import { css } from '@emotion/react'
-import { EllipsisVertical, Link2, Share2, ThumbsDown, ThumbsUp } from 'lucide-react'
+import { EllipsisVertical, Link2, Radio, Share2, ThumbsDown, ThumbsUp } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { useMutation, useQuery } from 'urql'
 import { Link, useLocation, useSearch } from 'wouter'
@@ -43,6 +43,8 @@ const WATCH_META_QUERY = gql(`
   query WatchMeta($id: ID!, $playlistId: ID, $playlistIndex: Int) {
     watch(id: $id, playlistId: $playlistId, playlistIndex: $playlistIndex) {
       id
+      isLive
+      concurrentViewers
       title
       viewCountText
       publishedDateText
@@ -91,6 +93,42 @@ const style = css`
 
   .stage {
     grid-column: 1;
+  }
+
+  /* Sized like the player it stands in for, so the page does not reflow between
+     a live video and an ordinary one. */
+  .live-notice {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.8rem;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 1.4rem;
+    background: var(--bg-subtle);
+    color: var(--text-secondary);
+    text-align: center;
+  }
+
+  .live-notice h2 {
+    margin: 0;
+    font-size: 1.8rem;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .live-notice p {
+    margin: 0;
+    max-width: 42rem;
+    font-size: 1.4rem;
+  }
+
+  .live-notice a {
+    margin-top: 0.8rem;
+    color: var(--accent);
+    font-size: 1.4rem;
+    font-weight: 500;
   }
 
   .primary {
@@ -450,13 +488,30 @@ const WatchPage = () => {
           it to another parent would remount it and restart playback. Only the
           grid placement of .stage changes. */}
       <div className='stage'>
-        <VideoPlayer
-          key={`player:${videoId}`}
-          videoId={videoId}
-          startAt={startAt}
-          theater={theater}
-          onTheater={toggleTheater}
-        />
+        {/* A live stream never reaches the player. Its watch-page response has
+            no DASH or HLS manifest and its direct format URLs are refused, so
+            mounting the player would spend three retries to arrive at an
+            internal error string. Saying so once is the honest outcome. */}
+        {watch?.isLive
+          ? (
+            <div className='live-notice'>
+              <Radio size={32} strokeWidth={1.5} />
+              <h2>This is a live stream</h2>
+              <p>Live playback is not wired up in this client yet. Everything else on this page works.</p>
+              <a href={`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`} target='_blank' rel='noreferrer'>
+                Watch it on YouTube
+              </a>
+            </div>
+          )
+          : (
+            <VideoPlayer
+              key={`player:${videoId}`}
+              videoId={videoId}
+              startAt={startAt}
+              theater={theater}
+              onTheater={toggleTheater}
+            />
+          )}
       </div>
       <div className='primary'>
         {watch?.title ? <h1 className='title'>{watch.title}</h1> : undefined}

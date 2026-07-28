@@ -647,6 +647,8 @@ describe('youtube normalization', () => {
     ])
     expect(normalizeWatchMeta({ contents_memo: memo }, 'abc')).toEqual({
       id: 'abc',
+      isLive: false,
+      concurrentViewers: undefined,
       viewCountText: '55,504,131 views',
       publishedDateText: 'Jun 8, 2021',
       likeCountText: '123K',
@@ -665,6 +667,22 @@ describe('youtube normalization', () => {
         { id: 'rel2', title: 'Related two', badges: [] },
       ],
     })
+  })
+
+  it('reads liveness off the view count, which is where upstream puts it', () => {
+    /* A live stream has no separate live flag on VideoPrimaryInfo: the view
+       count IS the concurrent-viewer count and carries the flag. Reading a
+       top-level field instead finds nothing, and the watch page would then
+       mount a player that cannot start. */
+    const memo = new Map<string, unknown[]>([
+      ['VideoPrimaryInfo', [{
+        title: { text: 'Live now' },
+        view_count: { view_count: { text: '12,043 watching now' }, is_live: true, original_view_count: 12043 },
+      }]],
+    ])
+    const meta = normalizeWatchMeta({ contents_memo: memo }, 'live1')
+    expect(meta?.isLive).toBe(true)
+    expect(meta?.concurrentViewers).toBe(12043)
   })
 
   it('normalizes a queue row off its singular thumbnail field', () => {
