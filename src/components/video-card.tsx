@@ -327,6 +327,30 @@ const style = css`
     border-radius: 1.2rem;
     overflow: hidden;
     background: var(--bg-elevated);
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+  }
+
+  /* The hovered card grows, the way upstream's inline preview does.
+
+     Not decoration. The preview's scrubber is a strip pinned to the bottom edge
+     of this box, and at the grid's resting size that strip is roughly 12px of a
+     186px thumbnail: a target under 7% of the card tall, sitting on its very
+     last pixels. Growing the box grows the strip with it, which is most of what
+     makes scrubbing possible at all.
+
+     A transform rather than a width or a grid change: it must not reflow the
+     row, or every neighbouring card would shuffle under the pointer while the
+     reader is aiming at one of them. The card is lifted so it overlaps its
+     neighbours instead of pushing them. */
+  &.previewing .thumb {
+    transform: scale(1.18);
+    box-shadow: 0 0.8rem 2.4rem rgb(0 0 0 / 45%);
+    z-index: 2;
+  }
+
+  &.previewing {
+    position: relative;
+    z-index: 2;
   }
 
   /* Shorts are vertical, and a 16/9 box would letterbox one into a slot mostly
@@ -334,6 +358,18 @@ const style = css`
      changes shape, so the surrounding layout is untouched. */
   &.short .thumb {
     aspect-ratio: 9 / 16;
+  }
+
+  /* A portrait card is already tall and narrow; scaling it as much as a 16/9
+     one would push it well past its column. */
+  &.short.previewing .thumb {
+    transform: scale(1.08);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .thumb {
+      transition: none;
+    }
   }
 
   .thumb img {
@@ -497,8 +533,13 @@ export const VideoCard = (
   const meta = formatMeta(video.viewCount, video.publishedText)
   const progress = resumePercent(video.progressPercent)
   const prefetch = usePrefetchOnIntent(video.id)
-  const classes = [variant, video.isShort ? 'short' : undefined].filter(Boolean).join(' ')
   const [previewing, setPreviewing] = useState(false)
+  // Separate from `previewing`: the card grows only once the preview is really
+  // playing, which is a second or so after the pointer arrives.
+  const [previewReady, setPreviewReady] = useState(false)
+  const classes = [variant, video.isShort ? 'short' : undefined, previewReady ? 'previewing' : undefined]
+    .filter(Boolean)
+    .join(' ')
   /* Pointer type rather than a media query: a touch device reports hover events
      on tap, which would start a session on the way to opening the video. An
      upcoming premiere has a page but nothing to play, so it has no preview
@@ -512,13 +553,16 @@ export const VideoCard = (
       onPointerEnter={(event: TargetedPointerEvent<HTMLElement>) => {
         if (canPreview && event.pointerType === 'mouse') setPreviewing(true)
       }}
-      onPointerLeave={() => setPreviewing(false)}
+      onPointerLeave={() => {
+        setPreviewing(false)
+        setPreviewReady(false)
+      }}
     >
       <Link href={watchHref} className='thumb' tabIndex={-1} aria-hidden='true'>
         {video.thumbnail ? <img src={video.thumbnail} alt='' loading='lazy' /> : undefined}
         {/* Mounted only while hovering: the component owns the session, so
             unmounting it is what tears the session down. */}
-        {previewing ? <HoverPreview videoId={video.id} /> : undefined}
+        {previewing ? <HoverPreview videoId={video.id} onReady={setPreviewReady} /> : undefined}
         {video.isLive
           ? <span className='badge live'>LIVE</span>
           : duration ? <span className='badge'>{duration}</span> : undefined}

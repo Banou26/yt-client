@@ -52,12 +52,16 @@ const style = css`
     object-fit: cover;
   }
 
+  /* The grab area is deliberately several times the height of the bar it draws.
+     A 3px track on the last pixels of a thumbnail is not a pointer target at
+     any card size, so the strip reaches well above the line and the line itself
+     sits at the bottom of it. */
   .scrubber {
     position: absolute;
     left: 0;
     right: 0;
     bottom: 0;
-    height: 1.2rem;
+    height: 2.4rem;
     display: flex;
     align-items: flex-end;
     cursor: pointer;
@@ -66,8 +70,15 @@ const style = css`
 
   .track {
     width: 100%;
-    height: 0.3rem;
+    height: 0.4rem;
     background: rgba(255, 255, 255, 0.3);
+    transition: height 0.12s ease;
+  }
+
+  /* Thickens under the pointer, so the thing being aimed at confirms the aim
+     before the press rather than after it. */
+  .scrubber:hover .track {
+    height: 0.6rem;
   }
 
   .fill {
@@ -99,10 +110,17 @@ const style = css`
  * design: this is a hover affordance over a thumbnail that is already correct,
  * so an error card in its place would be worse than no preview.
  */
-export const HoverPreview = ({ videoId }: { videoId: string }) => {
+export const HoverPreview = (
+  { videoId, onReady }: { videoId: string, onReady?: (ready: boolean) => void },
+) => {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [progress, setProgress] = useState(0)
   const [ready, setReady] = useState(false)
+  /* Held in a ref so the effect below does not depend on the callback: the card
+     passes an inline arrow, so a dependency on it would tear the session down
+     and rebuild it on every parent render. */
+  const onReadyRef = useRef(onReady)
+  onReadyRef.current = onReady
 
   useEffect(() => {
     const video = videoRef.current
@@ -136,6 +154,10 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
         // starts paused still rolls.
         void video.play().catch(() => {})
         setReady(true)
+        // The card grows once there is something to grow around. Signalled from
+        // here rather than from the hover itself so sweeping a grid does not
+        // make every card jump on the way past.
+        onReadyRef.current?.(true)
       })().catch(() => {
         // Silent: the thumbnail underneath is still the right thing to show.
       })
@@ -150,6 +172,7 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
       clearTimeout(timer)
       abort.abort()
       video.removeEventListener('timeupdate', onTime)
+      onReadyRef.current?.(false)
       void controller?.destroy()
     }
   }, [videoId])
