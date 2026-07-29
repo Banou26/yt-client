@@ -116,12 +116,24 @@ const sidAuthorization = async () => {
   return `SAPISIDHASH ${timestamp}_${hash}`
 }
 
+/* This egress path bypasses Scramjet entirely (it is a direct port to the host,
+   not the rewritten global fetch), so NOTHING adds these for us. The one frame
+   request that has always worked, the SABR media fetch in sabr.ts, sets them by
+   hand for exactly this reason. att/get did not, and Innertube answers a
+   cross-origin-looking POST with no Origin at all with a 403, which is what kept
+   the minter session from ever being built. */
+const YOUTUBE_ORIGIN_HEADERS = {
+  origin: 'https://www.youtube.com',
+  referer: 'https://www.youtube.com/',
+} as const
+
 const fetchChallenge = async (context: BotguardContext) => {
   const authorization = await sidAuthorization()
   const authCookie = readAuthCookie()
   const response = await attestFetch(ATT_GET_URL, {
     method: 'POST',
     headers: {
+      ...YOUTUBE_ORIGIN_HEADERS,
       'content-type': 'application/json',
       'x-goog-visitor-id': context.client.visitorData,
       'x-youtube-client-name': '1',
@@ -193,6 +205,8 @@ const createSession = async (context: BotguardContext): Promise<MinterSession> =
     const response = await attestFetch(buildURL('GenerateIT', true), {
       method: 'POST',
       headers: {
+        // Same reasoning as att/get: the real client sends these to jnn-pa too.
+        ...YOUTUBE_ORIGIN_HEADERS,
         'content-type': 'application/json+protobuf',
         'x-goog-api-key': GOOG_API_KEY,
         'x-user-agent': 'grpc-web-javascript/0.1',
