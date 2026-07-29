@@ -422,8 +422,14 @@ const style = css`
   }
 `
 
-export const ChannelPage = ({ params }: { params: { channelId: string } }) => {
-  const id = params.channelId
+/* Reached from two routes, because a channel has two URL forms and the app has
+   to accept both: `/channel/UC...` and the one youtube.com actually hands out
+   now, `/@handle`. The source already resolves a handle (it detects the leading
+   `@` and spends one resolveURL round trip on it), so the handle is passed
+   straight through as the id rather than resolved here. Without the second route
+   a pasted canonical channel URL landed on the 404 page. */
+export const ChannelPage = ({ params }: { params: { channelId?: string, handle?: string } }) => {
+  const id = params.channelId ?? `@${params.handle ?? ''}`
   // The channel id stays a path param, matching youtube.com, while the tab and
   // its options ride in the query string: they address a view of the same page
   // rather than a different page, and that keeps a tab shareable.

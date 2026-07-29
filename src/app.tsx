@@ -224,6 +224,23 @@ export const App = () => {
               <Route path='/signin' component={SignInPage} />
               <Route path='/search/:query' component={LegacySearchRedirect} />
               <Route path='/watch/:videoId' component={LegacyWatchRedirect} />
+              {/* `/@handle`, the channel URL youtube.com hands out today, which
+                  a reader following a link from outside the app arrives with.
+                  Wouter's parser does not accept a literal prefix before a param
+                  inside one segment, so `/@:handle` silently never matches and
+                  such a link landed on Not found. Claim the whole segment and
+                  keep it only when it is a handle: every real single-segment
+                  route is declared above, and Switch takes the first match, so
+                  this can only ever see paths nothing else wanted.
+
+                  The source resolves the handle itself (it detects the leading
+                  `@` and spends one resolveURL round trip), so it is passed
+                  through rather than resolved here. */}
+              <Route path='/:segment'>
+                {(params: { segment?: string }) => params.segment?.startsWith('@')
+                  ? <ChannelPage params={{ handle: params.segment.slice(1) }} />
+                  : <p className='not-found'>Not found</p>}
+              </Route>
               <Route>
                 <p className='not-found'>Not found</p>
               </Route>
