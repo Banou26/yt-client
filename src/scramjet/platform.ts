@@ -126,19 +126,33 @@ const create = async () => {
     return channel.port2
   }
 
+  /* Whether THIS @fkn/lib can carry a Cookie request header at all.
+
+     `extension.fetch` normalises through `new Request`, whose constructor drops
+     forbidden header names, and the lib rescues back only the names on this
+     list. Builds up to 0.9.3 list `origin` and `referer` alone, so a
+     cookie-bearing request reaches YouTube with no cookies whatsoever and reads
+     as signed out; from 0.9.4 `cookie` is on the list and is applied per request
+     by the extension's own header rule.
+
+     Probed rather than version-gated on purpose: it turns itself on the moment
+     the lib updates, with no second commit here, and it can never send an
+     identity into a build that would silently discard it. */
+  const forgeableCookie = ((lib as { FORGEABLE_HEADERS?: string[] }).FORGEABLE_HEADERS ?? []).includes('cookie')
+
   let lastEgressMode: boolean | undefined
   const runExtFetch = async (request: Extract<ExtFetchRequest, { type: 'fetch' }>, signal: AbortSignal) => {
     const exposed = lib.isExtensionExposed()
     if (exposed !== lastEgressMode) {
       lastEgressMode = exposed
       console.info(`[yt-client] egress → ${exposed
-        ? 'FKN extension for anonymous requests, tunnel for identity-bearing ones'
+        ? `FKN extension (direct native fetch${forgeableCookie ? '' : ', anonymous requests only'})`
         : 'FKN relay + webvpn tunnel'}`)
     }
     if (!exposed) return null
     // Answering null is exactly the not-exposed answer, so the caller falls
     // back to the tunnel with no extra branch on either side.
-    if (carriesIdentity(request.options.headers)) return null
+    if (!forgeableCookie && carriesIdentity(request.options.headers)) return null
     /* `extension.fetch`, NOT the root `fetch`. The root one is the auto-select
        layer (extension, then desktop, then cloud, re-checked per call), so a
        flip in exposure between the gate above and the call below would put a
