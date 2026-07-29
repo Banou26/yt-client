@@ -285,16 +285,30 @@ const boot = async () => {
     }
     element.addEventListener('load', check)
     signInPoll = setInterval(check, 500)
-    // Prewarm the webvpn relay to both login hosts (a dial+close that warms the
-    // relay session) BEFORE the first navigation - a cold libcurl dial to a
-    // never-warmed host hangs, so pay that cost up front, then navigate. Capped
-    // so a slow/failed warm never strands the frame (the app also has a reveal
-    // fallback); the navigation itself re-warms if needed.
-    void remote
-      .then((api) => Promise.race([
-        Promise.allSettled([api.prewarm('www.youtube.com'), api.prewarm('accounts.google.com')]),
-        new Promise((resolve) => setTimeout(resolve, 8000)),
-      ]))
+    /* Prewarm the webvpn relay to both login hosts (a dial+close that warms the
+       relay session) BEFORE the first navigation - a cold libcurl dial to a
+       never-warmed host hangs, so pay that cost up front, then navigate. Capped
+       so a slow/failed warm never strands the frame (the app also has a reveal
+       fallback); the navigation itself re-warms if needed.
+
+       Skipped entirely when the extension is serving this flow, because then
+       libcurl is never dialled and the warm is pure dead time in front of the
+       login page (measured at up to the full 8s cap). The probe doubles as the
+       check: a non-null answer means the extension took the request, and
+       `generate_204` is the cheapest thing to ask it for. */
+    const warmup = extFetch('https://www.youtube.com/generate_204', { method: 'GET' }, undefined)
+      .then(async (viaExtension) => {
+        if (viaExtension) {
+          await viaExtension.body?.cancel().catch(() => {})
+          return
+        }
+        const api = await remote
+        await Promise.race([
+          Promise.allSettled([api.prewarm('www.youtube.com'), api.prewarm('accounts.google.com')]),
+          new Promise((resolve) => setTimeout(resolve, 8000)),
+        ])
+      })
+    void warmup
       .catch(() => {})
       .finally(() => { if (signInElement === element) proxied.go(SIGN_IN_URL) })
   }
