@@ -84,6 +84,24 @@ const readSapisid = () => {
   }
 }
 
+/* The jar itself, for the challenge request.
+
+   SAPISIDHASH is not a bearer token: it is a hash OF the SAPISID cookie, and the
+   server authenticates it by recomputing the hash from the cookie it received.
+   Sent without that cookie there is nothing to recompute against, so the
+   Authorization header is unverifiable and att/get is answered as if anonymous.
+   This request was sending exactly that, on every transport, which the app's own
+   Innertube clients already get right (see `authCookie` in innertube.ts, whose
+   comment records the inverse failure: identity cookies without a matching
+   Authorization header get 401s). The pairing has to go both ways. */
+const readAuthCookie = () => {
+  try {
+    return document.cookie.includes('SAPISID=') ? document.cookie : undefined
+  } catch {
+    return undefined
+  }
+}
+
 // Signed-in header parity for the challenge fetch (the real client sends it):
 // SAPISIDHASH is the hex sha1 of '<ts> <SAPISID> <origin>' as '<ts>_<hash>'.
 const sidAuthorization = async () => {
@@ -100,6 +118,7 @@ const sidAuthorization = async () => {
 
 const fetchChallenge = async (context: BotguardContext) => {
   const authorization = await sidAuthorization()
+  const authCookie = readAuthCookie()
   const response = await attestFetch(ATT_GET_URL, {
     method: 'POST',
     headers: {
@@ -107,7 +126,9 @@ const fetchChallenge = async (context: BotguardContext) => {
       'x-goog-visitor-id': context.client.visitorData,
       'x-youtube-client-name': '1',
       'x-youtube-client-version': context.client.clientVersion,
-      ...(authorization && { authorization }),
+      // Only ever together: a hash with no cookie cannot be verified, and a
+      // cookie with no hash is answered with a 401.
+      ...(authorization && authCookie && { authorization, cookie: authCookie }),
     },
     body: JSON.stringify({ engagementType: 'ENGAGEMENT_TYPE_UNBOUND', context }),
   })
