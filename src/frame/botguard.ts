@@ -151,27 +151,57 @@ const fetchChallenge = async (context: BotguardContext) => {
   return { ...challenge, interpreter }
 }
 
+/* Names the failing step. Four things can break here and they need completely
+   different fixes: the challenge fetch (auth or transport), evaluating the
+   interpreter (it is obfuscated JS running in a REWRITTEN realm, so the
+   rewriter is a real suspect), taking the snapshot, and GenerateIT. Without a
+   label they all surface as the same silent cold-start fallback. */
+const stage = async <T>(name: string, run: () => Promise<T>): Promise<T> => {
+  try {
+    return await run()
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(`botguard: ${name} failed: ${reason}`, { cause: error })
+  }
+}
+
 const createSession = async (context: BotguardContext): Promise<MinterSession> => {
-  const challenge = await fetchChallenge(context)
-  const script = document.createElement('script')
-  script.textContent = challenge.interpreter
-  document.head.appendChild(script)
-  const client = await BG.BotGuardClient.create({
-    globalObj: globalThis,
-    globalName: challenge.globalName,
-    program: challenge.program,
+  const challenge = await stage('challenge', () => fetchChallenge(context))
+  const { client, script } = await stage('interpreter', async () => {
+    const element = document.createElement('script')
+    element.textContent = challenge.interpreter
+    document.head.appendChild(element)
+    // The interpreter defines its global synchronously on evaluation, so a
+    // missing global here means the script did not run as written - which is
+    // what a rewriter that could not parse it would look like.
+    if (!(challenge.globalName in globalThis)) {
+      element.remove()
+      throw new Error(`the interpreter did not define ${challenge.globalName} (script evaluated but its global is absent)`)
+    }
+    return {
+      client: await BG.BotGuardClient.create({
+        globalObj: globalThis,
+        globalName: challenge.globalName,
+        program: challenge.program,
+      }),
+      script: element,
+    }
   })
   const webPoSignalOutput: WebPoSignalOutput = []
-  const botguardResponse = await client.snapshot({ webPoSignalOutput })
-  const integrity = await attestFetch(buildURL('GenerateIT', true), {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json+protobuf',
-      'x-goog-api-key': GOOG_API_KEY,
-      'x-user-agent': 'grpc-web-javascript/0.1',
-    },
-    body: JSON.stringify([REQUEST_KEY, botguardResponse]),
-  }).then((response) => response.json()) as [string | null, number, number | null, string]
+  const botguardResponse = await stage('snapshot', () => client.snapshot({ webPoSignalOutput }))
+  const integrity = await stage('GenerateIT', async () => {
+    const response = await attestFetch(buildURL('GenerateIT', true), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json+protobuf',
+        'x-goog-api-key': GOOG_API_KEY,
+        'x-user-agent': 'grpc-web-javascript/0.1',
+      },
+      body: JSON.stringify([REQUEST_KEY, botguardResponse]),
+    })
+    if (!response.ok) throw new Error(`returned ${response.status}`)
+    return await response.json() as [string | null, number, number | null, string]
+  })
   const token = {
     integrityToken: integrity[0] ?? undefined,
     estimatedTtlSecs: integrity[1],
@@ -187,16 +217,43 @@ const createSession = async (context: BotguardContext): Promise<MinterSession> =
   }
 }
 
+/* Why a botguard failure has to be LOUD.
+
+   Every caller below starts the session with `void getSession(...).catch(() => {})`
+   and carries on with a cold-start token, because a slow chain must not block
+   playback. The cost of that shape is that a PERMANENTLY broken chain looks
+   exactly like a slow one: playback starts, StreamProtectionStatus sits at 2,
+   media is withheld at the ~60s preview, and nothing anywhere says why. The
+   `yt-client:po-tokens` store staying empty is the only outward sign, and you
+   have to know to look for it.
+
+   So report the reason once per distinct message. Deduped rather than logged
+   every mint, because a dead chain is retried on every request and would
+   otherwise bury the rest of the console. */
+const reported = new Set<string>()
+
+const reportSessionFailure = (error: unknown) => {
+  const reason = error instanceof Error ? error.message : String(error)
+  if (reported.has(reason)) return
+  reported.add(reason)
+  console.error(
+    `yt-client: botguard session failed, falling back to cold-start tokens (playback will stop at the preview limit): ${reason}`,
+    error,
+  )
+}
+
 const getSession = (context: BotguardContext) => {
   if (session && performance.now() < session.expiresAt) return Promise.resolve(session)
   pending ??= createSession(context).then(
     (next) => {
       session = next
       pending = undefined
+      reported.clear()
       return next
     },
-    (error) => {
+    (error: unknown) => {
       pending = undefined
+      reportSessionFailure(error)
       throw error
     },
   )
