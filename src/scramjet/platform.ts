@@ -69,6 +69,31 @@ const mountBroker = () => {
   return loaded
 }
 
+/* Requests the extension cannot carry correctly, so they stay on the tunnel.
+
+   `extension.fetch` builds a `new Request(url, init)` and forwards
+   `[...request.headers]`. The Request constructor silently drops FORBIDDEN
+   header names, and the lib rescues only `origin` and `referer` back out into
+   its `unsafeHeaders` smuggle list. `cookie` is not on that list, and the call
+   defaults to `credentials: 'omit'`, so an identity-bearing request arrives at
+   YouTube with no cookies whatsoever: not Scramjet's jar, and not the
+   browser's either.
+
+   `authorization` belongs here even though it SURVIVES the constructor, and
+   that is the subtle half. It carries a SAPISIDHASH, which the server verifies
+   by recomputing the hash from the SAPISID cookie it received. Sent without
+   that cookie the header is not merely useless, it is inconsistent, so the
+   attestation call is answered as if anonymous - which is what leaves the
+   minter on a cold-start token and playback on the ~60s preview tier.
+
+   Everything anonymous still goes native, and that is where the latency is:
+   SABR media and init segments set only origin/referer/content-type, so the
+   bulk of the bytes keep the direct path. */
+const IDENTITY_HEADERS = ['cookie', 'authorization']
+
+export const carriesIdentity = (headers: Record<string, string> | undefined) =>
+  !!headers && Object.keys(headers).some((name) => IDENTITY_HEADERS.includes(name.toLowerCase()))
+
 const create = async () => {
   const worker = new Worker(new URL('./egress.worker.ts', import.meta.url), { type: 'module' })
   const relayAbort = new AbortController()
@@ -106,9 +131,14 @@ const create = async () => {
     const exposed = lib.isExtensionExposed()
     if (exposed !== lastEgressMode) {
       lastEgressMode = exposed
-      console.info(`[yt-client] egress → ${exposed ? 'FKN extension (direct native fetch)' : 'FKN relay + webvpn tunnel'}`)
+      console.info(`[yt-client] egress → ${exposed
+        ? 'FKN extension for anonymous requests, tunnel for identity-bearing ones'
+        : 'FKN relay + webvpn tunnel'}`)
     }
     if (!exposed) return null
+    // Answering null is exactly the not-exposed answer, so the caller falls
+    // back to the tunnel with no extra branch on either side.
+    if (carriesIdentity(request.options.headers)) return null
     /* `extension.fetch`, NOT the root `fetch`. The root one is the auto-select
        layer (extension, then desktop, then cloud, re-checked per call), so a
        flip in exposure between the gate above and the call below would put a
