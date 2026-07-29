@@ -106,3 +106,32 @@ describe('FKN transport', () => {
     expect(result.body).toContain('<body></body>')
   })
 })
+
+describe('webvpn transport prefers the extension', () => {
+  it('uses the extension when it answers, and falls back to libcurl when it does not', async () => {
+    const calls: string[] = []
+    const remote = Promise.resolve({
+      libcurlFetch: async (_id: string, url: string) => {
+        calls.push(`libcurl:${url}`)
+        return { status: 200, statusText: 'OK', headers: [] as [string, string][], body: null }
+      },
+      cancelLibcurlFetch: async () => {},
+    })
+    // An exposed extension answers, so webvpn must not be touched at all: that
+    // is the whole point of routing sign-in through it.
+    const viaExt = createWebvpnTransport(remote, async (url) => {
+      calls.push(`ext:${url}`)
+      return { status: 200, statusText: 'OK', headers: [], body: null }
+    })
+    await viaExt.init()
+    await viaExt.request(new URL('https://accounts.google.com/ServiceLogin'), 'GET', null, [], undefined)
+    expect(calls).toEqual(['ext:https://accounts.google.com/ServiceLogin'])
+
+    // Answering null is the not-exposed signal, so the tunnel takes over.
+    calls.length = 0
+    const viaTunnel = createWebvpnTransport(remote, async () => null)
+    await viaTunnel.init()
+    await viaTunnel.request(new URL('https://accounts.google.com/ServiceLogin'), 'GET', null, [], undefined)
+    expect(calls).toEqual(['libcurl:https://accounts.google.com/ServiceLogin'])
+  })
+})

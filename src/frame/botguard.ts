@@ -6,7 +6,7 @@ import { egressFetch } from './egress'
 
 // BotGuard attestation (att/get, the interpreter script, GenerateIT) runs against
 // Google's anti-bot backends, which reject the server-side FKN proxy fingerprint
-// the scramjet-trapped global fetch routes through (the request aborts) — the same
+// the scramjet-trapped global fetch routes through (the request aborts) - the same
 // wall the sign-in flow hit. Route these over the libcurl/webvpn egress instead:
 // in-browser Chrome-impersonated TLS that Google accepts, with no CORS. Without a
 // live attestation the mint falls back to a cold-start token, which only earns the
@@ -297,6 +297,13 @@ export const warmPoTokenSession = (context: BotguardContext, identifier: string)
   void getSession(context).catch(() => {})
 }
 
+/* How long the first mint may wait for a real minter session.
+
+   Bounded rather than unlimited: if the botguard chain is genuinely dead, a
+   cold-start token still buys the preview window, which is a better outcome
+   than a watch page that never starts at all. */
+const SESSION_WAIT_MS = 10_000
+
 export const mintPoToken = async (identifier: string, context: BotguardContext) => {
   if (session && performance.now() < session.expiresAt) return mintSessionToken(session, identifier)
   const stored = readStoredToken(identifier)
@@ -304,10 +311,26 @@ export const mintPoToken = async (identifier: string, context: BotguardContext) 
     warmPoTokenSession(context, identifier)
     return stored
   }
-  // The session-bound minter is not ready yet: start playback on a cold-start
-  // token, which SABR accepts while StreamProtectionStatus is 2. Later requests
-  // mint through the session once it lands.
-  void getSession(context).catch(() => {})
+  /* WAIT for the session instead of starting on a cold-start token.
+
+     The old comment here claimed later requests would "mint through the session
+     once it lands", and that is true of the mint but not of the STREAM: SABR
+     fixes a session's attestation state from its first request, so a stream
+     opened on a cold-start token stays StreamProtectionStatus 2 for its whole
+     life and has media withheld at the ~60s preview even after a real token is
+     available. `recoverMint` cannot rescue it either, since it rebuilds the
+     botguard session and not the playback session.
+
+     `preparePoToken` was written to be awaited before playback for exactly this
+     reason and was never called from anywhere, so the wait has to happen here,
+     at the one point every SABR request funnels through. Everything ahead of it
+     (player fetch, manifest build) still overlaps with the warm-up, so the cost
+     is only whatever the chain has left to finish. */
+  const live = await Promise.race([
+    getSession(context).catch(() => undefined),
+    new Promise<undefined>((resolve) => { setTimeout(() => resolve(undefined), SESSION_WAIT_MS) }),
+  ])
+  if (live) return mintSessionToken(live, identifier)
   return BG.PoToken.generateColdStartToken(identifier)
 }
 

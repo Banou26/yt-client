@@ -160,8 +160,10 @@ const boot = async () => {
   // registration + config as the engine (the SW multiplexes controllers by their
   // random-id prefix) and its cookie jar syncs to the engine's via the shared
   // __scramjet_controller IndexedDB + BroadcastChannel, so a completed login
-  // still propagates. The engine keeps the latency-tuned FKN proxy — untouched.
-  const webvpnTransport = createWebvpnTransport(remote)
+  // still propagates. The engine keeps the latency-tuned FKN proxy - untouched.
+  // Prefer the extension here too: the whole point is that an exposed extension
+  // means webvpn is not used at all.
+  const webvpnTransport = createWebvpnTransport(remote, extFetch)
   await webvpnTransport.init()
   const webvpnController = new Controller({
     serviceworker,
@@ -182,7 +184,7 @@ const boot = async () => {
 
   // Whether the proxied frame has painted a real document. Scramjet drives
   // navigation through the service worker, so neither the iframe `load` event
-  // nor its location are reliable — detect content directly: about:blank has an
+  // nor its location are reliable - detect content directly: about:blank has an
   // empty body, a rendered login page has real structure.
   const signInRendered = (element: HTMLIFrameElement) => {
     try {
@@ -205,12 +207,12 @@ const boot = async () => {
   }
 
   const signInComplete = (element: HTMLIFrameElement, prefix: string) => {
-    // SAPISID in the shared jar is the definitive "logged in" signal — Google
+    // SAPISID in the shared jar is the definitive "logged in" signal - Google
     // only sets it after a successful auth, at which point it redirects back to
     // youtube.com. Gate on it, and only hold off if the frame is still visibly
     // on an accounts.google.com page (mid-flow); if the location is unreadable,
     // trust the cookie.
-    // Read the webvpn controller's jar — the sign-in frame's cookies land there
+    // Read the webvpn controller's jar - the sign-in frame's cookies land there
     // first (it syncs to the engine jar for the authenticated reboot).
     const cookies = webvpnController.cookieJar.getCookies(new URL('https://www.youtube.com/'), false) as string
     if (!/(?:^|;\s*)SAPISID=/.test(cookies)) return false
@@ -223,7 +225,7 @@ const boot = async () => {
     const element = signInElement
     signInElement = undefined
     if (!element) return
-    // The controller has no frame disposal API — drop it from the webvpn
+    // The controller has no frame disposal API - drop it from the webvpn
     // controller's routing list (that's where the sign-in frame lives) and
     // remove the element.
     const index = webvpnController.frames.findIndex((proxied) => proxied.element === element)
@@ -243,7 +245,7 @@ const boot = async () => {
     // page paints over it.
     element.style.cssText = 'position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: #0f0f0f; z-index: 10;'
     document.body.appendChild(element)
-    // Untapped frame on the WEBVPN controller — no youtube-frame.js injection,
+    // Untapped frame on the WEBVPN controller - no youtube-frame.js injection,
     // the real rewritten login pages run over libcurl against the shared jar.
     const proxied = webvpnController.createFrame(element)
     signInElement = element
@@ -255,7 +257,7 @@ const boot = async () => {
       // The youtube.com hops (the session-entry page at the start, the cookie
       // return at the end) are plumbing the user shouldn't see: keep the frame
       // invisible while it is on youtube.com so only the Google auth pages ever
-      // show. Leave an unreadable ('') target alone — mid-navigation flicker.
+      // show. Leave an unreadable ('') target alone - mid-navigation flicker.
       if (target) element.style.visibility = isYoutubeHop(target) ? 'hidden' : 'visible'
       // First rendered NON-youtube document = the auth page is up; tell the app
       // to drop its loading overlay. While still on youtube.com the overlay
@@ -284,7 +286,7 @@ const boot = async () => {
     element.addEventListener('load', check)
     signInPoll = setInterval(check, 500)
     // Prewarm the webvpn relay to both login hosts (a dial+close that warms the
-    // relay session) BEFORE the first navigation — a cold libcurl dial to a
+    // relay session) BEFORE the first navigation - a cold libcurl dial to a
     // never-warmed host hangs, so pay that cost up front, then navigate. Capped
     // so a slow/failed warm never strands the frame (the app also has a reveal
     // fallback); the navigation itself re-warms if needed.
@@ -349,7 +351,7 @@ const boot = async () => {
     // extension's native CORS-free fetch when present, else the libcurl/webvpn
     // tunnel. Each in-flight request gets an AbortController so a frame-side
     // cancel (e.g. a seek dropping stale segment requests) aborts the extension
-    // fetch too — the tunnel path is cancelled via cancelLibcurlFetch.
+    // fetch too - the tunnel path is cancelled via cancelLibcurlFetch.
     const egressAborts = new Map<number, AbortController>()
     egressChannel.port2.addEventListener('message', (event) => {
       const request = event.data as FrameEgressRequest

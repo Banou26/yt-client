@@ -17,9 +17,9 @@ const AUTH_HOST = /(^|\.)(accounts|myaccount)\.google\.com$/
 
 // The egress strategy differs per transport: the engine uses the FKN broker proxy
 // (fknFetch); the sign-in frame uses libcurl over the webvpn relay (in-browser
-// Chrome-impersonated TLS Google's login backend accepts). The request-shaping —
-// bootstrap short-circuit, header/body marshalling, and the auth soft-redirect
-// promotion — is identical, so both share this builder.
+// Chrome-impersonated TLS Google's login backend accepts). The request-shaping
+// (bootstrap short-circuit, header/body marshalling, and the auth soft-redirect
+// promotion) is identical, so both share this builder.
 type EgressFetch = (url: string, options: TransportRequest, signal: AbortSignal | undefined) => Promise<TransportResponse>
 
 const createTransport = (ready: () => Promise<void>, egressFetch: EgressFetch): ProxyTransport => {
@@ -51,7 +51,7 @@ const createTransport = (ready: () => Promise<void>, egressFetch: EgressFetch): 
       const requestHeaders = Object.fromEntries(headers)
       // A GET/HEAD must never carry a body. Chromium's service worker reports
       // request.body as null, but Firefox never implemented the body getter, so
-      // it arrives as undefined — a strict null check let it through as an
+      // it arrives as undefined - a strict null check let it through as an
       // empty (truthy) ArrayBuffer, which the native fetch downstream (broker,
       // extension) rejects: "Request constructor: HEAD or GET Request cannot
       // have a body."
@@ -116,14 +116,29 @@ export const createFknTransport = (
     },
   )
 
-// The sign-in transport: the WHOLE login flow (youtube.com + accounts.google.com)
-// over one libcurl/webvpn connection, so Google sees a single in-browser-TLS,
-// single-IP session — which its login backend accepts (the FKN proxy is rejected).
-export const createWebvpnTransport = (remote: Promise<Pick<EgressApi, 'libcurlFetch' | 'cancelLibcurlFetch'>>): ProxyTransport => {
+/* The sign-in transport: the WHOLE login flow (youtube.com + accounts.google.com)
+   over ONE connection, so Google sees a single consistent session, which its
+   login backend accepts where the FKN proxy is rejected.
+
+   When the extension is present that one connection is the user's own browser,
+   which is strictly better than the tunnel here: it is the same native Chrome
+   TLS Google already accepts, and it removes the relay round trip from a flow
+   that is many serial navigations long. Falls back to libcurl/webvpn otherwise.
+
+   `credentials` is never set, so the extension sends NO browser cookies: the
+   login must land in the app's OWN jar, and pulling in whatever Google session
+   the browser already has would sign the app in as a different identity than
+   the one the user chose in the frame. */
+export const createWebvpnTransport = (
+  remote: Promise<Pick<EgressApi, 'libcurlFetch' | 'cancelLibcurlFetch'>>,
+  extFetch?: ExtEgressFetch,
+): ProxyTransport => {
   let requestCounter = 0
   return createTransport(
     async () => { await remote },
     async (url, options, signal) => {
+      const viaExtension = await extFetch?.(url, options, signal)
+      if (viaExtension) return viaExtension
       const api = await remote
       const requestId = `signin:${++requestCounter}`
       signal?.addEventListener('abort', () => { void api.cancelLibcurlFetch(requestId) }, { once: true })

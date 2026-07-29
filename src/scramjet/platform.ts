@@ -160,13 +160,19 @@ const create = async () => {
        do. The extension binding cannot fall through, so the property holds
        structurally rather than by the gate being lucky.
 
-       `redirect` is forced to follow: the extension fetches natively, outside
-       Scramjet's manual-redirect rewriting, so it resolves redirects itself. */
+       `redirect` HONOURS the caller instead of forcing follow. Forcing it was
+       fine while the engine was the only consumer, since resolving redirects
+       natively is what that path wants. The sign-in flow is the opposite: it
+       drives a frame through Google's hops and needs each 3xx surfaced so its
+       soft-redirect promotion can act on the Location, which a followed
+       redirect swallows. A forged Cookie is another reason not to force it,
+       since the extension's header rule matches one exact URL and so does not
+       reapply across a hop. */
     const response = await lib.extension.fetch(request.url, {
       method: request.options.method,
       headers: request.options.headers,
       body: request.options.body ?? undefined,
-      redirect: 'follow',
+      redirect: request.options.redirect ?? 'follow',
       signal,
     })
     return {
