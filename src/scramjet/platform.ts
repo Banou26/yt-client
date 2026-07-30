@@ -199,6 +199,9 @@ const create = async () => {
   const forgeableCookie = ((lib as { FORGEABLE_HEADERS?: string[] }).FORGEABLE_HEADERS ?? []).includes('cookie')
 
   let lastEgressMode: boolean | undefined
+  // Once per session: the failure is a shape disagreement between two
+  // dependencies, so it repeats on every request and would otherwise flood.
+  let warnedExtFetchFailure = false
   const runExtFetch = async (request: Extract<ExtFetchRequest, { type: 'fetch' }>, signal: AbortSignal) => {
     const exposed = lib.isExtensionExposed()
     if (exposed !== lastEgressMode) {
@@ -224,13 +227,44 @@ const create = async () => {
     const redirect = mayHonourManualRedirect(request.options.method)
       ? request.options.redirect ?? 'follow'
       : 'follow'
+    /* A throw from the extension path is answered as `null`, the same as the
+       extension being absent, so the caller re-issues on the tunnel.
+
+       Reported 2026-07-31 as `(p ?? []).map is not a function`, surfacing as
+       `botguard: challenge failed`. That message is @fkn/lib's forgeable-header
+       validator, `(headers ?? []).map(([name]) => ...)`, which requires an array
+       of `[name, value]` pairs; it throws when it is handed anything else. The
+       lib and the extension build are separate artifacts on separate release
+       cadences, so they can disagree about that shape, and when they do EVERY
+       identity-bearing request through the extension throws.
+
+       Without this, that throw propagated into att/get, the minter session was
+       never built, and playback silently spent the rest of the session on
+       cold-start tokens capped at the preview limit. A shape disagreement
+       between two dependencies should cost a fallback, not attestation.
+
+       An abort is rethrown rather than swallowed: it is this caller's own
+       cancellation and the tunnel must not re-issue behind it. Retrying is safe
+       for everything else because the request body is deliberately never
+       transferred (see the port handler below). */
     const response = await lib.extension.fetch(request.url, {
       method: request.options.method,
       headers: request.options.headers,
       body: request.options.body ?? undefined,
       redirect,
       signal,
+    }).catch((error: unknown) => {
+      if (signal.aborted) throw error
+      if (!warnedExtFetchFailure) {
+        warnedExtFetchFailure = true
+        console.warn(
+          '[yt-client] extension fetch failed, falling back to the tunnel for this and later requests:',
+          error instanceof Error ? error.message : String(error),
+        )
+      }
+      return undefined
     })
+    if (!response) return null
     // Nothing usable came back, so answer as if the extension were absent: the
     // caller re-issues on the tunnel, which reports the real status and headers.
     // Safe to retry because the request body is deliberately never transferred.
