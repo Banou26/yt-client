@@ -257,9 +257,18 @@ const create = async () => {
       if (signal.aborted) throw error
       if (!warnedExtFetchFailure) {
         warnedExtFetchFailure = true
+        /* Message AND stack, as separate arguments.
+
+           The message alone ("(p ?? []).map is not a function") names neither
+           the function nor the build it came from, which cost a session of
+           guesswork once. The stack alone is no better, because FIREFOX'S
+           `error.stack` DOES NOT INCLUDE THE MESSAGE the way V8's does, so
+           logging `error.stack ?? error.message` silently drops the one line
+           worth reading on the browser where this fails most. */
         console.warn(
           '[yt-client] extension fetch failed, falling back to the tunnel for this and later requests:',
           error instanceof Error ? error.message : String(error),
+          error instanceof Error ? error.stack : undefined,
         )
       }
       return undefined
