@@ -76,6 +76,30 @@ const style = css`
      so it owns this box while it is up. */
   z-index: 1;
 
+  /* Held invisible until the video actually has a frame to show.
+
+     This box is opaque black and it covers the thumbnail from the moment it
+     mounts, so every millisecond of session setup was painted as a black
+     rectangle where a picture used to be, which reads as the card breaking
+     rather than as the card loading. Fading the preview IN is the same thing as
+     fading the thumbnail OUT, and it needs no second element and no
+     coordination with the card: the still is simply still there, underneath.
+
+     It also fixes the failure case. A preview that never produces a frame now
+     leaves the thumbnail up forever instead of leaving a black hole, which is
+     the behaviour the silent-failure design already asked for everywhere else
+     in this file. */
+  opacity: 0;
+  transition: opacity 0.18s ease;
+
+  &[data-painted] {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+
   video {
     display: block;
     width: 100%;
@@ -202,6 +226,11 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
   const [progress, setProgress] = useState(0)
   const [buffered, setBuffered] = useState(0)
   const [ready, setReady] = useState(false)
+  /* Separate from `ready`, which says the controller exists. This says PIXELS
+     exist, which is the only thing that makes covering the thumbnail correct.
+     `loadeddata` is exactly that signal: readyState has reached
+     HAVE_CURRENT_DATA, so there is a frame for the current position. */
+  const [painted, setPainted] = useState(false)
   const [muted, setMuted] = useState(preferMuted)
   const [storyboards, setStoryboards] = useState<Storyboard[]>([])
   /* Where the pointer is over the strip, which is NOT the playhead: the frame
@@ -269,11 +298,19 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
     video.addEventListener('timeupdate', onTime)
     video.addEventListener('progress', onTime)
 
+    // Checked as well as listened for: Shaka can reach HAVE_CURRENT_DATA before
+    // this effect gets to attach, and a missed event would hold the preview
+    // invisible for its whole life.
+    const onPainted = () => setPainted(true)
+    if (video.readyState >= 2) onPainted()
+    video.addEventListener('loadeddata', onPainted)
+
     return () => {
       clearTimeout(timer)
       abort.abort()
       video.removeEventListener('timeupdate', onTime)
       video.removeEventListener('progress', onTime)
+      video.removeEventListener('loadeddata', onPainted)
       void controller?.destroy()
     }
   }, [videoId])
@@ -315,7 +352,7 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
     : 0
 
   return (
-    <div css={style}>
+    <div css={style} data-painted={painted ? '' : undefined}>
       {/* No preload='none': Shaka drives this element through MSE, and an
           element told not to preload never runs its resource selection, so the
           MediaSource attaches and then sits at networkState 0 forever. */}
