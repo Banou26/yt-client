@@ -43,17 +43,31 @@ const EXPOSURE_GRACE_MS = 1_000
 /**
  * `undefined` while exposure is still unknown, so a caller can distinguish
  * "no extension" from "not answered yet".
+ *
+ * Seeded from the DOM first and only then from the last visit's answer. That
+ * order is what matters: the content script runs at document_start, so an
+ * exposed extension is already visible on this first render and the remembered
+ * value can never contradict it. The memory only fills the gap the grace below
+ * would otherwise leave, where the header would settle into its final shape
+ * after paint rather than being painted in it.
  */
 export const useExtensionExposed = () => {
-  const [state, setState] = useState<boolean | undefined>(() => exposed() || undefined)
+  const [state, setState] = useState<boolean | undefined>(() =>
+    exposed() || getSettings().extensionSeen
+  )
 
   useEffect(() => {
-    const read = () => setState(exposed())
+    const read = () => {
+      const now = exposed()
+      setState(now)
+      if (getSettings().extensionSeen !== now) updateSettings({ extensionSeen: now })
+    }
     document.addEventListener(EXPOSURE_EVENT, read)
     // Re-read AFTER attaching: the flag can land in the gap between the render
     // that seeded the state and this effect, and that arrival dispatched an
-    // event with nobody listening yet.
-    if (exposed()) setState(true)
+    // event with nobody listening yet. Only the positive case, because an unset
+    // flag is still not an answer until the grace below expires.
+    if (exposed()) read()
     const timer = setTimeout(read, EXPOSURE_GRACE_MS)
     return () => {
       clearTimeout(timer)

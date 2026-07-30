@@ -19,6 +19,12 @@ export type Settings = {
   // extension is a straight latency win, off for good once dismissed: an offer
   // that keeps coming back after being declined is an ad.
   suggestExtension: boolean
+  /* Last resolved answer to "is the extension exposed here", which is a CACHE
+     rather than a preference: it lets the header render its final shape on the
+     first paint instead of settling into it a beat later, which is a layout
+     shift on a fixed row. The live DOM signal always wins over it. Absent until
+     the first answer, so a first visit is the only one that can shift. */
+  extensionSeen?: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -63,6 +69,7 @@ const coerce = (stored: Partial<Record<keyof Settings, unknown>>): Settings => {
     theater: typeof stored.theater === 'boolean' ? stored.theater : DEFAULT_SETTINGS.theater,
     guideCollapsed: typeof stored.guideCollapsed === 'boolean' ? stored.guideCollapsed : DEFAULT_SETTINGS.guideCollapsed,
     suggestExtension: typeof stored.suggestExtension === 'boolean' ? stored.suggestExtension : DEFAULT_SETTINGS.suggestExtension,
+    extensionSeen: typeof stored.extensionSeen === 'boolean' ? stored.extensionSeen : undefined,
   }
 }
 

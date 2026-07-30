@@ -90,6 +90,19 @@ test('hands installing over to the platform prompt', async ({ page }) => {
   expect(page.context().pages()).toHaveLength(1)
 })
 
+test('paints the offer on the first render once it has been seen before', async ({ page }) => {
+  // What a second visit looks like: the last answer is already stored.
+  await page.addInitScript(() => {
+    localStorage.setItem('yt-client:settings', JSON.stringify({ extensionSeen: false }))
+  })
+  await page.goto('/settings')
+  /* Deliberately under the grace period. Waiting it out would pass either way;
+     only the remembered answer can put the pill on screen this early, and that
+     is what keeps the header from resettling after paint, which is a layout
+     shift on a fixed row. */
+  await expect(pillOf(page)).toBeVisible({ timeout: 500 })
+})
+
 test('closes the panel on escape and on a click outside it', async ({ page }) => {
   await page.goto('/settings')
   await openPanel(page)
