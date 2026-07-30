@@ -176,7 +176,17 @@ export const ShortsShelf = ({ shorts }: { shorts: readonly VideoCardData[] }) =>
           {shorts.map(short => (
             <article className='card' key={short.id}>
               <Link href={shortsHrefFor(short.id)} className='thumb' tabIndex={-1} aria-hidden='true'>
-                {short.thumbnail ? <img src={short.thumbnail} alt='' loading='lazy' /> : undefined}
+                {short.thumbnail
+                  ? (
+                    <img
+                      src={short.thumbnail}
+                      srcSet={short.thumbnailSrcset ?? undefined}
+                      sizes='21rem'
+                      alt=''
+                      loading='lazy'
+                    />
+                  )
+                  : undefined}
               </Link>
               <h3 className='title'>
                 <Link href={shortsHrefFor(short.id)}>{short.title}</Link>

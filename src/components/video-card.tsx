@@ -28,7 +28,16 @@ import { useInfiniteFeed } from './use-infinite-feed'
 export type VideoCardData =
   Pick<Video, 'id' | 'title'>
   & Partial<
-    Pick<Video, 'description' | 'durationSeconds' | 'progressPercent' | 'publishedText' | 'thumbnail' | 'viewCount'>
+    Pick<
+      Video,
+      | 'description'
+      | 'durationSeconds'
+      | 'progressPercent'
+      | 'publishedText'
+      | 'thumbnail'
+      | 'thumbnailSrcset'
+      | 'viewCount'
+    >
   >
   & {
     isLive?: boolean | null
@@ -602,7 +611,22 @@ export const VideoCard = (
       }}
     >
       <Link href={watchHref} className='thumb' tabIndex={-1} aria-hidden='true'>
-        {video.thumbnail ? <img src={video.thumbnail} alt='' loading='lazy' /> : undefined}
+        {video.thumbnail
+          ? (
+            <img
+              src={video.thumbnail}
+              /* The grid is `repeat(auto-fill, minmax(38rem, 1fr))`, collapsing
+                 to one column at 500px, so these are the real slot widths
+                 rather than a guess. A wider column than 38rem is described
+                 slightly small on purpose: over-describing a still costs
+                 metered bytes on every card in the feed. */
+              srcSet={video.thumbnailSrcset ?? undefined}
+              sizes='(max-width: 500px) 100vw, 38rem'
+              alt=''
+              loading='lazy'
+            />
+          )
+          : undefined}
         {/* Mounted only while hovering: the component owns the session, so
             unmounting it is what tears the session down. */}
         {previewing ? <HoverPreview videoId={video.id} /> : undefined}

@@ -269,6 +269,29 @@ const thumbnail = (items: Thumbnail[] | undefined, minWidth?: number) => {
   return (covering ?? sorted[sorted.length - 1])?.url
 }
 
+/* The same candidates as a srcset, so the browser picks per slot and per pixel
+   ratio instead of every card taking the one width chosen here.
+
+   Only widths upstream actually published are listed: a srcset is a promise
+   about what exists at each URL, so a fabricated entry is a broken image rather
+   than a smaller download. Candidates without a width cannot be described at
+   all and are dropped, and a single candidate is not a choice, so both cases
+   answer undefined and leave the plain `thumbnail` to serve. */
+const srcset = (items: Thumbnail[] | undefined) => {
+  const described = items?.filter(
+    (item): item is Thumbnail & { url: string, width: number } =>
+      Boolean(item.url) && Number.isFinite(item.width) && (item.width ?? 0) > 0,
+  )
+  if (!described || described.length < 2) return undefined
+  // Deduped by width: upstream publishes the same size more than once (a webp
+  // and a jpg of one still), and a repeated descriptor is invalid.
+  const byWidth = new Map(described.map((item) => [item.width, item.url]))
+  return [...byWidth]
+    .sort((a, b) => a[0] - b[0])
+    .map(([width, url]) => `${url} ${width}w`)
+    .join(', ')
+}
+
 // A channel photo renders at 24px in a comment, 40px on a watch page and 80px
 // on a channel header, so 160 covers the largest of them at 2x.
 const AVATAR_WIDTH = 160
@@ -652,6 +675,7 @@ export const normalizeFeedVideo = (input: unknown): SourceVideo | undefined => {
     description: video.description ?? text(video.description_snippet),
     descriptionSnippet: text(video.description_snippet),
     thumbnail: video.best_thumbnail?.url ?? thumbnail(video.thumbnails, STILL_WIDTH),
+    thumbnailSrcset: srcset(video.thumbnails),
     durationSeconds: duration(video),
     viewCount: text(video.short_view_count ?? video.view_count),
     publishedText: text(video.published),
@@ -717,6 +741,7 @@ export const normalizeVideoDetails = (input: unknown): SourceVideo | undefined =
     title: video.title,
     description: video.short_description,
     thumbnail: thumbnail(video.thumbnail, STILL_WIDTH),
+    thumbnailSrcset: srcset(video.thumbnail),
     durationSeconds: video.duration,
     viewCount: video.view_count === undefined ? undefined : String(video.view_count),
     isLive: video.is_live === true ? true : undefined,
@@ -751,6 +776,7 @@ export const normalizeLockupVideo = (input: unknown): SourceVideo | undefined =>
     id,
     title,
     thumbnail: thumbnail(image?.image, STILL_WIDTH),
+    thumbnailSrcset: srcset(image?.image),
     durationSeconds: badges
       .map((badge) => durationSeconds(badge.text))
       .find((seconds) => seconds !== undefined),
@@ -895,6 +921,7 @@ export const normalizePlaylistPanelVideo = (input: unknown): SourceVideo | undef
     id,
     title,
     thumbnail: thumbnail(row?.thumbnail, STILL_WIDTH),
+    thumbnailSrcset: srcset(row?.thumbnail),
     // Already in seconds, but it comes from parsing 'N/A' when the row carries
     // no length, which yields NaN rather than an absent value.
     durationSeconds: Number.isFinite(row?.duration?.seconds) ? row?.duration?.seconds : undefined,

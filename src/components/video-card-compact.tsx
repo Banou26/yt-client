@@ -141,7 +141,19 @@ export const VideoCardCompact = ({ video, context }: { video: VideoCardData, con
   return (
     <article css={style} {...prefetch}>
       <Link href={watchHref} className='thumb' tabIndex={-1} aria-hidden='true'>
-        {video.thumbnail ? <img src={video.thumbnail} alt='' loading='lazy' /> : undefined}
+        {video.thumbnail
+          ? (
+            <img
+              src={video.thumbnail}
+              // A fixed 16.8rem slot, which is where the saving is: a watch page
+              // renders twenty of these and used to pull a 720px still into each.
+              srcSet={video.thumbnailSrcset ?? undefined}
+              sizes='16.8rem'
+              alt=''
+              loading='lazy'
+            />
+          )
+          : undefined}
         {video.isLive
           ? <span className='badge live'>LIVE</span>
           : duration ? <span className='badge'>{duration}</span> : undefined}

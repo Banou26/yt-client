@@ -39,6 +39,12 @@ type Video {
   description: String
   descriptionSnippet: String
   thumbnail: String
+  # Every still upstream published for this video, already formatted as a
+  # srcset. The same Video renders at ~360px in a grid and ~168px in the watch
+  # sidebar, so no single URL is right for both: `thumbnail` stays the fallback
+  # for anything that cannot express a slot width, and this lets the browser
+  # pick per slot and per pixel ratio.
+  thumbnailSrcset: String
   durationSeconds: Int
   viewCount: String
   publishedText: String

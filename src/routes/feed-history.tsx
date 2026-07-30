@@ -23,6 +23,7 @@ const WATCH_HISTORY_QUERY = gql(`
           id
           title
           thumbnail
+          thumbnailSrcset
           durationSeconds
           viewCount
           publishedText

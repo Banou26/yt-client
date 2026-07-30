@@ -40,6 +40,7 @@ const PLAYLIST_VIEW_QUERY = gql(`
           id
           title
           thumbnail
+          thumbnailSrcset
           durationSeconds
           viewCount
           publishedText

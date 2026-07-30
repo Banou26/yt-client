@@ -18,6 +18,7 @@ const HOME_FEED_QUERY = gql(`
         id
         title
         thumbnail
+        thumbnailSrcset
         durationSeconds
         viewCount
         publishedText
@@ -30,6 +31,7 @@ const HOME_FEED_QUERY = gql(`
         id
         title
         thumbnail
+        thumbnailSrcset
         viewCount
       }
       chips {

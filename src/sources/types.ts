@@ -27,6 +27,9 @@ export type SourceVideo = {
   description?: string
   descriptionSnippet?: string
   thumbnail?: string
+  // Every still upstream published, as a srcset. See the schema for why one URL
+  // cannot serve both the grid card and the watch sidebar.
+  thumbnailSrcset?: string
   durationSeconds?: number
   viewCount?: string
   publishedText?: string

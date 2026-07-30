@@ -47,6 +47,7 @@ const COMMUNITY_POSTS_QUERY = gql(`
           id
           title
           thumbnail
+          thumbnailSrcset
           durationSeconds
           viewCount
           publishedText
@@ -78,6 +79,7 @@ const CHANNEL_VIEW_QUERY = gql(`
           id
           title
           thumbnail
+          thumbnailSrcset
           durationSeconds
           viewCount
           publishedText

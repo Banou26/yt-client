@@ -31,6 +31,7 @@ const SEARCH_RESULTS_QUERY = gql(`
           description
           descriptionSnippet
           thumbnail
+          thumbnailSrcset
           durationSeconds
           viewCount
           publishedText
@@ -664,7 +665,18 @@ const SearchPage = () => {
           return (
             <article className='result' key={rowKey(row)}>
               <Link href={watchHref} className='thumb' tabIndex={-1} aria-hidden='true'>
-                {row.thumbnail ? <img src={row.thumbnail} alt='' loading='lazy' /> : undefined}
+                {row.thumbnail
+                  ? (
+                    <img
+                      src={row.thumbnail}
+                      // A search row's still sits in a fixed 36rem column.
+                      srcSet={row.thumbnailSrcset ?? undefined}
+                      sizes='36rem'
+                      alt=''
+                      loading='lazy'
+                    />
+                  )
+                  : undefined}
                 {row.isLive
                   ? <span className='badge live'>LIVE</span>
                   : duration ? <span className='badge'>{duration}</span> : undefined}

@@ -25,6 +25,28 @@ describe('youtube normalization', () => {
     })
   })
 
+  it('describes only the stills upstream actually published', () => {
+    /* A srcset is a promise about what exists at each URL, so it can only ever
+       repeat what came back. The same Video renders at ~380px in a grid and
+       168px in the watch sidebar, which is why one picked width cannot serve
+       both and this exists at all. */
+    const srcsetOf = (thumbnails: { url?: string, width?: number }[]) =>
+      normalizeFeedVideo({ video_id: 'v', title: { text: 'T' }, thumbnails })?.thumbnailSrcset
+
+    expect(srcsetOf([{ url: 'b', width: 480 }, { url: 'a', width: 120 }])).toBe('a 120w, b 480w')
+    // One candidate is not a choice, so the plain thumbnail serves alone.
+    expect(srcsetOf([{ url: 'only', width: 480 }])).toBeUndefined()
+    // A candidate with no width cannot be described, and dropping it can leave
+    // too few to choose between.
+    expect(srcsetOf([{ url: 'sized', width: 480 }, { url: 'unsized' }])).toBeUndefined()
+    expect(srcsetOf([{ url: 'a', width: 120 }, { url: 'b', width: 480 }, { url: 'c' }]))
+      .toBe('a 120w, b 480w')
+    // Upstream publishes one still more than once (a webp and a jpg of the same
+    // size), and a repeated width descriptor is invalid.
+    expect(srcsetOf([{ url: 'jpg', width: 480 }, { url: 'webp', width: 480 }, { url: 'a', width: 120 }]))
+      .toBe('a 120w, webp 480w')
+  })
+
   it('drops a notification with no message to show', () => {
     expect(normalizeNotification({ notification_id: 'n1' })).toBeUndefined()
     expect(normalizeNotification({ short_message: { text: 'orphan' } })).toBeUndefined()
@@ -327,6 +349,7 @@ describe('youtube normalization', () => {
       id: 'abc',
       title: 'Video title',
       thumbnail: 'large',
+      thumbnailSrcset: 'small 120w, large 640w',
       durationSeconds: 125,
       badges: [],
       channel: { id: 'channel', name: 'Channel' },
@@ -757,7 +780,14 @@ describe('youtube normalization', () => {
       duration: { text: '1:01', seconds: 61 },
       author: 'Owner',
       set_video_id: 'set-q1',
-    })).toEqual({ id: 'q1', title: 'Queue row', thumbnail: 'large', durationSeconds: 61, badges: [] })
+    })).toEqual({
+      id: 'q1',
+      title: 'Queue row',
+      thumbnail: 'large',
+      thumbnailSrcset: 'small 120w, large 480w',
+      durationSeconds: 61,
+      badges: [],
+    })
   })
 
   it('unwraps a queue row and drops the rows that carry no video', () => {

@@ -60,6 +60,7 @@ const WATCH_META_QUERY = gql(`
         id
         title
         thumbnail
+        thumbnailSrcset
         durationSeconds
         viewCount
         publishedText
@@ -76,6 +77,7 @@ const WATCH_META_QUERY = gql(`
           id
           title
           thumbnail
+          thumbnailSrcset
           durationSeconds
         }
       }
@@ -347,6 +349,7 @@ const RELATED_MORE_QUERY = gql(`
         id
         title
         thumbnail
+        thumbnailSrcset
         durationSeconds
         viewCount
         publishedText

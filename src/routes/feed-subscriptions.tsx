@@ -20,6 +20,7 @@ const SUBSCRIPTIONS_FEED_QUERY = gql(`
         id
         title
         thumbnail
+        thumbnailSrcset
         durationSeconds
         viewCount
         publishedText
