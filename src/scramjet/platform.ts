@@ -117,6 +117,26 @@ export const carriesIdentity = (headers: Record<string, string> | undefined) =>
 export const isOpaqueRedirect = (response: { status: number, type?: string }) =>
   response.status === 0 || response.type === 'opaqueredirect'
 
+/* Falling back means RE-ISSUING, and the first attempt already reached the
+   server. For a GET or a HEAD that costs one wasted round trip and nothing
+   else; for anything that writes, the server has already acted, so a retry
+   would act twice.
+
+   The fix is not to keep writes off the extension. Scramjet marks EVERY request
+   `manual`, and Innertube does its reading over POST, so refusing them there
+   costs the direct path almost entirely (measured: search went from 1.2s back
+   to 3.6s, level with the tunnel). Instead a write is sent with `follow`, so
+   the browser resolves any redirect itself and the answer can never be the
+   opaque one that would need replaying.
+
+   What that gives up is a write's ability to see its own 3xx, which nothing
+   here wants: the sign-in flow is the only caller that reads redirects, and it
+   does not use this path at all. */
+const REPLAYABLE_METHODS = ['GET', 'HEAD']
+
+export const mayHonourManualRedirect = (method: string | undefined) =>
+  REPLAYABLE_METHODS.includes((method ?? 'GET').toUpperCase())
+
 const create = async () => {
   const worker = new Worker(new URL('./egress.worker.ts', import.meta.url), { type: 'module' })
   const relayAbort = new AbortController()
@@ -198,15 +218,17 @@ const create = async () => {
        do. The extension binding cannot fall through, so the property holds
        structurally rather than by the gate being lucky.
 
-       `redirect` HONOURS the caller rather than forcing follow, because the
-       sign-in flow has to see each 3xx to promote its Location itself. What the
-       extension cannot express is the opaque answer that produces, so that case
-       falls back below rather than being refused up front. */
+       `redirect` honours the caller only for a request that could be replayed
+       if the answer comes back opaque; see above for why a write is followed
+       natively instead. */
+    const redirect = mayHonourManualRedirect(request.options.method)
+      ? request.options.redirect ?? 'follow'
+      : 'follow'
     const response = await lib.extension.fetch(request.url, {
       method: request.options.method,
       headers: request.options.headers,
       body: request.options.body ?? undefined,
-      redirect: request.options.redirect ?? 'follow',
+      redirect,
       signal,
     })
     // Nothing usable came back, so answer as if the extension were absent: the

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vite-plus/test'
 
-import { carriesIdentity, isOpaqueRedirect } from './platform'
+import { carriesIdentity, isOpaqueRedirect, mayHonourManualRedirect } from './platform'
 
 /* The extension's native fetch cannot carry an identity: `extension.fetch`
    builds a `new Request(...)`, whose constructor drops forbidden header names,
@@ -82,5 +82,28 @@ describe('extension redirect handling', () => {
     expect(isOpaqueRedirect({ status: 200, type: 'basic' })).toBe(false)
     expect(isOpaqueRedirect({ status: 302, type: 'basic' })).toBe(false)
     expect(isOpaqueRedirect({ status: 404 })).toBe(false)
+  })
+})
+
+/* The fallback above is a RE-ISSUE, and the first attempt already reached the
+   server, so only a request that can be replayed is allowed to ask for the
+   redirect mode that could produce an answer needing one. */
+describe('which requests may read their own redirects', () => {
+  it('lets a read honour manual, since replaying it is free', () => {
+    expect(mayHonourManualRedirect('GET')).toBe(true)
+    expect(mayHonourManualRedirect('HEAD')).toBe(true)
+    // Scramjet omits the method for a plain read.
+    expect(mayHonourManualRedirect(undefined)).toBe(true)
+    // Upstream's casing is upstream's choice.
+    expect(mayHonourManualRedirect('get')).toBe(true)
+  })
+
+  it('makes a write follow instead, so no answer can need replaying', () => {
+    /* NOT the same as keeping writes off the extension: Innertube reads over
+       POST, so refusing those would cost the direct path almost entirely. */
+    expect(mayHonourManualRedirect('POST')).toBe(false)
+    expect(mayHonourManualRedirect('PUT')).toBe(false)
+    expect(mayHonourManualRedirect('DELETE')).toBe(false)
+    expect(mayHonourManualRedirect('PATCH')).toBe(false)
   })
 })
