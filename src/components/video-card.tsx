@@ -336,80 +336,19 @@ const style = css`
     border-radius: 1.2rem;
     overflow: hidden;
     background: var(--bg-elevated);
-    /* The independent scale property rather than a transform, and the
-       transition names it directly.
-
-       The two are not interchangeable here. A transition on transform holds
-       that property at its start value for the duration, and reading it back
-       mid-flight reports no scaling at all, which made this look inert. The
-       scale property is not entangled with any other transform this element
-       might carry, so nothing else can reset it. */
-    transition: scale 0.18s ease, box-shadow 0.18s ease;
   }
 
-  /* The hovered card grows, the way upstream's inline preview does.
-
-     A transform rather than a width or a grid change: it must not reflow the
-     row, or every neighbouring card would shuffle under the pointer while the
-     reader is aiming at one of them. The card is lifted so it overlaps its
-     neighbours instead of pushing them.
-
-     The amount is small on purpose, and was measured off upstream rather than
-     guessed: their thumbnail goes 533px to 553px on hover, about 4%, which is
-     enough to read as "this one" while still landing inside the grid gutter so
-     the neighbours stay whole. An earlier 1.18 here was sized to make the
-     preview's scrubber grabbable, and that reasoning is obsolete: the strip is
-     2.4rem tall in its own right now, so it no longer needs the card grown
-     around it. What 1.18 actually did was take a 435px card to 525px and paint
-     it over both neighbours, including their duration badges. */
-  &.expanded .thumb {
-    scale: 1.04;
-    z-index: 2;
-  }
-
-  &.expanded {
-    position: relative;
-    z-index: 2;
-  }
-
-  /* The surface behind the WHOLE card, thumbnail and metadata together.
-
-     This is what upstream has and what the grown card was missing: without it
-     an enlarged thumbnail is just a picture that has outgrown its own caption
-     and spilled toward whatever is next to it. With it, the card reads as one
-     object lifted off the page, and the panel edge is what separates it from
-     its neighbours rather than the neighbours simply being covered.
-
-     Inset negatively so it reaches into the gutter, and drawn behind the card's
-     own content: the root establishes the stacking context, so a negative
-     z-index here sits under the thumbnail and text without escaping the card. */
-  &.expanded::before {
-    content: '';
-    position: absolute;
-    inset: -0.8rem -0.8rem -1.2rem;
-    z-index: -1;
-    border-radius: 1.6rem;
-    background: var(--bg-elevated);
-    box-shadow: 0 0.8rem 2.4rem rgb(0 0 0 / 45%);
-  }
+  /* The card does NOT grow on hover. It used to, matching upstream's 4% lift,
+     with an elevated surface behind the whole card so the grown thumbnail did
+     not read as a picture that had outgrown its own caption. Both are gone by
+     request: the preview now arrives inside a thumbnail that stays exactly
+     where it was, so nothing under the pointer moves while the reader aims. */
 
   /* Shorts are vertical, and a 16/9 box would letterbox one into a slot mostly
      made of background. The card keeps its grid column and only the thumbnail
      changes shape, so the surrounding layout is untouched. */
   &.short .thumb {
     aspect-ratio: 9 / 16;
-  }
-
-  /* A portrait card is already tall and narrow, so the same 4% costs it more
-     absolute height than it costs a 16/9 card width. */
-  &.short.expanded .thumb {
-    scale: 1.03;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .thumb {
-      transition: none;
-    }
   }
 
   .thumb img {
@@ -574,20 +513,7 @@ export const VideoCard = (
   const progress = resumePercent(video.progressPercent)
   const prefetch = usePrefetchOnIntent(video.id)
   const [previewing, setPreviewing] = useState(false)
-  /* Separate from `previewing` because it answers a different question.
-
-     The card grows the moment the pointer lands, not when the preview finally
-     plays: a session takes a dwell delay plus a tunneled round trip to produce
-     a first frame, and a card that sits inert for seconds before acknowledging
-     the pointer reads as an unresponsive page rather than a loading one. The
-     thumbnail is already the right picture, so it is what grows first and the
-     video arrives inside it.
-
-     It is also not gated on `canPreview`: a live or upcoming card has nothing
-     to play but is still hovered, and growing only some of the cards in a grid
-     would read as the others being broken. */
-  const [expanded, setExpanded] = useState(false)
-  const classes = [variant, video.isShort ? 'short' : undefined, expanded ? 'expanded' : undefined]
+  const classes = [variant, video.isShort ? 'short' : undefined]
     .filter(Boolean)
     .join(' ')
   /* Pointer type rather than a media query: a touch device reports hover events
@@ -602,13 +528,9 @@ export const VideoCard = (
       {...prefetch}
       onPointerEnter={(event: TargetedPointerEvent<HTMLElement>) => {
         if (event.pointerType !== 'mouse') return
-        setExpanded(true)
         if (canPreview) setPreviewing(true)
       }}
-      onPointerLeave={() => {
-        setPreviewing(false)
-        setExpanded(false)
-      }}
+      onPointerLeave={() => setPreviewing(false)}
     >
       <Link href={watchHref} className='thumb' tabIndex={-1} aria-hidden='true'>
         {video.thumbnail
