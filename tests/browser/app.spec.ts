@@ -9,7 +9,7 @@ test('plays a complete static YouTube video', async ({ page }) => {
   const logs: string[] = []
   page.on('console', (message) => logs.push(message.text()))
   await page.goto('/watch/dQw4w9WgXcQ')
-  await expect(page.locator('html')).toHaveAttribute('data-engine', 'ready', { timeout: 75_000 })
+  await expect(page.locator('html')).toHaveAttribute('data-engine', 'ready', { timeout: 30_000 })
   const video = page.locator('video')
   await expect(video).toBeVisible()
   const currentFrame = () => page.frames().find((candidate) => candidate.url().includes('/proxy/'))
@@ -67,7 +67,7 @@ test('starts repeated playback sessions in one frame', async ({ page }) => {
     }
   })
   await page.goto('/watch/dQw4w9WgXcQ')
-  await expect(page.locator('html')).toHaveAttribute('data-engine', 'ready', { timeout: 75_000 })
+  await expect(page.locator('html')).toHaveAttribute('data-engine', 'ready', { timeout: 30_000 })
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     if (attempt > 1) {
       await page.evaluate(() => {
@@ -155,7 +155,7 @@ test('rebuilds the engine after a lost segment request', async ({ page }) => {
     })
   })
   await page.goto('/watch/dQw4w9WgXcQ')
-  await expect(page.locator('html')).toHaveAttribute('data-engine', 'ready', { timeout: 75_000 })
+  await expect(page.locator('html')).toHaveAttribute('data-engine', 'ready', { timeout: 30_000 })
   await expect(page.locator('html')).toHaveAttribute('data-test-dropped-segment', 'true', { timeout: 75_000 })
   const video = page.locator('video')
   await expect.poll(
@@ -170,7 +170,7 @@ test('boots the frame engine and loads YouTube search results', async ({ page })
   page.on('pageerror', (error) => errors.push(error.message))
   page.on('console', (message) => logs.push(message.text()))
   await page.goto('/search/rick%20astley')
-  await expect(page.locator('html')).toHaveAttribute('data-engine', 'ready', { timeout: 75_000 }).catch(async (error) => {
+  await expect(page.locator('html')).toHaveAttribute('data-engine', 'ready', { timeout: 30_000 }).catch(async (error) => {
     const state = await Promise.all(page.frames().map(async (frame) => ({
       url: frame.url(),
       stage: await frame.locator('html').getAttribute('data-stage').catch(() => null),

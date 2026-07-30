@@ -5,6 +5,7 @@ import { Provider } from 'urql'
 import App from './app'
 import Toasts from './components/ui/toast'
 import { client } from './graphql'
+import { markStartup } from './perf'
 import { startEngine } from './scramjet/client'
 import { applyTheme, watchDeviceTheme } from './settings'
 import { setSource } from './sources/runtime'
@@ -185,6 +186,7 @@ document.body.appendChild(root)
 void startEngine().then(
   (source) => {
     setSource(source)
+    markStartup('engine-ready')
     document.documentElement.dataset.engine = 'ready'
   },
   (error) => {

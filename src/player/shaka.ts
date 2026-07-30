@@ -2,6 +2,8 @@ import type { FrameApi, PlaybackSession } from '../frame/protocol'
 
 import shaka from 'shaka-player'
 
+import { markStartup } from '../perf'
+
 type Bridge = {
   api: FrameApi
   generation: number
@@ -405,6 +407,18 @@ export const startShakaPlayback = async ({
       }
     }
     diagnosticBridgeId = bridgeId
+    markStartup('player-attached')
+    /* The first frame the viewer actually sees, which is the number that
+       matters and is not the same as being attached: everything from the
+       manifest to the first media segment still has to arrive. `timeupdate`
+       rather than `playing` because a media element fires `playing` when it
+       intends to play, and this has to mean the clock moved. */
+    const markFirstFrame = () => {
+      if (video.currentTime <= 0) return
+      markStartup('first-frame')
+      video.removeEventListener('timeupdate', markFirstFrame)
+    }
+    video.addEventListener('timeupdate', markFirstFrame)
     document.documentElement.dataset.playerEngine = 'shaka'
     // Autoplay with sound is blocked until the origin has enough media
     // engagement, and the rejection arrives AFTER the element is already set up.
