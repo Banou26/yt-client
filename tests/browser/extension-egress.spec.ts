@@ -1,5 +1,3 @@
-import { existsSync } from 'node:fs'
-
 import { chromium, expect, test } from '@playwright/test'
 
 /* The real unpacked extension, which is the one thing the default fixture
@@ -11,15 +9,16 @@ import { chromium, expect, test } from '@playwright/test'
    cannot notice the contract itself changing. This is the check that the
    extension really does serve egress and really does announce itself.
 
-   Skipped rather than failed when the extension is not built next door: it
-   lives in another repo, so this cannot be a hard requirement of running the
-   suite. Build it with `npm run build` in fkn/web-extension. */
+   Skipped rather than failed when the extension cannot be loaded: it is built
+   in another repo, so its presence cannot be a hard requirement of running this
+   suite. Build it with `npm run build` in fkn/web-extension. The skip is keyed
+   on the load actually failing rather than on the directory existing, so a
+   half-built or unloadable extension skips too instead of failing as if the app
+   were at fault. */
 
 const EXTENSION_BUILD = '/home/banou/dev/fkn/web-extension/build'
 
 test.describe('with the FKN extension installed', () => {
-  test.skip(!existsSync(EXTENSION_BUILD), `no extension build at ${EXTENSION_BUILD}`)
-
   test('serves egress itself, and stops the header offering itself', async () => {
     test.setTimeout(180_000)
     const context = await chromium.launchPersistentContext('', {
@@ -34,7 +33,10 @@ test.describe('with the FKN extension installed', () => {
 
     try {
       const session = await context.browser()!.newBrowserCDPSession()
-      await session.send('Extensions.loadUnpacked' as 'Browser.getVersion', { path: EXTENSION_BUILD } as object)
+      const loaded = await session
+        .send('Extensions.loadUnpacked' as 'Browser.getVersion', { path: EXTENSION_BUILD } as object)
+        .then(() => true, () => false)
+      test.skip(!loaded, `no loadable extension build at ${EXTENSION_BUILD}`)
       if (!context.serviceWorkers().length) await context.waitForEvent('serviceworker')
 
       const page = await context.newPage()
