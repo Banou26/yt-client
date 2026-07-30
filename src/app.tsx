@@ -1,3 +1,5 @@
+import type { ChannelTab } from './generated/graphql'
+
 import { css } from '@emotion/react'
 import { lazy, Suspense } from 'preact/compat'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
@@ -110,6 +112,35 @@ const LegacySearchRedirect = ({ params }: { params: { query: string } }) => (
 const LegacyWatchRedirect = ({ params }: { params: { videoId: string } }) => (
   <Redirect to={`/watch?${new URLSearchParams({ v: params.videoId })}`} replace />
 )
+
+/* youtube.com addresses a channel's tabs by path (`/@blender/videos`), while
+   this client keeps them in the query string because they are a view of one
+   page rather than separate pages. Both are real URLs a reader arrives with, so
+   the path form is accepted and bounced to the canonical one.
+
+   Keyed by upstream's OWN path words, which do not all match the enum: `live`
+   is `/streams` upstream, and the home tab is `/featured`. Anything not listed
+   is a genuine 404 rather than a channel page with a dropped tab. */
+const CHANNEL_TAB_PATHS: Record<string, ChannelTab> = {
+  featured: 'HOME',
+  videos: 'VIDEOS',
+  shorts: 'SHORTS',
+  streams: 'LIVE',
+  releases: 'RELEASES',
+  podcasts: 'PODCASTS',
+  courses: 'COURSES',
+  playlists: 'PLAYLISTS',
+  community: 'COMMUNITY',
+  about: 'ABOUT',
+}
+
+const ChannelTabRedirect = ({ base, tab }: { base: string, tab?: string }) => {
+  const mapped = CHANNEL_TAB_PATHS[safeDecode(tab ?? '').toLowerCase()]
+  if (!mapped) return <p className='not-found'>Not found</p>
+  // Home is the channel's default view, so it is the bare URL rather than one
+  // carrying a redundant parameter.
+  return <Redirect to={mapped === 'HOME' ? base : `${base}?${new URLSearchParams({ tab: mapped })}`} replace />
+}
 
 const useMediaQuery = (query: string) => {
   const [matches, setMatches] = useState(() => window.matchMedia(query).matches)
@@ -239,6 +270,19 @@ export const App = () => {
               <Route path='/:segment'>
                 {(params: { segment?: string }) => params.segment?.startsWith('@')
                   ? <ChannelPage params={{ handle: params.segment.slice(1) }} />
+                  : <p className='not-found'>Not found</p>}
+              </Route>
+              {/* The tab-by-path forms, which have to be declared before the
+                  generic two-segment route below or it would answer them with
+                  Not found. */}
+              <Route path='/channel/:channelId/:tab'>
+                {(params: { channelId?: string, tab?: string }) => (
+                  <ChannelTabRedirect base={`/channel/${params.channelId ?? ''}`} tab={params.tab} />
+                )}
+              </Route>
+              <Route path='/:segment/:tab'>
+                {(params: { segment?: string, tab?: string }) => params.segment?.startsWith('@')
+                  ? <ChannelTabRedirect base={`/${params.segment}`} tab={params.tab} />
                   : <p className='not-found'>Not found</p>}
               </Route>
               <Route>
