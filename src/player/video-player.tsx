@@ -1,12 +1,13 @@
 import type shaka from 'shaka-player'
 
-import type { Storyboard } from '../frame/protocol'
+import type { CaptionTrack, Storyboard } from '../frame/protocol'
 
 // Type-only, so it is erased at build and adds no runtime edge back to the
 // chunk this file deliberately loads on demand.
 import type { startShakaPlayback } from './shaka'
 
 import { LIVE_UNSUPPORTED } from '../frame/protocol'
+import { preferredTrack } from '../frame/captions'
 
 import { css } from '@emotion/react'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
@@ -15,6 +16,7 @@ import { resetEngine, startEngine } from '../scramjet/client'
 import { warmShaka } from './prefetch'
 import { registerSeek, clearSeek } from './seek'
 import { getSettings, updateSettings } from '../settings'
+import { showToast } from '../components/ui/toast'
 import { isTypingTarget, PlayerControls } from './controls'
 import { usePlayerState } from './use-player-state'
 
@@ -121,6 +123,9 @@ const VideoPlayer = (
   const [isLive, setIsLive] = useState(false)
   const [quality, setQuality] = useState<'auto' | number>(() => getSettings().quality)
   const selectQualityRef = useRef<((height: number | 'auto') => Promise<void>) | undefined>(undefined)
+  const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([])
+  const [caption, setCaption] = useState<string | undefined>(undefined)
+  const selectCaptionRef = useRef<((trackId: string | undefined) => Promise<void>) | undefined>(undefined)
   const [active, setActive] = useState(true)
   const idleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -198,10 +203,29 @@ const VideoPlayer = (
       setStoryboards(controller.storyboards)
       setIsLive(controller.isLive)
       selectQualityRef.current = controller.selectQuality
+      setCaptionTracks(controller.captionTracks)
+      selectCaptionRef.current = controller.selectCaption
       // A stored preference has to be reapplied per video, once this session's
       // formats exist, or every new video silently reverts to auto.
       const stored = getSettings().quality
       if (stored !== 'auto') void controller.selectQuality(stored).catch(() => {})
+      /* Captions follow the same rule, resolved per video because the stored
+         preference is a LANGUAGE while a track id is only meaningful inside one
+         video. A video that publishes nothing in that language shows none,
+         rather than falling back to a language nobody asked for. */
+      const subtitles = getSettings()
+      const wanted = subtitles.captionsEnabled
+        ? preferredTrack(controller.captionTracks, subtitles.captionsLanguage)
+        : undefined
+      setCaption(wanted?.id)
+      // Reverted silently when the cues do not arrive: this ran because of a
+      // stored preference rather than a click, so there is nothing to report
+      // back to a viewer who did not ask for anything yet.
+      if (wanted) {
+        void controller.selectCaption(wanted.id).catch(() => {
+          setCaption((current) => (current === wanted.id ? undefined : current))
+        })
+      }
     })().catch((error) => {
       if (!abort.signal.aborted) restart(error)
     })
@@ -213,6 +237,7 @@ const VideoPlayer = (
       setHeights([])
       setStoryboards([])
       setIsLive(false)
+      setCaptionTracks([])
       void controller?.destroy()
     }
   }, [attempt, videoId])
@@ -222,6 +247,26 @@ const VideoPlayer = (
     updateSettings({ quality: value })
     void selectQualityRef.current?.(value).catch(() => {})
   }, [])
+
+  /* Stores the LANGUAGE rather than the track id, since ids are per video and
+     the next video would not recognize one. Turning captions off is a
+     preference in its own right, so it clears the enabled flag rather than
+     leaving it set with nothing selected. */
+  const applyCaption = useCallback((trackId: string | undefined) => {
+    setCaption(trackId)
+    const picked = captionTracks.find((track) => track.id === trackId)
+    updateSettings(picked
+      ? { captionsEnabled: true, captionsLanguage: picked.languageCode }
+      : { captionsEnabled: false })
+    void selectCaptionRef.current?.(trackId).catch(() => {
+      /* A track whose cues never arrive is not showing, and the control must
+         not go on claiming it is. Reverted only if the viewer has not picked
+         something else since, so a slow failure cannot undo a later choice. */
+      if (!trackId) return
+      setCaption((current) => (current === trackId ? undefined : current))
+      showToast('Subtitles are not available for this video right now')
+    })
+  }, [captionTracks])
 
   const wake = useCallback(() => {
     setActive(true)
@@ -331,6 +376,9 @@ const VideoPlayer = (
             storyboards={storyboards}
             quality={quality}
             onQuality={applyQuality}
+            captionTracks={captionTracks}
+            caption={caption}
+            onCaption={applyCaption}
             theater={theater}
             onTheater={() => onTheater?.()}
             isLive={isLive}

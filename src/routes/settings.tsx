@@ -232,8 +232,9 @@ export const SettingsPage = () => {
       <section className='section'>
         <h2 className='section-title'>Subtitles</h2>
         <p className='section-note'>
-          Turn captions on by default where a video has them. Captions are not wired into the
-          player yet, so this only records the preference.
+          Turn captions on by default where a video has them. The language follows whichever
+          track you last chose in the player, and a video that publishes nothing in it starts
+          without captions rather than in another language.
         </p>
         <div className='row'>
           <div className='row-label'>Always show captions</div>

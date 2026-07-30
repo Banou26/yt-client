@@ -1,10 +1,12 @@
 import type { Exhaustive, SourceApi } from '../sources/types'
 import type { TransportResponse } from '../scramjet/protocol'
 
+import type { CaptionTrack } from './captions'
 import type { Storyboard } from './storyboard'
 
 import { SOURCE_METHODS } from '../sources/types'
 
+export type { CaptionTrack } from './captions'
 export type { Storyboard, StoryboardFrame } from './storyboard'
 
 /* Live plays over SABR now, so nothing in the frame raises this any more. It
@@ -57,6 +59,14 @@ export type PlaybackSession = {
   // Scrubber hover previews. The sheets live on i.ytimg.com, which the app
   // realm already loads thumbnails from, so only the spec crosses the boundary.
   storyboards: Storyboard[]
+  /* What the video publishes, without the cue files themselves: those are
+     fetched through `captionCues` only once a viewer picks a track.
+
+     Always empty for live. Shaka refuses a side-loaded text track when the
+     presentation duration is infinite (CANNOT_ADD_EXTERNAL_TEXT_TO_LIVE_STREAM),
+     so an offered track there could only fail, and the control bar reads the
+     empty list as "no captions for this video". */
+  captionTracks: CaptionTrack[]
   /* A live stream's manifest is dynamic and its media is only ever served from
      the edge, so the player has to be told to start there. Left alone it opens
      at presentation time 0, which for a stream running six hours is 24,000
@@ -110,6 +120,10 @@ export type FrameApi = SourceApi & {
      advertised edge keeps tracking the real one instead of drifting away from
      it on a wall clock. */
   liveManifest(sessionId: string): Promise<string>
+  /* Fetches one track's cues as WebVTT, addressed by the id the session
+     published rather than by URL: the timedtext address stays inside the frame,
+     which is the realm that holds the session it was signed against. */
+  captionCues(sessionId: string, trackId: string): Promise<string>
   cancelSegment(sessionId: string, requestId: string): Promise<void>
   selectVideoFormat(sessionId: string, formatKey: string): Promise<void>
   closePlayback(sessionId: string): Promise<void>
@@ -132,6 +146,7 @@ export const FRAME_METHODS = [
   'openPlayback',
   'requestSegment',
   'liveManifest',
+  'captionCues',
   'cancelSegment',
   'selectVideoFormat',
   'closePlayback',

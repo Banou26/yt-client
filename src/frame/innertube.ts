@@ -6,8 +6,10 @@ import { Constants, Innertube, Platform, Types, UniversalCache, Utils, YT } from
 import type { PlaybackFormat } from './protocol'
 
 import { mintPoToken, recoverPoTokenSession, warmPoTokenSession } from './botguard'
+import type { CaptionSource } from './captions'
 import type { Storyboard } from './storyboard'
 
+import { parseCaptionTracks } from './captions'
 import { egressFetch } from './egress'
 import { playableFormats } from './formats'
 import { parseStoryboards } from './storyboard'
@@ -329,6 +331,7 @@ export type SabrSource = {
   formats: SabrFormat[]
   playbackFormats: PlaybackFormat[]
   storyboards: Storyboard[]
+  captions: CaptionSource[]
   clientInfo: Record<string, unknown>
   mint(): Promise<string>
   recoverMint(): Promise<void>
@@ -438,6 +441,11 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
     storyboards: parseStoryboards((raw as {
       storyboards?: { playerStoryboardSpecRenderer?: { spec?: string } }
     }).storyboards?.playerStoryboardSpecRenderer?.spec),
+    /* Rides on the watch page that playback already needed, so the track list
+       costs no extra round trip. The cue file itself is fetched only when a
+       viewer picks a track, because `openPlayback` is also the hover-preview
+       path and must stay cheap. */
+    captions: parseCaptionTracks(info.captions),
     clientInfo: {
       clientName: Number((Constants.CLIENT_NAME_IDS as Record<string, string>)[context.client.clientName]),
       clientVersion: context.client.clientVersion,

@@ -234,6 +234,7 @@ export const startShakaPlayback = async ({
   let playerError: ((event: Event) => void) | undefined
   let buffering: ((event: Event) => void) | undefined
   let seeking: (() => void) | undefined
+  const captionUrls: string[] = []
   // Assigned once below, but declared here because `destroy` closes over it.
   // eslint-disable-next-line prefer-const
   let abortListener: (() => void) | undefined
@@ -254,6 +255,7 @@ export const startShakaPlayback = async ({
       delete document.documentElement.dataset.playerEngine
     }
     if (manifestUrl) URL.revokeObjectURL(manifestUrl)
+    for (const url of captionUrls) URL.revokeObjectURL(url)
     await player?.destroy().catch(() => {})
     closeSession()
   }
@@ -287,6 +289,10 @@ export const startShakaPlayback = async ({
         rebufferingGoal: 0,
         bufferBehind: 30,
         segmentPrefetchLimit: 0,
+        // Captions are an accessory to playback, never a precondition for it: a
+        // cue file that fails to parse must cost the viewer its subtitles and
+        // nothing else.
+        ignoreTextStreamFailures: true,
         retryParameters: {
           maxAttempts: 3,
           baseDelay: 500,
@@ -489,10 +495,58 @@ export const startShakaPlayback = async ({
       activePlayer.selectVariantTrack(track, upgrade, upgrade ? SAFE_MARGIN_SECONDS : 0)
     }
 
+    /* Cue files are fetched on demand and kept for the life of the player, so
+       switching back to a track already seen costs nothing. Shaka is addressed
+       by the numeric id it assigned rather than by the track object it handed
+       back, because `getTextTracks` builds fresh objects on every call and
+       `selectTextTrack` matches on that id. */
+    const captionIds = new Map<string, number>()
+    let captionChain: Promise<unknown> = Promise.resolve()
+
+    const applyCaption = async (trackId: string | undefined) => {
+      if (destroyed) return
+      if (!trackId) {
+        activePlayer.setTextTrackVisibility(false)
+        return
+      }
+      const track = session.captionTracks.find((candidate) => candidate.id === trackId)
+      if (!track) return
+      if (!captionIds.has(trackId)) {
+        const vtt = await api.captionCues(session.id, trackId)
+        if (destroyed) return
+        const url = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt' }))
+        captionUrls.push(url)
+        const added = await activePlayer.addTextTrackAsync(url, track.languageCode, 'subtitle', 'text/vtt', undefined, track.label)
+        if (destroyed) return
+        captionIds.set(trackId, added.id)
+      }
+      const target = activePlayer.getTextTracks().find((candidate) => candidate.id === captionIds.get(trackId))
+      if (!target) return
+      activePlayer.selectTextTrack(target)
+      activePlayer.setTextTrackVisibility(true)
+    }
+
+    // Serialized because each miss is a fetch plus a parse, and two quick picks
+    // would otherwise race to decide which track ends up visible.
+    const selectCaption = (trackId: string | undefined) => {
+      const run = captionChain.then(() => applyCaption(trackId))
+      captionChain = run.catch(() => {})
+      return run
+    }
+
     // Reported rather than hardcoded: the live branch above falls through to
     // this same return, and saying `false` here is what left a live stream
     // showing a 3348:27:07 / 0:00 clock instead of a LIVE badge.
-    return { player: activePlayer, destroy, heights, selectQuality, storyboards: session.storyboards, isLive: session.isLive }
+    return {
+      player: activePlayer,
+      destroy,
+      heights,
+      selectQuality,
+      storyboards: session.storyboards,
+      captionTracks: session.captionTracks,
+      selectCaption,
+      isLive: session.isLive,
+    }
   } catch (error) {
     await destroy()
     throw error instanceof shaka.util.Error ? describeShakaError(error) : error

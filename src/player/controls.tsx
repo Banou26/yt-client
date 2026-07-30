@@ -1,12 +1,13 @@
 import type shaka from 'shaka-player'
 
 import { css } from '@emotion/react'
-import { Check, Maximize, Minimize, Pause, PictureInPicture2, Play, Settings, SkipForward, Volume1, Volume2, VolumeX } from 'lucide-react'
+import { Captions, CaptionsOff, Check, Maximize, Minimize, Pause, PictureInPicture2, Play, Settings, SkipForward, Volume1, Volume2, VolumeX } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 
-import type { Storyboard } from '../frame/protocol'
+import type { CaptionTrack, Storyboard } from '../frame/protocol'
 import type { PlayerState } from './use-player-state'
 
+import { preferredTrack } from '../frame/captions'
 import { bestStoryboard, storyboardFrame } from '../frame/storyboard'
 
 import { MenuItem, Popup, useDismiss } from '../components/ui/popup'
@@ -226,6 +227,11 @@ type ControlsProps = {
   storyboards: Storyboard[]
   quality: 'auto' | number
   onQuality: (value: 'auto' | number) => void
+  // Empty when the video publishes none, and always empty for live, which is
+  // what hides the button rather than offering one that cannot do anything.
+  captionTracks: CaptionTrack[]
+  caption: string | undefined
+  onCaption: (trackId: string | undefined) => void
   theater: boolean
   onTheater: () => void
   onNext?: () => void
@@ -236,13 +242,16 @@ type ControlsProps = {
 }
 
 export const PlayerControls = (
-  { video, state, heights, storyboards, quality, onQuality, theater, onTheater, onNext, visible, isLive = false }: ControlsProps,
+  {
+    video, state, heights, storyboards, quality, onQuality, captionTracks, caption, onCaption,
+    theater, onTheater, onNext, visible, isLive = false,
+  }: ControlsProps,
 ) => {
   const [scrubbing, setScrubbing] = useState(false)
   const [preview, setPreview] = useState<number | undefined>(undefined)
   const [hover, setHover] = useState<{ time: number, ratio: number } | undefined>(undefined)
   const [pip, setPip] = useState(false)
-  const [menu, setMenu] = useState<'root' | 'quality' | 'speed' | undefined>(undefined)
+  const [menu, setMenu] = useState<'root' | 'quality' | 'speed' | 'captions' | undefined>(undefined)
   const railRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const menuTriggerRef = useRef<HTMLButtonElement>(null)
@@ -360,6 +369,21 @@ export const PlayerControls = (
   const frame = board && hover ? storyboardFrame(board, hover.time) : undefined
 
   const VolumeIcon = state.muted || state.volume === 0 ? VolumeX : state.volume < 0.5 ? Volume1 : Volume2
+
+  const activeCaption = captionTracks.find((track) => track.id === caption)
+  /* What the CC button turns back ON. Remembering the last pick is what makes
+     the button a toggle rather than a reset: without it, turning captions off
+     and on again would silently swap the viewer's chosen track for the
+     default one. */
+  const lastCaption = useRef<string | undefined>(undefined)
+  if (caption) lastCaption.current = caption
+  const toggleCaption = () => {
+    if (caption) return onCaption(undefined)
+    const restored = lastCaption.current && captionTracks.some((track) => track.id === lastCaption.current)
+      ? lastCaption.current
+      : preferredTrack(captionTracks, undefined)?.id
+    if (restored) onCaption(restored)
+  }
   // The decoded height is what is actually on screen, which is more honest than
   // whichever variant Shaka currently has selected.
   const activeLabel = video.videoHeight > 0 ? `${video.videoHeight}p` : undefined
@@ -436,6 +460,19 @@ export const PlayerControls = (
           ? <span className='live-badge'>LIVE</span>
           : <span className='time'>{clock(position)} / {clock(duration)}</span>}
         <span className='spacer' />
+        {captionTracks.length > 0
+          ? (
+            <button
+              type='button'
+              className='control'
+              aria-label={caption ? 'Turn off captions' : 'Turn on captions'}
+              aria-pressed={caption !== undefined}
+              onClick={toggleCaption}
+            >
+              {caption ? <Captions size={24} strokeWidth={1.8} /> : <CaptionsOff size={24} strokeWidth={1.8} />}
+            </button>
+          )
+          : undefined}
         <div className='menu-anchor' ref={menuRef}>
           <button
             ref={menuTriggerRef}
@@ -453,6 +490,13 @@ export const PlayerControls = (
               <Popup label='Player settings' class='settings-menu'>
                 <MenuItem detail={state.playbackRate === 1 ? 'Normal' : `${state.playbackRate}x`} onSelect={() => setMenu('speed')}>
                   Playback speed
+                </MenuItem>
+                <MenuItem
+                  detail={activeCaption ? activeCaption.label : 'Off'}
+                  disabled={captionTracks.length === 0}
+                  onSelect={() => setMenu('captions')}
+                >
+                  Subtitles
                 </MenuItem>
                 <MenuItem
                   detail={quality === 'auto' ? `Auto${activeLabel ? ` (${activeLabel})` : ''}` : `${quality}p`}
@@ -473,34 +517,63 @@ export const PlayerControls = (
                   ))}
                 </Popup>
               )
-              : menu === 'quality'
+              : menu === 'captions'
                 ? (
-                  <Popup label='Quality' class='settings-menu'>
+                  <Popup label='Subtitles' class='settings-menu'>
                     <MenuItem
-                      icon={quality === 'auto' ? Check : undefined}
-                      detail={activeLabel}
+                      icon={caption === undefined ? Check : undefined}
                       onSelect={() => {
-                        onQuality('auto')
+                        onCaption(undefined)
                         setMenu(undefined)
                       }}
                     >
-                      Auto
+                      Off
                     </MenuItem>
-                    {heights.map(height => (
+                    {captionTracks.map(track => (
                       <MenuItem
-                        key={height}
-                        icon={quality === height ? Check : undefined}
+                        key={track.id}
+                        icon={caption === track.id ? Check : undefined}
+                        // Generated tracks are named as such rather than left
+                        // to be discovered by reading them.
+                        detail={track.auto ? 'auto' : undefined}
                         onSelect={() => {
-                          onQuality(height)
+                          onCaption(track.id)
                           setMenu(undefined)
                         }}
                       >
-                        {`${height}p`}
+                        {track.label}
                       </MenuItem>
                     ))}
                   </Popup>
                 )
-                : undefined}
+                : menu === 'quality'
+                  ? (
+                    <Popup label='Quality' class='settings-menu'>
+                      <MenuItem
+                        icon={quality === 'auto' ? Check : undefined}
+                        detail={activeLabel}
+                        onSelect={() => {
+                          onQuality('auto')
+                          setMenu(undefined)
+                        }}
+                      >
+                        Auto
+                      </MenuItem>
+                      {heights.map(height => (
+                        <MenuItem
+                          key={height}
+                          icon={quality === height ? Check : undefined}
+                          onSelect={() => {
+                            onQuality(height)
+                            setMenu(undefined)
+                          }}
+                        >
+                          {`${height}p`}
+                        </MenuItem>
+                      ))}
+                    </Popup>
+                  )
+                  : undefined}
         </div>
         {pipSupported
           ? (

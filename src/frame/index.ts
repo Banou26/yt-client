@@ -2,7 +2,10 @@ import type { FrameApi, FrameProgress, FrameRequest, FrameResponse, SegmentEnvel
 
 import type { YoutubeClient } from '../sources/youtube'
 
+import type { CaptionSource } from './captions'
+
 import { createYoutubeSource } from '../sources/youtube'
+import { json3ToWebVtt, parseCaptionTracks, timedTextUrl } from './captions'
 import { catalogInnertube, getSabrSource, hasSessionCookie, prefetchInitialPlayerResponse } from './innertube'
 import { buildLiveManifest, liveAnchor, timelineEndMs } from './live-manifest'
 import { createSabrSession, isSabrSessionRefreshError } from './sabr'
@@ -29,6 +32,14 @@ type PlaybackEntry = {
   generation: number
   closed: boolean
   refreshing?: Promise<void>
+  // Kept with the session so a track can be addressed by id: the app is never
+  // given the timedtext URL, so it can never ask the frame to fetch an
+  // arbitrary one.
+  captions: CaptionSource[]
+  // Resolved lazily and kept for the session, so switching between tracks costs
+  // one lookup rather than one per track.
+  cueSources?: Promise<CaptionSource[]>
+
   // The last manifest that described real segments, served while the timeline
   // refills so a transient gap cannot fail Shaka's update.
   lastLiveManifest?: string
@@ -47,6 +58,48 @@ const LIVE_START_DEPTH_TIMEOUT_MS = 3_000
 // How long a manifest refresh waits for the pump to refill a timeline that a
 // quality switch or a session refresh just emptied.
 const LIVE_REFRESH_WAIT_MS = 2_000
+
+/* Where cue files are actually served from.
+
+   The watch page publishes the track LIST for free, but every address on it is
+   marked `exp=xpe`, and that endpoint answers a request for one with HTTP 200
+   and an empty body. Measured on 2026-07-31 against every combination the
+   reference implementations use, including a video-id-bound and a
+   visitor-bound proof of origin token sent with `potc=1` and `c=WEB` together:
+   all six published tracks, all answered 200 with content-length 0.
+
+   The same video requested as ANDROID_VR publishes the same six tracks with no
+   `exp` marker at all, and those addresses serve real json3. So the list keeps
+   riding the watch page, and only the address is resolved through this second
+   client, once per session and only when a viewer actually asks for cues. */
+const CUE_CLIENT = 'ANDROID_VR'
+
+const cueSourcesFor = async (entry: PlaybackEntry) => {
+  entry.cueSources ??= (async () => {
+    const client = await catalogInnertube
+    const info = await client.getBasicInfo(entry.videoId, { client: CUE_CLIENT })
+    return parseCaptionTracks(info.captions)
+  })().catch((error) => {
+    // Not cached as a rejection: a failed lookup should not make every later
+    // selection fail without trying again.
+    entry.cueSources = undefined
+    throw error
+  })
+  return entry.cueSources
+}
+
+const cueSourceFor = async (entry: PlaybackEntry, track: CaptionSource) => {
+  const sources = await cueSourcesFor(entry)
+  /* Ids agree across clients because both come from the same video, so that is
+     the match. Language plus generated-or-not is the fallback for a client that
+     names its tracks differently, and is still exact enough not to hand back a
+     different language. */
+  const match = sources.find((source) => source.id === track.id)
+    ?? sources.find((source) => source.languageCode === track.languageCode && source.auto === track.auto)
+    ?? sources.find((source) => source.languageCode === track.languageCode)
+  if (!match) throw new Error(`youtube: caption track ${track.id} has no servable address`)
+  return match
+}
 
 const refreshSession = async (entry: PlaybackEntry) => {
   if (entry.closed) throw new Error('youtube: playback session closed during refresh')
@@ -68,6 +121,11 @@ const refreshSession = async (entry: PlaybackEntry) => {
   next.selectAudioFormat(audioFormat.key)
   previous.close()
   entry.player = next
+  /* Caption addresses are signed and expire alongside the streaming URLs a
+     refresh exists to replace, so they are re-read from the same fresh
+     response. Ids are stable per video, so a track the viewer already picked
+     keeps resolving. */
+  if (!source.isLive) entry.captions = source.captions
   // A live session that is not being consumed produces nothing, so the new one
   // has to pick the stream back up rather than wait to be asked.
   next.startLivePump()
@@ -129,6 +187,9 @@ const api = {
       requests: new Map(),
       generation: 0,
       closed: false,
+      // Live never offers captions: Shaka rejects a side-loaded text track
+      // against an infinite presentation, so an offered track could only fail.
+      captions: source.isLive ? [] : source.captions,
     }
     let manifest = player.manifest
     if (source.isLive) {
@@ -176,6 +237,7 @@ const api = {
       selectedVideoKey: player.videoFormat.key,
       selectedAudioKey: player.audioFormat.key,
       storyboards: source.storyboards,
+      captionTracks: entry.captions.map(({ url: _url, ...track }) => track),
       isLive: source.isLive,
     }
   },
@@ -249,6 +311,27 @@ const api = {
     }
     if (entry.lastLiveManifest) return entry.lastLiveManifest
     throw new Error(`youtube: live session ${id} has no delivered segments`)
+  },
+  captionCues: async (id, trackId) => {
+    const entry = sessions.get(id)
+    if (!entry) throw new Error(`youtube: unknown playback session ${id}`)
+    const track = entry.captions.find((candidate) => candidate.id === trackId)
+    if (!track) throw new Error(`youtube: unknown caption track ${trackId}`)
+    const source = await cueSourceFor(entry, track)
+    /* The frame's own fetch rather than `egressFetch`: this document is the
+       rewritten youtube.com page, so the request is same-origin and carries the
+       shared cookie jar without the caller assembling one. Sending an explicit
+       cookie header instead would mark the request as carrying identity, which
+       routes it onto the tunnel rather than the extension. */
+    const response = await globalThis.fetch(timedTextUrl(source.url), { credentials: 'include' })
+    if (!response.ok) throw new Error(`youtube: caption track ${trackId} answered ${response.status}`)
+    const body = await response.text()
+    /* An accepted request that carries no body is upstream declining to serve
+       this track rather than a parse failure, and the two are worth telling
+       apart: reporting it here is what stops an empty cue file from reaching
+       the player and looking like captions that simply never appear. */
+    if (!body) throw new Error(`youtube: caption track ${trackId} was answered with no cues`)
+    return json3ToWebVtt(body)
   },
   cancelSegment: async (id, requestId) => {
     sessions.get(id)?.requests.get(requestId)?.abort()
