@@ -15,6 +15,10 @@ export type Settings = {
   captionsLanguage?: string
   theater: boolean
   guideCollapsed: boolean
+  // Whether the header may offer the FKN extension. On by default because the
+  // extension is a straight latency win, off for good once dismissed: an offer
+  // that keeps coming back after being declined is an ad.
+  suggestExtension: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -27,6 +31,7 @@ export const DEFAULT_SETTINGS: Settings = {
   captionsEnabled: false,
   theater: false,
   guideCollapsed: false,
+  suggestExtension: true,
 }
 
 const STORAGE_KEY = 'yt-client:settings'
@@ -57,6 +62,7 @@ const coerce = (stored: Partial<Record<keyof Settings, unknown>>): Settings => {
     captionsLanguage: typeof captionsLanguage === 'string' ? captionsLanguage : undefined,
     theater: typeof stored.theater === 'boolean' ? stored.theater : DEFAULT_SETTINGS.theater,
     guideCollapsed: typeof stored.guideCollapsed === 'boolean' ? stored.guideCollapsed : DEFAULT_SETTINGS.guideCollapsed,
+    suggestExtension: typeof stored.suggestExtension === 'boolean' ? stored.suggestExtension : DEFAULT_SETTINGS.suggestExtension,
   }
 }
 

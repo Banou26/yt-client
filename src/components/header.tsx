@@ -8,6 +8,7 @@ import { Link, useLocation, useSearch } from 'wouter'
 
 import { gql } from '../generated'
 import { AccountMenu } from './account-menu'
+import { ExtensionNotice } from './extension-notice'
 import { NotificationsMenu } from './notifications-menu'
 
 // Suggestions are display text with no entity and no continuation, so a failed
@@ -428,6 +429,11 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
         </button>
       </form>
       <div className='end'>
+        {/* First in the row, so it sits furthest from the account controls: it
+            is an aside about how the page is fetched, not one of the actions
+            the header is for. Renders nothing at all with the extension
+            installed, or once declined. */}
+        <ExtensionNotice />
         <Link href='/settings' className='icon-button' aria-label='Settings'>
           <EllipsisVertical size={24} strokeWidth={1.5} />
         </Link>

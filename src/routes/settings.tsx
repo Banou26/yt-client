@@ -4,6 +4,7 @@ import { css } from '@emotion/react'
 import { useEffect, useState } from 'preact/hooks'
 
 import { useDocumentTitle } from '../app'
+import { EXTENSION_URL, useExtensionExposed } from '../components/extension-notice'
 import { getSettings, subscribeSettings, updateSettings } from '../settings'
 
 /* Every field here already existed in the validated store and had no way to be
@@ -86,6 +87,10 @@ const style = css`
     color: var(--text-secondary);
   }
 
+  .link {
+    color: var(--accent);
+  }
+
   .choices {
     display: flex;
     flex-wrap: wrap;
@@ -127,6 +132,7 @@ const style = css`
 export const SettingsPage = () => {
   useDocumentTitle('Settings')
   const [settings, setSettings] = useState<Settings>(getSettings)
+  const extension = useExtensionExposed()
 
   // The store is shared: the player writes volume and rate as they change, and
   // the guide writes its collapsed state, so this page follows the store rather
@@ -239,6 +245,42 @@ export const SettingsPage = () => {
             onChange={() => set({ captionsEnabled: !settings.captionsEnabled })}
           />
         </div>
+      </section>
+
+      {/* The one place the header offer can be brought back, which is what makes
+          dismissing it safe to be permanent. */}
+      <section className='section'>
+        <h2 className='section-title'>Connection</h2>
+        <p className='section-note'>
+          {extension === true
+            ? 'The FKN extension is active, so requests reach YouTube straight from your browser.'
+            : (
+              <>
+                Requests reach YouTube through the shared FKN relay, which adds a round trip to
+                each one. The{' '}
+                <a className='link' href={EXTENSION_URL} target='_blank' rel='noreferrer'>FKN extension</a>{' '}
+                sends them straight from your browser instead, and the relay's daily allowance
+                stops applying.
+              </>
+            )}
+        </p>
+        {extension === false
+          ? (
+            <div className='row'>
+              <div>
+                <div className='row-label'>Offer the extension in the header</div>
+                <div className='row-detail'>Shows a single dismissible link, and never with the extension installed</div>
+              </div>
+              <input
+                type='checkbox'
+                className='toggle'
+                aria-label='Offer the extension in the header'
+                checked={settings.suggestExtension}
+                onChange={() => set({ suggestExtension: !settings.suggestExtension })}
+              />
+            </div>
+          )
+          : undefined}
       </section>
     </main>
   )

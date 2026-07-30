@@ -117,6 +117,21 @@ const create = async () => {
   lib.setMissingExtensionHandler(null)
   lib.relayWorker(worker, { unregisterSignal: relayAbort.signal })
 
+  /* The platform's own install prompt, rendered inside the trusted broker
+     iframe. Turning the AUTOMATIC one off above and keeping this is not a
+     contradiction: the automatic prompt fires whenever an extension-gated call
+     finds no extension, which here would interrupt the ordinary case, while
+     this only ever runs because a reader clicked the header's offer.
+
+     It is also the one broker call this realm makes, and it is UI rather than
+     egress: the rule this file opens with is about cloud FETCHES contending
+     with the relay they are being relayed over. Rendering the platform's own
+     overlay is precisely what moving the lib up here made possible again.
+
+     Delegated rather than reimplemented so the store links, the per-browser
+     pick and the "installed" detection stay platform-side. */
+  const promptInstall = (reason?: string) => lib.promptInstall(reason)
+
   /* One live engine at a time, so the worker rotates: handing it a new port
      releases the previous engine's, whose frame is already gone. Without that
      every reset would strand another osra listener in the worker. */
@@ -229,6 +244,7 @@ const create = async () => {
   return {
     openEgressPort,
     openExtFetchPort,
+    promptInstall,
     abortEgress: () => worker.postMessage({ type: EGRESS_ABORT_ALL }),
   }
 }
@@ -248,6 +264,19 @@ export const startPlatform = () => (platform ??= create().catch((error: unknown)
   platform = undefined
   throw error
 }))
+
+/**
+ * Asks the platform to show its extension install prompt, and answers whether
+ * the extension is exposed afterwards: true once it is, false if the reader
+ * dismissed the prompt.
+ *
+ * `reason` is the one app-specific line the platform prompt shows, so it should
+ * say why THIS app is asking.
+ */
+export const promptExtensionInstall = async (reason?: string) => {
+  const api = await startPlatform()
+  return api.promptInstall(reason)
+}
 
 /** Drops the egress worker's in-flight requests. Safe before the first start. */
 export const abortPlatformEgress = () => {
