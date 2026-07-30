@@ -120,25 +120,27 @@ export const createFknTransport = (
    over ONE connection, so Google sees a single consistent session, which its
    login backend accepts where the FKN proxy is rejected.
 
-   When the extension is present that one connection is the user's own browser,
-   which is strictly better than the tunnel here: it is the same native Chrome
-   TLS Google already accepts, and it removes the relay round trip from a flow
-   that is many serial navigations long. Falls back to libcurl/webvpn otherwise.
+   It takes NO extension fetch, and that omission is the design rather than an
+   oversight. Two things rule the extension out here, either alone being enough:
 
-   `credentials` is never set, so the extension sends NO browser cookies: the
-   login must land in the app's OWN jar, and pulling in whatever Google session
-   the browser already has would sign the app in as a different identity than
-   the one the user chose in the frame. */
+   - Every request this proxies asks for `redirect: 'manual'`, because the flow
+     has to read each 3xx and promote its Location itself. A browser fetch
+     answers that with an OPAQUE redirect: status 0, no headers, no body. There
+     is nothing to promote, and forwarding the status crashes the engine's
+     response rebuild (see `isOpaqueRedirect` in platform.ts).
+   - Falling back per hop would not rescue it. Hops split between the browser
+     and the tunnel are two different sessions reaching Google, which is exactly
+     what the one-connection design above exists to prevent.
+
+   b691605 shipped this path over the extension and broke sign-in outright; the
+   parameter is gone rather than defaulted so it cannot come back by accident. */
 export const createWebvpnTransport = (
   remote: Promise<Pick<EgressApi, 'libcurlFetch' | 'cancelLibcurlFetch'>>,
-  extFetch?: ExtEgressFetch,
 ): ProxyTransport => {
   let requestCounter = 0
   return createTransport(
     async () => { await remote },
     async (url, options, signal) => {
-      const viaExtension = await extFetch?.(url, options, signal)
-      if (viaExtension) return viaExtension
       const api = await remote
       const requestId = `signin:${++requestCounter}`
       signal?.addEventListener('abort', () => { void api.cancelLibcurlFetch(requestId) }, { once: true })

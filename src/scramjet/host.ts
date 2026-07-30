@@ -161,9 +161,20 @@ const boot = async () => {
   // random-id prefix) and its cookie jar syncs to the engine's via the shared
   // __scramjet_controller IndexedDB + BroadcastChannel, so a completed login
   // still propagates. The engine keeps the latency-tuned FKN proxy - untouched.
-  // Prefer the extension here too: the whole point is that an exposed extension
-  // means webvpn is not used at all.
-  const webvpnTransport = createWebvpnTransport(remote, extFetch)
+  /* Deliberately NOT handed the extension, unlike the engine transport above.
+
+     Sign-in is the one flow that needs each 3xx surfaced so it can promote the
+     Location itself, and a browser fetch answers `redirect: 'manual'` with an
+     opaque response: status 0, no headers, no body. There is nothing to promote.
+     Falling back per hop is not an answer either, because this transport exists
+     to carry the WHOLE login flow over ONE connection: hops split between the
+     extension and the tunnel are two sessions to Google, which is the thing the
+     single-connection design is for.
+
+     So the extension serves everything except this, and sign-in stays on
+     libcurl. Reverts the sign-in half of b691605, which shipped this path
+     without a redirect it could express. */
+  const webvpnTransport = createWebvpnTransport(remote)
   await webvpnTransport.init()
   const webvpnController = new Controller({
     serviceworker,

@@ -94,6 +94,29 @@ const IDENTITY_HEADERS = ['cookie', 'authorization']
 export const carriesIdentity = (headers: Record<string, string> | undefined) =>
   !!headers && Object.keys(headers).some((name) => IDENTITY_HEADERS.includes(name.toLowerCase()))
 
+/* The other thing the extension cannot carry: the ANSWER to a redirect the
+   caller wanted to handle itself.
+
+   `extension.fetch` is a real browser fetch, and Scramjet asks for
+   `redirect: 'manual'` on every request it proxies. That is harmless for the
+   ordinary case, because a manual-redirect fetch only goes opaque when the
+   response actually IS a 3xx; a 200 comes back whole. When it does go opaque
+   the answer carries nothing at all: status 0, no headers, no body, by design.
+
+   Forwarding that is worse than dropping it. The engine rebuilds every
+   transport answer with `new Response(body, { status })`, and 0 is outside the
+   range that constructor accepts, so the RangeError takes the service worker's
+   whole request handler down and the page sees a 500 on the navigation. That is
+   what broke sign-in on 2026-07-30: Google's login is a chain of redirects, so
+   it hit this on the first hop, while ordinary browsing never did.
+
+   Detected on the RESPONSE rather than refused on the request, which matters:
+   refusing every `manual` request would send ALL proxied traffic to the tunnel
+   and give up the direct path entirely. Only the hops that really do redirect
+   pay a second request, and the tunnel reports their real status and Location. */
+export const isOpaqueRedirect = (response: { status: number, type?: string }) =>
+  response.status === 0 || response.type === 'opaqueredirect'
+
 const create = async () => {
   const worker = new Worker(new URL('./egress.worker.ts', import.meta.url), { type: 'module' })
   const relayAbort = new AbortController()
@@ -175,14 +198,10 @@ const create = async () => {
        do. The extension binding cannot fall through, so the property holds
        structurally rather than by the gate being lucky.
 
-       `redirect` HONOURS the caller instead of forcing follow. Forcing it was
-       fine while the engine was the only consumer, since resolving redirects
-       natively is what that path wants. The sign-in flow is the opposite: it
-       drives a frame through Google's hops and needs each 3xx surfaced so its
-       soft-redirect promotion can act on the Location, which a followed
-       redirect swallows. A forged Cookie is another reason not to force it,
-       since the extension's header rule matches one exact URL and so does not
-       reapply across a hop. */
+       `redirect` HONOURS the caller rather than forcing follow, because the
+       sign-in flow has to see each 3xx to promote its Location itself. What the
+       extension cannot express is the opaque answer that produces, so that case
+       falls back below rather than being refused up front. */
     const response = await lib.extension.fetch(request.url, {
       method: request.options.method,
       headers: request.options.headers,
@@ -190,6 +209,10 @@ const create = async () => {
       redirect: request.options.redirect ?? 'follow',
       signal,
     })
+    // Nothing usable came back, so answer as if the extension were absent: the
+    // caller re-issues on the tunnel, which reports the real status and headers.
+    // Safe to retry because the request body is deliberately never transferred.
+    if (isOpaqueRedirect(response)) return null
     return {
       status: response.status,
       statusText: response.statusText,

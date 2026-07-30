@@ -107,31 +107,32 @@ describe('FKN transport', () => {
   })
 })
 
-describe('webvpn transport prefers the extension', () => {
-  it('uses the extension when it answers, and falls back to libcurl when it does not', async () => {
+describe('webvpn transport keeps the whole login on one connection', () => {
+  /* It used to take an extension fetch and prefer it. That shipped in b691605
+     and broke sign-in outright: every request here asks for
+     `redirect: 'manual'` so the flow can promote each Location itself, and a
+     browser fetch answers that with an opaque redirect carrying no status, no
+     headers and no body. Falling back per hop would not have rescued it either,
+     since hops split across two transports are two sessions to Google. */
+  it('always uses libcurl, with no way to route a hop elsewhere', async () => {
     const calls: string[] = []
     const remote = Promise.resolve({
-      libcurlFetch: async (_id: string, url: string) => {
-        calls.push(`libcurl:${url}`)
-        return { status: 200, statusText: 'OK', headers: [] as [string, string][], body: null }
+      libcurlFetch: async (id: string, url: string) => {
+        calls.push(`libcurl:${id}:${url}`)
+        return { status: 302, statusText: 'Found', headers: [] as [string, string][], body: null }
       },
       cancelLibcurlFetch: async () => {},
     })
-    // An exposed extension answers, so webvpn must not be touched at all: that
-    // is the whole point of routing sign-in through it.
-    const viaExt = createWebvpnTransport(remote, async (url) => {
-      calls.push(`ext:${url}`)
-      return { status: 200, statusText: 'OK', headers: [], body: null }
-    })
-    await viaExt.init()
-    await viaExt.request(new URL('https://accounts.google.com/ServiceLogin'), 'GET', null, [], undefined)
-    expect(calls).toEqual(['ext:https://accounts.google.com/ServiceLogin'])
+    const transport = createWebvpnTransport(remote)
+    await transport.init()
+    await transport.request(new URL('https://accounts.google.com/ServiceLogin'), 'GET', null, [], undefined)
+    await transport.request(new URL('https://accounts.google.com/signin/challenge'), 'GET', null, [], undefined)
 
-    // Answering null is the not-exposed signal, so the tunnel takes over.
-    calls.length = 0
-    const viaTunnel = createWebvpnTransport(remote, async () => null)
-    await viaTunnel.init()
-    await viaTunnel.request(new URL('https://accounts.google.com/ServiceLogin'), 'GET', null, [], undefined)
-    expect(calls).toEqual(['libcurl:https://accounts.google.com/ServiceLogin'])
+    // Both hops on the same transport, and the ids increment on one counter,
+    // which is what "one connection" looks like from here.
+    expect(calls).toEqual([
+      'libcurl:signin:1:https://accounts.google.com/ServiceLogin',
+      'libcurl:signin:2:https://accounts.google.com/signin/challenge',
+    ])
   })
 })
