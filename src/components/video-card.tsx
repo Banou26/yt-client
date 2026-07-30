@@ -525,12 +525,24 @@ export const VideoCard = (
     <article
       css={style}
       className={classes || undefined}
-      {...prefetch}
+      /* Called through rather than spread. `{...prefetch}` used to sit here, and
+         the two handlers below silently overwrote the hook's own versions of
+         them, because later keys win in the object literal JSX compiles to. Only
+         `onPointerDown` survived, so a pure hover on the one surface that mounts
+         a preview never prefetched anything and the dwell below bought nothing.
+         Naming each one makes that impossible to reintroduce by accident. */
       onPointerEnter={(event: TargetedPointerEvent<HTMLElement>) => {
+        // Ahead of the mouse guard: a tap prefetches for the navigation it is
+        // about to make, even though it will never open a preview.
+        prefetch.onPointerEnter()
         if (event.pointerType !== 'mouse') return
         if (canPreview) setPreviewing(true)
       }}
-      onPointerLeave={() => setPreviewing(false)}
+      onPointerLeave={() => {
+        prefetch.onPointerLeave()
+        setPreviewing(false)
+      }}
+      onPointerDown={prefetch.onPointerDown}
     >
       <Link href={watchHref} className='thumb' tabIndex={-1} aria-hidden='true'>
         {video.thumbnail
