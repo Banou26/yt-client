@@ -171,16 +171,34 @@ const create = async () => {
 
 let platform: ReturnType<typeof create> | undefined
 
+/**
+ * Starts the FKN platform for this document, once.
+ *
+ * Deliberately memoized rather than tied to the engine: surviving engine
+ * resets is half the point of living up here. A FAILED start is not memoized,
+ * though - the host frame used to get a fresh broker attempt on every boot, and
+ * caching the rejection would turn one transient failure into a dead client
+ * until reload.
+ */
 export const startPlatform = () => (platform ??= create().catch((error: unknown) => {
   platform = undefined
   throw error
 }))
 
+/**
+ * Asks the platform to show its extension install prompt, and answers whether
+ * the extension is exposed afterwards: true once it is, false if the reader
+ * dismissed the prompt.
+ *
+ * `reason` is the one app-specific line the platform prompt shows, so it should
+ * say why THIS app is asking.
+ */
 export const promptExtensionInstall = async (reason?: string) => {
   const api = await startPlatform()
   return api.promptInstall(reason)
 }
 
+/** Drops the egress worker's in-flight requests. Safe before the first start. */
 export const abortPlatformEgress = () => {
   void platform?.then((api) => api.abortEgress()).catch(() => {})
 }

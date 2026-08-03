@@ -399,6 +399,14 @@ const style = css`
   }
 `
 
+/**
+ * The like, dislike and reply controls for one comment.
+ *
+ * Every control is gated on `actionsToken`: the endpoints are per-comment
+ * protobuf params, and a read that carried none (a signed-out page) can only
+ * produce controls that fail on click, so they are not rendered at all.
+ */
+/** The top-level comment box. Signed-out readers get a prompt, not a dead form. */
 const Composer = ({ videoId }: { videoId: string }) => {
   const [, navigate] = useLocation()
   const { ready, signedIn } = useSession()
@@ -577,6 +585,14 @@ const REPLIES_QUERY = gql(`
   }
 `)
 
+/**
+ * One thread's replies, collapsed until asked for.
+ *
+ * Mounted only when the comment actually has replies, and the query is paused
+ * until the row is expanded: a page of comments is dozens of threads, and
+ * fetching every one of them eagerly would be dozens of tunneled round trips
+ * for rows nobody opened.
+ */
 const Replies = (
   { cursor, count, videoId }: { cursor: string, count?: number | null, videoId: string },
 ) => {

@@ -53,6 +53,15 @@ const useEngineReady = () => {
 }
 
 // `ready` must cover the whole probe, not just the engine gate, or a caller shows "sign in" to a signed-in user for one round trip
+/**
+ * Shared identity for every view that branches on being signed in.
+ *
+ * `ready` covers the whole probe, not just the engine gate: a caller that
+ * renders a signed-out state the moment the engine comes up would show "sign
+ * in" to a signed-in user for one full round trip. Every caller selects the
+ * same fields off `Query.session`, so the normalized cache answers all of them
+ * from whichever fetch lands first.
+ */
 export const useSession = (): SessionState => {
   const engineReady = useEngineReady()
   const [{ data, error }] = useQuery({ query: SESSION_QUERY, pause: !engineReady })

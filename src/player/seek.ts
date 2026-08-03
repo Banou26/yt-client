@@ -9,6 +9,13 @@ export const registerSeek = (videoId: string, seek: SeekHandler, playhead: Playh
 }
 
 // undefined rather than 0 when the video is not the one mounted: 0 is a real position
+/**
+ * Where the mounted video is, for the share dialog's "start at" offset.
+ *
+ * Undefined rather than 0 when the video is not the one mounted: 0 is a real
+ * position, and a caller cannot tell a genuine start-of-video from "no player"
+ * if both answer the same.
+ */
 export const playheadOf = (videoId: string) => {
   if (current?.videoId !== videoId) return undefined
   const seconds = current.playhead()
@@ -20,6 +27,13 @@ export const clearSeek = (videoId: string) => {
   if (current?.videoId === videoId) current = undefined
 }
 
+/**
+ * Seeks the video currently mounted, if it is the one being addressed.
+ *
+ * Returns whether the seek was taken, so a caller can fall back to a plain
+ * link: a timestamp in a comment can point at a DIFFERENT video, and that has
+ * to navigate rather than silently do nothing.
+ */
 export const seekTo = (videoId: string, seconds: number) => {
   if (current?.videoId !== videoId || !Number.isFinite(seconds) || seconds < 0) return false
   current.seek(seconds)

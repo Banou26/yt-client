@@ -26,6 +26,14 @@ const update = (next: Partial<PlayerSession>) => {
 }
 
 // re-opening the video already playing is deliberately a no-op, not a reset
+/**
+ * Show a video in the persistent player.
+ *
+ * Re-opening the video already playing is deliberately a no-op rather than a
+ * reset: the watch route calls this on every render pass that has an id, and
+ * treating each one as a fresh open would restart playback whenever the page
+ * re-rendered for an unrelated reason.
+ */
 export const openPlayer = (
   { videoId, startAt, title, poster }: { videoId: string, startAt?: number, title?: string, poster?: string },
 ) => {
@@ -37,6 +45,12 @@ export const openPlayer = (
 }
 
 // the ONLY thing that closes the frame's SABR session: route unmount deliberately does not
+/**
+ * Stop playback entirely.
+ *
+ * This is the ONLY thing that closes the frame's SABR session now. Route
+ * unmount deliberately does not, which is the whole point of the dock.
+ */
 export const closePlayer = () => {
   update({ videoId: undefined, startAt: undefined, title: undefined, poster: undefined, theater: false })
 }
@@ -71,6 +85,12 @@ export const registerPlayerDock = (element: HTMLElement | null) => {
   if (dock && host && host.parentElement === null) dock.append(host)
 }
 
+/**
+ * Move the player into `slot`, or back to the dock when it is null.
+ *
+ * Called from a ref callback, so it runs with the element on mount and with
+ * null on unmount, which is exactly the claim/release pair the dock needs.
+ */
 export const claimPlayer = (slot: HTMLElement | null) => {
   const element = ensureHost()
   const target = slot ?? dock

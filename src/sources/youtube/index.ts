@@ -264,6 +264,14 @@ const shortsItems = (feed: Feed) => {
   return items
 }
 
+/**
+ * The videos on a page.
+ *
+ * `includeShorts` is false for a feed that renders its own Shorts shelf: the
+ * home grid puts them in a carousel row, so leaving them in the flat list too
+ * would show every short twice. A channel's Shorts TAB is the opposite case,
+ * where the shorts are the grid.
+ */
 const pageItems = (feed: Feed, { includeShorts = true }: { includeShorts?: boolean } = {}) => {
   // The `videos` getter surfaces legacy Video/GridVideo nodes but NOT LockupView, and a modern feed MIXES the two: merging rather than either/or is essential.
   const seen = new Set<string>()

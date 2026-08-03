@@ -141,6 +141,18 @@ const MuteIcon = ({ muted }: { muted: boolean }) => (
 )
 
 // only the visible slide may hold a SABR session: each one pins a per-session media cache in the frame
+/**
+ * The Shorts player.
+ *
+ * A separate component from `VideoPlayer` rather than a mode of it: the two
+ * share only the Shaka startup call. This one loops, has no control bar, no
+ * quality menu, no fullscreen and no keyboard map, and it is mounted and torn
+ * down as slides scroll rather than living for a route.
+ *
+ * `active` is what gates playback. Only the visible slide is allowed to hold a
+ * SABR session, because each open session pins a per-session media cache in the
+ * frame and a pager that left them open would multiply them per swipe.
+ */
 const ShortsPlayer = (
   { videoId, poster, active }: { videoId: string, poster?: string, active: boolean },
 ) => {

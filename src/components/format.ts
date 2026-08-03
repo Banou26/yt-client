@@ -37,6 +37,14 @@ export const formatMeta = (viewCount?: string | null, publishedText?: string | n
 export const readable = (message: string) => message.replace(/^\[\w+]\s*/, '')
 
 // YouTube's `t` parameter is minted both as a bare count of seconds ('90', '90s') and in the compound form ('1h2m3s')
+/**
+ * YouTube's `t` parameter, in seconds.
+ *
+ * Accepts both forms upstream mints: a bare count of seconds ('90', '90s') and
+ * the compound form ('1h2m3s', '1m30s'). Returns undefined for anything else,
+ * so a malformed parameter starts the video at the beginning rather than at
+ * NaN, which reads as a player that refuses to start.
+ */
 export const parseStartSeconds = (value: string | null | undefined) => {
   if (!value) return undefined
   const trimmed = value.trim()

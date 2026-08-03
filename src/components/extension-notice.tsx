@@ -19,6 +19,17 @@ const exposed = () => document.documentElement.dataset.fknExtension === 'true'
 // only the ABSENT case waits: the content script's loader lands a tick after document_start, which the first render can beat
 const EXPOSURE_GRACE_MS = 1_000
 
+/**
+ * `undefined` while exposure is still unknown, so a caller can distinguish
+ * "no extension" from "not answered yet".
+ *
+ * Seeded from the DOM first and only then from the last visit's answer. That
+ * order is what matters: the content script runs at document_start, so an
+ * exposed extension is already visible on this first render and the remembered
+ * value can never contradict it. The memory only fills the gap the grace below
+ * would otherwise leave, where the header would settle into its final shape
+ * after paint rather than being painted in it.
+ */
 export const useExtensionExposed = () => {
   const [state, setState] = useState<boolean | undefined>(() =>
     exposed() || getSettings().extensionSeen
@@ -186,6 +197,21 @@ const style = css`
   }
 `
 
+/**
+ * A one-line offer in the header for readers running without the extension, and
+ * nothing at all for everyone else.
+ *
+ * The installing itself is the platform's job, not this component's: the button
+ * hands off to the prompt inside the trusted fkn.app overlay. What lives here is
+ * the part the platform cannot know, which is why THIS app is asking. That is
+ * also why `startPlatform()` leaves the automatic prompt switched off: an offer
+ * with a reason attached, shown once and dismissible, is a different thing from
+ * a prompt that fires on every extension-gated call.
+ *
+ * The tone the copy has to carry is that a missing extension is the ORDINARY
+ * case here and not a fault: the relay is a complete answer on its own, so this
+ * is an offer, never a warning.
+ */
 export const ExtensionNotice = () => {
   const extension = useExtensionExposed()
   const [suggest, setSuggest] = useState(() => getSettings().suggestExtension)

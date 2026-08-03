@@ -166,6 +166,16 @@ const formStyle = css`
 `
 
 // membership is write-only: nothing upstream reports whether a video is already in a playlist, so a saved row goes inert rather than pretending it can undo
+/**
+ * Save to playlist.
+ *
+ * Membership is write-only here: nothing upstream reports whether a video is
+ * already in a given playlist, so a row starts unchecked and only ticks once
+ * this panel has put the video there. Unticking is out of reach for a different
+ * reason: removeFromPlaylist addresses entries by setVideoId, the slot id, and
+ * the only place that is readable is a loaded playlist page. So a saved row
+ * goes inert rather than pretending it can undo.
+ */
 export const SaveMenu = (
   { videoId, align = 'end', class: className }: {
     videoId: string

@@ -40,6 +40,15 @@ export type VideoCardData =
     channel?: (Pick<Channel, 'id' | 'name'> & Partial<Pick<Channel, 'avatar'>>) | null
   }
 
+/**
+ * The playlist a link is being followed from, so /watch opens the queue the
+ * reader was already looking at instead of the video on its own.
+ *
+ * `index` is 1-based, matching PlaylistItem.index and upstream's own links. It
+ * is optional even when `list` is set: the server resolves the position from
+ * the video id, and a list that has shifted since the page was rendered would
+ * otherwise open on the wrong row.
+ */
 export type WatchContext = { list?: string, index?: number }
 
 export const watchHrefFor = (videoId: string, context?: WatchContext) => {
@@ -67,6 +76,15 @@ const menuPanelStyle = css`
 
 type CardMenuView = 'root' | 'playlists'
 
+/**
+ * The card overflow menu's contents.
+ *
+ * Split from the trigger because Menu mounts its children only while the panel
+ * is open, and a feed renders dozens of cards: the session probe, the library
+ * query and the mutation all live here so a closed menu costs nothing but the
+ * button. The one thing that has to outlive the panel is which playlists this
+ * video has already been put into, so that state sits with the trigger.
+ */
 const CardMenuPanel = (
   { videoId, saved, onSaved }: {
     videoId: string
@@ -210,6 +228,13 @@ const CardMenuPanel = (
   )
 }
 
+/**
+ * The overflow menu both card layouts hang off their `.more` button.
+ *
+ * `iconSize` is the only thing that differs between them: the compact card's
+ * button is 2.4rem where the grid card's is 3.6rem, and an icon sized for one
+ * looks wrong in the other.
+ */
 export const VideoCardMenu = (
   { videoId, title, iconSize = 20, class: className }: {
     videoId: string

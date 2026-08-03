@@ -89,6 +89,13 @@ const copy = (value: string) => {
 }
 
 // the start-at offset is read ONCE, when the dialog opens: an offset that kept moving with playback would copy a link the reader never saw
+/**
+ * The share sheet for one video.
+ *
+ * The start-at offset is read ONCE, when the dialog opens, rather than tracked:
+ * a checkbox that kept moving with playback would mean the link copied is not
+ * the one the reader saw.
+ */
 export const ShareDialog = (
   { videoId, list, onClose }: { videoId: string, list?: string, onClose: () => void },
 ) => {

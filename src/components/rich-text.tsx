@@ -36,6 +36,18 @@ const style = css`
 `
 
 // a run can point at a DIFFERENT video than `videoId`, which is what decides seek vs navigate; `renderRun` returning undefined defers to the default
+/**
+ * A rich text body rendered from its runs.
+ *
+ * `videoId` is the video the body belongs to, which is what decides whether a
+ * timestamp seeks or navigates: a comment can link to a timestamp in a
+ * DIFFERENT video, and that has to open it rather than jump the current one.
+ *
+ * `renderRun` lets a caller draw runs this component has no concept of, and
+ * fall through for the rest. Live chat is the case: its custom emoji are images
+ * with no meaningful text, while the words around them still want the mention,
+ * link and timestamp handling below. Returning undefined defers to the default.
+ */
 export const RichText = <Run extends RichTextRun>(
   { runs, videoId, className, renderRun }: {
     runs: readonly Run[]

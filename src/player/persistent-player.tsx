@@ -80,6 +80,17 @@ const style = css`
   }
 `
 
+/**
+ * The one player instance, mounted above the router.
+ *
+ * It renders into a detached host node that `claimPlayer` moves between a
+ * route's own layout and this dock. Nothing here re-renders when the player
+ * moves: the host node's identity never changes, so the portal below keeps
+ * targeting the same container wherever that container has been moved to.
+ *
+ * Closing is an explicit action. Leaving the watch page is not one, which is
+ * the difference between this and the old in-route player.
+ */
 const PersistentPlayer = () => {
   const session = usePlayerSession()
   const docked = Boolean(session.videoId) && !session.claimed

@@ -21,6 +21,18 @@ export type PlaylistPanelData = {
 }
 
 // `position` is the 0-based offset into `items`, while the `&index=` it writes is 1-based, as youtube.com's own
+/**
+ * Every row carries the queue with it, through the same builder the cards use.
+ * Dropping `list` on navigation would strand the panel after a single click,
+ * and dropping `index` would make the server re-resolve the position from the
+ * video id, which picks the first occurrence in a playlist that holds the same
+ * video twice.
+ *
+ * `position` is the 0-based offset into `items`, while WatchContext.index is
+ * 1-based because that is what youtube.com's own `&index=` means and this route
+ * serves pasted links; watch.tsx converts it back to the 0-based
+ * `playlistIndex` the schema takes.
+ */
 const queueHrefFor = (videoId: string, playlistId: string, position: number) =>
   watchHrefFor(videoId, { list: playlistId, index: position + 1 })
 
@@ -264,6 +276,14 @@ const QueueRow = (
   )
 }
 
+/**
+ * The up-next queue, above the related rail on /watch.
+ *
+ * Playback handoff is not part of this: the player owns what happens when a
+ * video ends (controls.tsx already declares an unwired `onNext`), so loop and
+ * shuffle here govern where the Next and Previous controls go, not what plays
+ * automatically at the end of the current video.
+ */
 export const PlaylistPanel = ({ playlist }: { playlist: PlaylistPanelData }) => {
   const [, navigate] = useLocation()
   const [loop, setLoop] = useState(mode.loop)

@@ -184,6 +184,13 @@ const style = css`
   }
 `
 
+/**
+ * A muted inline preview drawn over a card thumbnail.
+ *
+ * Mounted only while the pointer is dwelling on the card. Failure is silent by
+ * design: this is a hover affordance over a thumbnail that is already correct,
+ * so an error card in its place would be worse than no preview.
+ */
 export const HoverPreview = ({ videoId }: { videoId: string }) => {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [progress, setProgress] = useState(0)

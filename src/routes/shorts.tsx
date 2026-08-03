@@ -297,6 +297,13 @@ const style = css`
   }
 `
 
+/**
+ * One slide.
+ *
+ * Split out so the metadata query is scoped to the slide and unmounts with it:
+ * a hook on the parent would have to key on the active id and would keep every
+ * visited slide's data alive for the life of the route.
+ */
 const Slide = (
   { id, poster, fallbackTitle, active, onComments, onShare }: {
     id: string

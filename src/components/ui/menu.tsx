@@ -15,11 +15,25 @@ const ITEM_SELECTOR = '[role="menuitem"], [role="menuitemcheckbox"], [role="menu
 const TYPEAHEAD_RESET_MS = 500
 
 type MenuControls = {
+  /**
+   * Closes the panel and puts focus back on the trigger. Selecting a row is a
+   * keyboard round trip: the row unmounts on the same tick, so without this
+   * focus falls to <body> and tab order restarts from the top of the document.
+   */
   close: () => void
 }
 
 const MenuContext = createContext<MenuControls | undefined>(undefined)
 
+/**
+ * Everything the trigger must carry. It is injected into the caller's own
+ * markup rather than wrapped in a button of our own: the five triggers this has
+ * to serve (two card overflow buttons, the comments sort pill, the watch action
+ * button, the header settings ellipsis) share no styling at all.
+ *
+ * `ref` is what anchors the panel and what Escape returns focus to, so it
+ * cannot be dropped.
+ */
 export type MenuTriggerProps = {
   ref: RefObject<HTMLButtonElement | null>
   'aria-haspopup': 'menu'
@@ -27,6 +41,22 @@ export type MenuTriggerProps = {
   onClick: () => void
 }
 
+/**
+ * Pass the trigger element itself and the props above are cloned onto it:
+ *
+ *   trigger={<button type='button' className='more' aria-label='More actions'>…</button>}
+ *
+ * A `css` prop on that element is fine: emotion wraps it in a forwardRef
+ * component, and the injected ref reaches the button either way.
+ *
+ * The render-prop form stays available for a trigger that has to compose the
+ * props itself, but it costs an annotation at the call site
+ * (`(props: MenuTriggerProps) => …`): this project's JSX factory does not
+ * contextually type a function passed as a component prop, so an unannotated
+ * parameter trips noImplicitAny. Element form for anything that does not need
+ * it. A trigger that wants to look different while the panel is up can style
+ * off its own `aria-expanded` attribute or off the wrapper's `data-open`.
+ */
 type MenuTrigger = VNode | ((props: MenuTriggerProps) => ComponentChildren)
 
 const rootStyle = css`
