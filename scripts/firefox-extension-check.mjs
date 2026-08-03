@@ -1,11 +1,4 @@
-/* Drives the SYSTEM Firefox through geckodriver, installs the FKN extension as a
-   TEMPORARY add-on (the only way to load an unsigned build into a
-   signature-enforcing release Firefox), and taps the console over WebDriver
-   BiDi so the app's own `egress →` line is readable.
-
-   Not a Playwright spec, twice over: Playwright cannot install Firefox add-ons
-   at all, and its bundled Firefox is an unpatched binary that will not start on
-   NixOS (missing libstdc++ and the whole GTK set). */
+/* unsigned builds load only as TEMPORARY add-ons, and Playwright cannot install add-ons at all (its bundled Firefox also will not start on NixOS) */
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'

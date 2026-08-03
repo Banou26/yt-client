@@ -1,26 +1,13 @@
 import { describe, expect, it } from 'vite-plus/test'
 
-// Through the package's own surface rather than a deep path: `exports` does not
-// publish dist/, so a direct file import does not resolve.
+// via the package surface: `exports` does not publish dist/, so a deep import does not resolve
 import { YTNodes } from 'youtubei.js'
 
 const { CommentView } = YTNodes
 
-/* Guards `patches/youtubei.js+17.0.1.patch`.
+/* Guards `patches/youtubei.js+17.0.1.patch`: upstream reads `comment.avatar.endpoint`, which YouTube
+   dropped, throwing out of the `Comments` constructor so every video rendered with NO comment section. */
 
-   Upstream reads the comment avatar as `comment.avatar.endpoint` inside
-   `applyMutations`. YouTube dropped `avatar` from the comment entity payload,
-   so that read throws a TypeError which escapes the `Comments` constructor and
-   fails the whole page: every video rendered with NO comment section at all.
-
-   The failure is worth a test rather than a note because nothing else catches
-   it. It is not our code, so the normalizers pass; it is a runtime TypeError,
-   so the type-check passes; and a plain `npm ci` that skipped the patch would
-   put it straight back. This exercises the real upstream class against the real
-   payload shape, which is the only thing that actually proves the patch is on. */
-
-// Shape taken from a live response: keys are key/properties/author/toolbar plus
-// logging, and the avatar url and channel endpoint ride on `author`.
 const entity = () => ({
   key: 'comment-key',
   properties: {
@@ -43,11 +30,6 @@ const entity = () => ({
 })
 
 describe('youtubei.js comment replies patch', () => {
-  // The second half of the same patch. A thread's replies continuation moved
-  // out of `contents` and into `subThreads`, so every thread parsed with an
-  // empty continuation list: the reply count rendered as inert text with no
-  // control to open it, and upstream's own CommentThread.getReplies() threw
-  // "Replies continuation not found."
   const subThreads = [{
     continuationItemRenderer: {
       trigger: 'CONTINUATION_TRIGGER_ON_ITEM_SHOWN',
@@ -63,7 +45,6 @@ describe('youtubei.js comment replies patch', () => {
       viewReplies: { buttonRenderer: { text: { runs: [{ text: '961 replies' }] } } },
       subThreads,
     })
-    // What commentPage looks for: an item carrying an endpoint it can call.
     const continuation = [...replies.contents].find(item => (item as { endpoint?: unknown }).endpoint !== undefined)
     expect(continuation).toBeDefined()
   })
@@ -98,8 +79,6 @@ describe('youtubei.js comment entity patch', () => {
   })
 
   it('still prefers the old avatar shape when upstream sends one', () => {
-    // The patch adds a fallback rather than replacing the read, so a response
-    // that goes back to carrying `avatar` keeps working unchanged.
     const view = new CommentView({ commentId: 'c1' })
     view.applyMutations({
       ...entity(),

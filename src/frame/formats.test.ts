@@ -24,10 +24,7 @@ describe('playableFormats', () => {
     expect(names(playableFormats([audio('a')]))).toEqual(['a'])
   })
 
-  // The 403 regression: an ordinary video ships the plain track alongside
-  // processed siblings that differ only by xtags. Those are not independently
-  // servable, so admitting them let the player pick one and 403 on every
-  // segment.
+  // The 403 regression: siblings that differ only by xtags are not independently servable
   it('drops the volume-boosted sibling when a plain track exists', () => {
     const formats = [
       audio('opus'),
@@ -38,8 +35,6 @@ describe('playableFormats', () => {
     expect(names(playableFormats(formats))).toEqual(['opus', 'aac'])
   })
 
-  // The auto-dubbing regression: every audio format is tagged, so there is no
-  // untagged track to prefer and the original must be used instead.
   it('falls back to the original track when every format is tagged', () => {
     const formats = [
       audio('ar', { xtags: 'dubbed', is_auto_dubbed: true }),
@@ -67,8 +62,6 @@ describe('playableFormats', () => {
   })
 
   it('leaves audio present rather than empty if every track looks unwanted', () => {
-    // Better to hand the session something than to fail with "no supported
-    // audio and video formats".
     const formats = [audio('only', { xtags: 'weird', is_drc: false })]
     expect(names(playableFormats(formats))).toEqual(['only'])
   })

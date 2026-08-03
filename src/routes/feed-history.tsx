@@ -45,8 +45,6 @@ const REMOVE_FROM_HISTORY = gql(`
 `)
 
 type HistoryPage = WatchHistoryQuery['history']
-// The day heading rides along on every video so the deduped list coming back
-// from useInfiniteFeed can be regrouped without a second lookup table.
 type HistoryVideo = HistoryPage['sections'][number]['items'][number] & { sectionTitle: string }
 type HistorySection = { title: string, items: HistoryVideo[] }
 
@@ -182,19 +180,14 @@ const HistoryFeedPage = () => {
   const [{ data, error, fetching }] = useQuery({
     query: WATCH_HISTORY_QUERY,
     variables: { cursor: loaded[loaded.length - 1]?.cursor },
-    // The source refuses this feed before the network call when signed out, and
-    // errors are unmasked, so that refusal would land in the UI verbatim.
+    // the source refuses this feed when signed out and errors are unmasked, so the refusal would land in the UI verbatim
     pause: !ready || !signedIn
   })
   const [, removeFromHistory] = useMutation(REMOVE_FROM_HISTORY)
-  // The write answers with the removed id alone and nothing in the cache maps it
-  // back to a day section, so the row leaves the list from here.
   const [removed, setRemoved] = useState<Set<string>>(() => new Set())
   const [removing, setRemoving] = useState<string[]>([])
 
   const page = data?.history
-  // urql keeps the previous result while the next page is in flight, so the
-  // live page can repeat one already consumed: useInfiniteFeed dedupes by id.
   const { items, cursor } = useInfiniteFeed({
     pages: (page ? [...loaded, page] : loaded).map(entry => ({
       items: entry.sections.flatMap(section =>
@@ -204,8 +197,6 @@ const HistoryFeedPage = () => {
     key: video => video.id
   })
 
-  // A day spans as many pages as it takes, so its videos are merged under the
-  // heading that opened it rather than repeating the heading once per page.
   const sections: HistorySection[] = []
   const byTitle = new Map<string, HistorySection>()
   for (const video of items) {

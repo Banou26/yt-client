@@ -30,19 +30,12 @@ type GuideEntry = {
 
 const MAIN_ENTRIES: GuideEntry[] = [
   { label: 'Home', href: '/', Icon: House, match: '/' },
-  // The Shorts pager seeds itself from the home shelf, so the entry needs no
-  // linking to a page that is not there. No `match`: it is never the current page.
   { label: 'Shorts', href: '/shorts', Icon: Clapperboard },
   { label: 'Subscriptions', href: '/feed/subscriptions', Icon: ListVideo, match: '/feed/subscriptions' }
 ]
 
 const HISTORY_ENTRY: GuideEntry = { label: 'History', href: '/feed/history', Icon: History, match: '/feed/history' }
 
-// Watch later and Liked videos are ordinary playlists with fixed ids upstream,
-// so they address the same route the library cards do rather than getting a
-// page each. Their `match` holds the whole query string, which is why a row
-// opened at a position (?list=WL&index=4) stops lighting the entry: the same
-// limitation the Music and Gaming search entries already have.
 const YOU_ENTRIES: GuideEntry[] = [
   HISTORY_ENTRY,
   { label: 'Playlists', href: '/feed/playlists', Icon: Library, match: '/feed/playlists' },
@@ -51,28 +44,19 @@ const YOU_ENTRIES: GuideEntry[] = [
 ]
 
 const EXPLORE_ENTRIES: GuideEntry[] = [
-  // No Trending route exists yet (Phase 5), same placeholder as Shorts above.
   { label: 'Trending', href: '/', Icon: Flame },
   { label: 'Music', href: '/results?search_query=Music', Icon: Music2, match: '/results?search_query=Music' },
   { label: 'Gaming', href: '/results?search_query=Gaming', Icon: Gamepad2, match: '/results?search_query=Gaming' }
 ]
 
-// The mini rail is an icon column one short label wide, so it keeps carrying the
-// top-level destinations only: 'Watch later' and 'Liked videos' do not fit on
-// one 1rem line there, and the rail is not where the library is browsed from.
 const MINI_ENTRIES: GuideEntry[] = [...MAIN_ENTRIES, HISTORY_ENTRY]
 
 const FOOTER_LINKS = ['About', 'Press', 'Contact', 'Terms', 'Privacy', 'Developers']
 
-// Prefix rather than equality, so a route nested under an entry (a section of
-// History, a channel tab) keeps that entry lit. Home is the one entry whose
-// prefix is every path, so it only ever matches exactly.
+// prefix rather than equality, so a nested route keeps its entry lit; Home's prefix is every path, so it only ever matches exactly
 const isActive = (match: string | undefined, path: string, search: string) => {
   if (match === undefined) return false
-  // Query-backed entries have to match the query too: without it every search
-  // result would light up Music. wouter's useSearch keeps the leading '?', so
-  // it is stripped before joining or the result is '/results??search_query=...'
-  // and never matches.
+  // wouter's useSearch keeps the leading '?', so it is stripped before joining or the result is '/results??search_query=...' and never matches
   const query = search.startsWith('?') ? search.slice(1) : search
   const current = match.includes('?') && query ? `${path}?${query}` : path
   return current === match || current.startsWith(`${match}/`)
@@ -97,8 +81,6 @@ const GuideLink = ({ entry }: { entry: GuideEntry }) => {
 const SubscriptionRail = () => {
   const { signedIn } = useSession()
   const [path] = useLocation()
-  // The guide renders on every route, so an ungated query would make every
-  // anonymous page load pay a round trip that can only come back as an error.
   const [{ data }] = useQuery({ query: GUIDE_SUBSCRIPTIONS_QUERY, pause: !signedIn })
   const channels = data?.subscribedChannels ?? []
 

@@ -7,20 +7,12 @@ import { useDocumentTitle } from '../app'
 import { EXTENSION_URL, useExtensionExposed } from '../components/extension-notice'
 import { getSettings, subscribeSettings, updateSettings } from '../settings'
 
-/* Every field here already existed in the validated store and had no way to be
-   read or changed: theme was applied at boot from a value nothing could set,
-   and quality, autoplay and captions were declared and unreachable. This page
-   is the missing half, not new state. */
-
 const THEMES: { value: ThemePreference, label: string, detail: string }[] = [
   { value: 'device', label: 'Device theme', detail: 'Follow the system setting' },
   { value: 'dark', label: 'Dark', detail: 'Always dark' },
   { value: 'light', label: 'Light', detail: 'Always light' },
 ]
 
-/* A CEILING rather than an exact pick. The exact representation may not exist
-   for a given video, and ABR still moves below the cap on a slow connection, so
-   a label like "1080p" promises "no higher than", which is what it does. */
 const QUALITIES: { value: QualityPreference, label: string }[] = [
   { value: 'auto', label: 'Auto' },
   { value: 2160, label: '2160p' },
@@ -134,9 +126,7 @@ export const SettingsPage = () => {
   const [settings, setSettings] = useState<Settings>(getSettings)
   const extension = useExtensionExposed()
 
-  // The store is shared: the player writes volume and rate as they change, and
-  // the guide writes its collapsed state, so this page follows the store rather
-  // than owning a copy of it.
+  // The store is shared, so this page follows it rather than owning a copy of it
   useEffect(() => subscribeSettings(setSettings), [])
 
   const set = (patch: Partial<Settings>) => setSettings(updateSettings(patch))
@@ -248,8 +238,7 @@ export const SettingsPage = () => {
         </div>
       </section>
 
-      {/* The one place the header offer can be brought back, which is what makes
-          dismissing it safe to be permanent. */}
+      {/* The one place the header offer can be brought back */}
       <section className='section'>
         <h2 className='section-title'>Connection</h2>
         <p className='section-note'>

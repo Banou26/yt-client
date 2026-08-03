@@ -33,9 +33,6 @@ export type SessionState = {
   ready: boolean
 }
 
-// The probe reads the cookie jar the engine owns, so before the engine reports
-// ready it cannot answer, and asking anyway competes with the latency-critical
-// watch/player boot.
 const useEngineReady = () => {
   const [ready, setReady] = useState(() => document.documentElement.dataset.engine === 'ready')
 
@@ -55,15 +52,7 @@ const useEngineReady = () => {
   return ready
 }
 
-/**
- * Shared identity for every view that branches on being signed in.
- *
- * `ready` covers the whole probe, not just the engine gate: a caller that
- * renders a signed-out state the moment the engine comes up would show "sign
- * in" to a signed-in user for one full round trip. Every caller selects the
- * same fields off `Query.session`, so the normalized cache answers all of them
- * from whichever fetch lands first.
- */
+// `ready` must cover the whole probe, not just the engine gate, or a caller shows "sign in" to a signed-in user for one round trip
 export const useSession = (): SessionState => {
   const engineReady = useEngineReady()
   const [{ data, error }] = useQuery({ query: SESSION_QUERY, pause: !engineReady })

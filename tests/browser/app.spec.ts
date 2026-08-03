@@ -74,11 +74,7 @@ test('starts repeated playback sessions in one frame', async ({ page }) => {
         history.pushState(null, '', '/')
         dispatchEvent(new PopStateEvent('popstate'))
       })
-      /* Leaving the watch page hands the video to the miniplayer and KEEPS it
-         playing (8549c89), so the element surviving here is correct. This
-         assertion predates that and has to close the dock first, or the next
-         attempt would re-measure the session still running rather than proving
-         a new one starts. */
+      /* leaving the watch page KEEPS the video playing in the miniplayer, so close the dock first or the next attempt re-measures the running session */
       await page.getByRole('button', { name: 'Close miniplayer' }).click()
       await expect(page.locator('video')).toHaveCount(0)
       await page.evaluate(() => {

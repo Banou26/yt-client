@@ -11,15 +11,8 @@ import { FRAME_CONNECT, FRAME_EGRESS_CONNECT } from '../frame/protocol'
 import { createFknTransport, createWebvpnTransport, FRAME_BOOTSTRAP_URL } from './fkn-transport'
 import type { ExtEgressFetch } from './fkn-transport'
 
-// Start on youtube.com and let ITS Sign in button carry the flow to Google.
-// Going straight to accounts.google.com leaves the login underconfigured (the
-// Next/password step silently no-ops); the passive-mode button URL just bounces
-// back. Loading youtube.com first is the recipe that actually completes.
+// Start on youtube.com and let ITS Sign in button carry the flow to Google: going straight to accounts.google.com leaves the login underconfigured (the Next/password step silently no-ops).
 const SIGN_IN_URL = 'https://www.youtube.com/'
-// Any youtube.com host is a plumbing hop, not a page the user should see: a
-// mobile user agent gets redirected to m.youtube.com (and Google can bounce
-// through accounts.youtube.com on the way back), so a bare www. prefix check
-// leaks those pages past the loading overlay.
 const isYoutubeHop = (target: string) => /^https:\/\/(?:[a-z0-9-]+\.)*youtube\.com\//.test(target)
 
 type FrameWindow = Window & {
@@ -44,16 +37,8 @@ const stage = (value: string) => {
   document.documentElement.dataset.stage = value
 }
 
-/* Longer than the app's own broker-load ceiling, deliberately: this is only a
-   backstop against an app that never answers at all. A platform that fails to
-   come up is reported by the app side, which invalidates the engine with the
-   real reason rather than letting this fire with a vaguer one. */
 const BOOTSTRAP_TIMEOUT_MS = 30_000
 
-/* The app realm owns `@fkn/lib`, the FKN broker and the egress worker (see
-   platform.ts for why), so this frame is handed its egress instead of building
-   it. Announced at module evaluation rather than inside boot(), so the app can
-   answer while the service worker registration is still in flight. */
 const bootstrap = new Promise<{ egress: MessagePort, extFetch: MessagePort }>((resolve, reject) => {
   const timeout = setTimeout(
     () => reject(new Error('yt-client: engine bootstrap ports never arrived')),
@@ -75,9 +60,6 @@ const bootstrap = new Promise<{ egress: MessagePort, extFetch: MessagePort }>((r
   window.parent.postMessage({ type: HOST_HELLO } satisfies HostHello, location.origin)
 })
 
-/* The app realm's extension fetch, reached over a port. Mirrors the local
-   function it replaces exactly, including answering null when the extension is
-   absent so every caller falls back to the tunnelled transports. */
 const createExtFetch = (port: MessagePort): ExtEgressFetch => {
   let requestId = 0
   const pending = new Map<number, { resolve(value: TransportResponse | null): void, reject(reason: unknown): void }>()
@@ -87,8 +69,6 @@ const createExtFetch = (port: MessagePort): ExtEgressFetch => {
     if (!request) return
     pending.delete(message.id)
     if (message.error) request.reject(new Error(message.error))
-    // `?? null` only bridges the union's optional-vs-null shape; both mean the
-    // same thing to the caller, which is "fall back to the tunnel".
     else request.resolve(message.response ?? null)
   })
   port.start()
@@ -100,23 +80,16 @@ const createExtFetch = (port: MessagePort): ExtEgressFetch => {
     const id = ++requestId
     pending.set(id, { resolve, reject })
     signal?.addEventListener('abort', () => {
-      // Only the first settler wins: a response that crossed the abort keeps
-      // the entry, and deleting it here is what proves this abort got there
-      // first.
       if (!pending.delete(id)) return
       port.postMessage({ type: 'cancel', id } satisfies ExtFetchRequest)
       reject(signal.reason)
     }, { once: true })
-    // `options.body` is NOT transferred: the caller reuses this same options
-    // object on the tunnelled fallback, and a transferred ArrayBuffer would
-    // reach it detached.
+    // `options.body` is NOT transferred: the caller reuses this same options object on the tunnelled fallback, and a transferred ArrayBuffer would reach it detached.
     port.postMessage({ type: 'fetch', id, url, options } satisfies ExtFetchRequest)
   })
 }
 
 const boot = async () => {
-  // Every boot stage that depends on nothing starts immediately; awaits happen
-  // only where a stage's result is consumed.
   stage('service-worker')
   const workerReady = navigator.serviceWorker.register('/__yt_scramjet__/sw.js', {
     scope: '/__yt_scramjet__/',
@@ -154,26 +127,8 @@ const boot = async () => {
   await controller.wait()
   stage('frame')
 
-  // A SECOND Controller drives ONLY the sign-in frame, over the webvpn/libcurl
-  // transport (in-browser Chrome-impersonated TLS Google's login backend accepts;
-  // the FKN proxy is rejected with "Something went wrong"). It shares the same SW
-  // registration + config as the engine (the SW multiplexes controllers by their
-  // random-id prefix) and its cookie jar syncs to the engine's via the shared
-  // __scramjet_controller IndexedDB + BroadcastChannel, so a completed login
-  // still propagates. The engine keeps the latency-tuned FKN proxy - untouched.
-  /* Deliberately NOT handed the extension, unlike the engine transport above.
-
-     Sign-in is the one flow that needs each 3xx surfaced so it can promote the
-     Location itself, and a browser fetch answers `redirect: 'manual'` with an
-     opaque response: status 0, no headers, no body. There is nothing to promote.
-     Falling back per hop is not an answer either, because this transport exists
-     to carry the WHOLE login flow over ONE connection: hops split between the
-     extension and the tunnel are two sessions to Google, which is the thing the
-     single-connection design is for.
-
-     So the extension serves everything except this, and sign-in stays on
-     libcurl. Reverts the sign-in half of b691605, which shipped this path
-     without a redirect it could express. */
+  // A SECOND Controller drives ONLY the sign-in frame, over the webvpn/libcurl transport (the FKN proxy is rejected with "Something went wrong").
+  /* Deliberately NOT handed the extension: sign-in is the one flow that needs each 3xx surfaced, and a browser fetch answers `redirect: 'manual'` with an opaque response. */
   const webvpnTransport = createWebvpnTransport(remote)
   await webvpnTransport.init()
   const webvpnController = new Controller({
@@ -193,10 +148,6 @@ const boot = async () => {
   let signInElement: HTMLIFrameElement | undefined
   let signInPoll: ReturnType<typeof setInterval> | undefined
 
-  // Whether the proxied frame has painted a real document. Scramjet drives
-  // navigation through the service worker, so neither the iframe `load` event
-  // nor its location are reliable - detect content directly: about:blank has an
-  // empty body, a rendered login page has real structure.
   const signInRendered = (element: HTMLIFrameElement) => {
     try {
       const doc = element.contentDocument
@@ -206,7 +157,6 @@ const boot = async () => {
     }
   }
 
-  // The frame's decoded target URL, or '' if unreadable.
   const signInTarget = (element: HTMLIFrameElement, prefix: string) => {
     try {
       const path = element.contentWindow?.location.pathname ?? ''
@@ -218,13 +168,7 @@ const boot = async () => {
   }
 
   const signInComplete = (element: HTMLIFrameElement, prefix: string) => {
-    // SAPISID in the shared jar is the definitive "logged in" signal - Google
-    // only sets it after a successful auth, at which point it redirects back to
-    // youtube.com. Gate on it, and only hold off if the frame is still visibly
-    // on an accounts.google.com page (mid-flow); if the location is unreadable,
-    // trust the cookie.
-    // Read the webvpn controller's jar - the sign-in frame's cookies land there
-    // first (it syncs to the engine jar for the authenticated reboot).
+    // Read the webvpn controller's jar - the sign-in frame's cookies land there first (it syncs to the engine jar for the authenticated reboot).
     const cookies = webvpnController.cookieJar.getCookies(new URL('https://www.youtube.com/'), false) as string
     if (!/(?:^|;\s*)SAPISID=/.test(cookies)) return false
     return !signInTarget(element, prefix).startsWith('https://accounts.google.com/')
@@ -236,9 +180,6 @@ const boot = async () => {
     const element = signInElement
     signInElement = undefined
     if (!element) return
-    // The controller has no frame disposal API - drop it from the webvpn
-    // controller's routing list (that's where the sign-in frame lives) and
-    // remove the element.
     const index = webvpnController.frames.findIndex((proxied) => proxied.element === element)
     if (index !== -1) webvpnController.frames.splice(index, 1)
     element.remove()
@@ -246,18 +187,10 @@ const boot = async () => {
 
   const openSignIn = (port: MessagePort) => {
     if (signInElement) return
-    // Least privilege: the login flow needs no permissions, and this frame is
-    // the first place arbitrary rewritten Google JS runs on the app origin.
     const element = document.createElement('iframe')
-    // Literal rather than var(--bg-base) on purpose: this element lives in the
-    // scramjet host document, which carries none of the app's :root custom
-    // properties, so a var() reference here would resolve to nothing. It is
-    // only visible for the moment before Google's own (always light) login
-    // page paints over it.
+    // Literal rather than var(--bg-base) on purpose: this element lives in the scramjet host document, which carries none of the app's :root custom properties.
     element.style.cssText = 'position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: #0f0f0f; z-index: 10;'
     document.body.appendChild(element)
-    // Untapped frame on the WEBVPN controller - no youtube-frame.js injection,
-    // the real rewritten login pages run over libcurl against the shared jar.
     const proxied = webvpnController.createFrame(element)
     signInElement = element
     let announcedLoad = false
@@ -265,22 +198,13 @@ const boot = async () => {
     const check = () => {
       if (signInElement !== element) return
       const target = signInTarget(element, proxied.prefix)
-      // The youtube.com hops (the session-entry page at the start, the cookie
-      // return at the end) are plumbing the user shouldn't see: keep the frame
-      // invisible while it is on youtube.com so only the Google auth pages ever
-      // show. Leave an unreadable ('') target alone - mid-navigation flicker.
       if (target) element.style.visibility = isYoutubeHop(target) ? 'hidden' : 'visible'
-      // First rendered NON-youtube document = the auth page is up; tell the app
-      // to drop its loading overlay. While still on youtube.com the overlay
-      // stays, covering the entry hop + auto-click below.
       if (!announcedLoad && signInRendered(element) && target && !isYoutubeHop(target)) {
         announcedLoad = true
         port.postMessage({ type: SIGNIN_LOADED } satisfies HostControlEvent)
       }
-      // If routed through youtube.com first, auto-click its own Sign in link (an
-      // <a> whose rewritten href still encodes the ServiceLogin target) once, so
-      // the redirect carries the youtube.com referer. Scoped to youtube.com pages
-      // so it never clicks Google's footer TOS links.
+      // auto-clicks youtube.com's own Sign in link (an <a> whose rewritten href encodes ServiceLogin) so the redirect carries the youtube.com REFERER, which is the reason for the youtube.com entry hop at all
+      // scoped to youtube.com pages so it never hits Google's footer TOS links
       if (!advanced && isYoutubeHop(target)) {
         try {
           const link = element.contentDocument?.querySelector<HTMLElement>('a[href*="ServiceLogin"]')
@@ -296,17 +220,10 @@ const boot = async () => {
     }
     element.addEventListener('load', check)
     signInPoll = setInterval(check, 500)
-    /* Prewarm the webvpn relay to both login hosts (a dial+close that warms the
-       relay session) BEFORE the first navigation - a cold libcurl dial to a
-       never-warmed host hangs, so pay that cost up front, then navigate. Capped
-       so a slow/failed warm never strands the frame (the app also has a reveal
-       fallback); the navigation itself re-warms if needed.
-
-       Skipped entirely when the extension is serving this flow, because then
-       libcurl is never dialled and the warm is pure dead time in front of the
-       login page (measured at up to the full 8s cap). The probe doubles as the
-       check: a non-null answer means the extension took the request, and
-       `generate_204` is the cheapest thing to ask it for. */
+    /* A cold libcurl dial to a never-warmed host hangs, so pay that cost up front, then navigate.
+       Skipped entirely when the extension is serving the flow, because then libcurl is never dialled and the
+       warm is pure dead time in front of the login page (measured at up to the full 8s cap); the
+       `generate_204` probe doubles as the check, since a non-null answer means the extension took the request. */
     const warmup = extFetch('https://www.youtube.com/generate_204', { method: 'GET' }, undefined)
       .then(async (viaExtension) => {
         if (viaExtension) {
@@ -325,8 +242,6 @@ const boot = async () => {
   }
 
   const clearCookies = async (id: number, port: MessagePort) => {
-    // A reply must ALWAYS go back: sign-out treats a missing/failed clear as
-    // fatal (the persisted jar still holds the identity), never as success.
     try {
       controller.cookieJar.clear()
       await controller.persistCookies()
@@ -372,11 +287,6 @@ const boot = async () => {
     frameWindow.$scramerr = () => {}
     const egressChannel = new MessageChannel()
     frameEgressPort = egressChannel.port2
-    // Frame egress (SABR media, botguard attestation, host warms). Prefer the
-    // extension's native CORS-free fetch when present, else the libcurl/webvpn
-    // tunnel. Each in-flight request gets an AbortController so a frame-side
-    // cancel (e.g. a seek dropping stale segment requests) aborts the extension
-    // fetch too - the tunnel path is cancelled via cancelLibcurlFetch.
     const egressAborts = new Map<number, AbortController>()
     egressChannel.port2.addEventListener('message', (event) => {
       const request = event.data as FrameEgressRequest
@@ -424,9 +334,6 @@ const boot = async () => {
     stage('frame-posted')
   })
   proxiedFrame.go(FRAME_BOOTSTRAP_URL)
-  /* Ports only. The egress worker, the relay and the broker belong to the app
-     realm now and deliberately outlive this frame - surviving engine resets is
-     the point of the move. */
   window.addEventListener('pagehide', () => {
     egress.close()
     extFetchPort.close()

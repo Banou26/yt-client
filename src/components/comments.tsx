@@ -399,14 +399,6 @@ const style = css`
   }
 `
 
-/**
- * The like, dislike and reply controls for one comment.
- *
- * Every control is gated on `actionsToken`: the endpoints are per-comment
- * protobuf params, and a read that carried none (a signed-out page) can only
- * produce controls that fail on click, so they are not rendered at all.
- */
-/** The top-level comment box. Signed-out readers get a prompt, not a dead form. */
 const Composer = ({ videoId }: { videoId: string }) => {
   const [, navigate] = useLocation()
   const { ready, signedIn } = useSession()
@@ -433,9 +425,7 @@ const Composer = ({ videoId }: { videoId: string }) => {
         return
       }
       setDraft('')
-      // The create answers with nothing parseable, so the row is not prepended:
-      // a fabricated id would poison the normalized cache, and the comment
-      // appears on the next read of the list.
+      // no optimistic row: a fabricated id would poison the normalized cache
       showToast('Comment posted')
     })
   }
@@ -466,8 +456,6 @@ const Composer = ({ videoId }: { videoId: string }) => {
   )
 }
 
-// No videoId: both writes address the comment through the actions token the
-// page minted for it, so the video it sits on is not part of either call.
 const CommentActions = ({ comment }: { comment: CommentRow }) => {
   const [, navigate] = useLocation()
   const { ready, signedIn } = useSession()
@@ -484,7 +472,6 @@ const CommentActions = ({ comment }: { comment: CommentRow }) => {
       return
     }
     if (!token) return
-    // Clicking the direction already set clears it, matching the video pills.
     const next = (status === 'LIKE' && comment.isLiked) || (status === 'DISLIKE' && comment.isDisliked)
       ? 'INDIFFERENT'
       : status
@@ -505,8 +492,6 @@ const CommentActions = ({ comment }: { comment: CommentRow }) => {
       }
       setDraft('')
       setReplying(false)
-      // Upstream answers with nothing parseable, so the reply is reported
-      // rather than rendered: the thread refetches when it is next expanded.
       showToast('Reply posted')
     })
   }
@@ -592,14 +577,6 @@ const REPLIES_QUERY = gql(`
   }
 `)
 
-/**
- * One thread's replies, collapsed until asked for.
- *
- * Mounted only when the comment actually has replies, and the query is paused
- * until the row is expanded: a page of comments is dozens of threads, and
- * fetching every one of them eagerly would be dozens of tunneled round trips
- * for rows nobody opened.
- */
 const Replies = (
   { cursor, count, videoId }: { cursor: string, count?: number | null, videoId: string },
 ) => {
@@ -661,10 +638,6 @@ const Replies = (
               </div>
             ))}
             {fetching ? <div className='age'>Loading replies…</div> : undefined}
-            {/* The source's own sentence rather than a fixed line: a generic
-                "could not load" reads the same whether the continuation expired,
-                the engine restarted or upstream changed shape, so it hid a real
-                failure behind wording that looked handled. */}
             {error && items.length === 0 ? <div className='age'>{readable(error.message)}</div> : undefined}
             {next && !fetching
               ? (
@@ -686,10 +659,7 @@ const Replies = (
 
 export const Comments = ({ videoId, commentCountText }: { videoId: string, commentCountText?: string | null }) => {
   const [sort, setSort] = useState<CommentSort>('TOP')
-  // Consumed pages carry the ordering they came from, so switching sort starts
-  // from an empty list in the same render. Without this the accumulator would
-  // dedupe the new ordering against the old one and drop legitimately reordered
-  // comments rather than reordering them.
+  // pages carry the sort they came from: without it the accumulator dedupes a reorder into a drop
   const [loaded, setLoaded] = useState<{ sort: CommentSort, pages: CommentPage[] }>({ sort, pages: [] })
   const loadedPages = loaded.sort === sort ? loaded.pages : []
   const [{ data, error, fetching }] = useQuery({
@@ -701,9 +671,6 @@ export const Comments = ({ videoId, commentCountText }: { videoId: string, comme
     pages: page ? [...loadedPages, page] : loadedPages,
     key: comment => comment.id
   })
-  // The header's own count is exact and already reads as a count, so the regex
-  // that had to guess whether the /next teaser said 'comments' is gone. That
-  // teaser stays as the fallback for the render before the page arrives.
   const heading = page?.countText
     ?? (commentCountText
       ? /comment/i.test(commentCountText) ? commentCountText : `${commentCountText} Comments`
@@ -712,10 +679,7 @@ export const Comments = ({ videoId, commentCountText }: { videoId: string, comme
     if (!page?.cursor || fetching) return
     setLoaded({ sort, pages: loadedPages[loadedPages.length - 1] === page ? loadedPages : [...loadedPages, page] })
   }
-  // A first-page failure REPORTS rather than unmounting. Returning null here
-  // renders a watch page with no comment section at all, which reads as "this
-  // video has no comments" and hides the actual error from both the reader and
-  // anyone debugging it. A pagination error still keeps the loaded comments up.
+  // a first-page failure REPORTS rather than unmounting: returning null reads as "no comments"
   if (error && items.length === 0) {
     return (
       <section css={style}>

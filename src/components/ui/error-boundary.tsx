@@ -38,9 +38,6 @@ const style = css`
   }
 `
 
-// Without this, one thrown render anywhere in the tree unmounts the whole app
-// and leaves a blank page with the error only in the console. Reset re-renders
-// the subtree, which is enough for the common case of a transient data shape.
 export const ErrorBoundary = ({ children }: { children: ComponentChildren }) => {
   const [error, reset] = useErrorBoundary()
 

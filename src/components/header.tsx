@@ -11,16 +11,12 @@ import { AccountMenu } from './account-menu'
 import { ExtensionNotice } from './extension-notice'
 import { NotificationsMenu } from './notifications-menu'
 
-// Suggestions are display text with no entity and no continuation, so a failed
-// call degrades to an empty list at the source rather than surfacing here.
 const SEARCH_SUGGESTIONS_QUERY = gql(`
   query SearchSuggestions($query: String!) {
     searchSuggestions(query: $query)
   }
 `)
 
-// Long enough that a fast typist issues one call rather than one per character,
-// short enough that a pause still feels answered.
 const SUGGEST_DEBOUNCE_MS = 200
 
 const HEADER_SESSION_QUERY = gql(`
@@ -271,8 +267,6 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
   const [debounced, setDebounced] = useState('')
   const [suggestOpen, setSuggestOpen] = useState(false)
   const [activeSuggestion, setActiveSuggestion] = useState(-1)
-  // Defer the session probe until the engine is ready so its accounts_list call
-  // never competes with the latency-critical watch/player boot.
   const [engineReady, setEngineReady] = useState(() => document.documentElement.dataset.engine === 'ready')
   const [{ data: sessionData }] = useQuery({ query: HEADER_SESSION_QUERY, pause: !engineReady })
   const session = sessionData?.session
@@ -302,10 +296,7 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  // Every keystroke that reaches the source is a tunneled round trip at roughly
-  // 0.9s, and src/scramjet/client.ts has no cancellation path for a non-segment
-  // call, so the debounce is load-bearing rather than a nicety: without it a
-  // fast typist queues a request per character and they all still complete.
+  // src/scramjet/client.ts has no cancellation path for a non-segment call, so the debounce is load-bearing rather than a nicety
   useEffect(() => {
     if (typed === undefined) return
     const timer = setTimeout(() => setDebounced(typed.trim()), SUGGEST_DEBOUNCE_MS)
@@ -319,8 +310,6 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
   })
   const suggestions = suggestOpen ? suggestData?.searchSuggestions ?? [] : []
 
-  // Only /results carries search_query, so reading it off whatever the current
-  // location is keeps the box filled there and empty everywhere else.
   const currentQuery = new URLSearchParams(search).get('search_query') ?? undefined
 
   const submitQuery = (query: string) => {
@@ -332,9 +321,6 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
     navigate(`/results?search_query=${encodeURIComponent(trimmed)}`)
   }
 
-  // Arrow keys move a highlight without committing, matching youtube.com: the
-  // box shows the highlighted suggestion so Enter is never a surprise, and
-  // Escape steps back to what was actually typed rather than closing the box.
   const onSearchKeyDown = (event: TargetedKeyboardEvent<HTMLInputElement>) => {
     if (suggestions.length === 0) return
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -374,8 +360,7 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
             key={currentQuery ?? ''}
             ref={inputRef}
             name='search_query'
-            /* `type='search'` renders a native clear affordance that steals the
-               Escape key from the listbox, so the combobox uses a text input. */
+            /* `type='search'` renders a native clear affordance that steals the Escape key from the listbox */
             type='text'
             placeholder='Search'
             aria-label='Search'
@@ -392,9 +377,7 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
               setActiveSuggestion(-1)
             }}
             onFocus={() => setSuggestOpen(true)}
-            /* A blur that lands on a suggestion would close the list before the
-               click resolves, so the commit runs on pointerdown below and this
-               only has to outlive the pointer. */
+            /* a blur that lands on a suggestion would close the list before the click resolves, so the commit runs on pointerdown below */
             onBlur={() => setTimeout(() => setSuggestOpen(false), 120)}
             onKeyDown={onSearchKeyDown}
           />
@@ -429,10 +412,7 @@ export const Header = ({ onMenu }: { onMenu?: () => void }) => {
         </button>
       </form>
       <div className='end'>
-        {/* First in the row, so it sits furthest from the account controls: it
-            is an aside about how the page is fetched, not one of the actions
-            the header is for. Renders nothing at all with the extension
-            installed, or once declined. */}
+        {/* renders nothing at all with the extension installed, or once declined */}
         <ExtensionNotice />
         <Link href='/settings' className='icon-button' aria-label='Settings'>
           <EllipsisVertical size={24} strokeWidth={1.5} />

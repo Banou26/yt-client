@@ -44,12 +44,8 @@ const SEND_LIVE_CHAT = gql(`
   }
 `)
 
-/* Roughly twice a screenful. A busy chat outruns any reader, and holding the
-   whole transcript would grow without limit on a stream running for hours. */
 const TRANSCRIPT_LIMIT = 250
 
-// Treat "close enough to the bottom" as pinned: a chat appends constantly, so
-// requiring an exact scroll position would unpin on almost every message.
 const PINNED_SLACK_PX = 40
 
 const styles = css`
@@ -257,10 +253,7 @@ export const LiveChat = ({ videoId }: { videoId: string }) => {
   const logRef = useRef<HTMLDivElement>(null)
   const [, send] = useMutation(SEND_LIVE_CHAT)
 
-  /* Each answer carries the cursor for the next one, and the server parks that
-     request until something arrives. So the chain IS the poll: there is no
-     interval here, and a quiet chat costs one parked request rather than a
-     stream of empty ones. `pause` on the ended flag is what stops it. */
+  /* the server parks each request until something arrives, so the cursor chain IS the poll: no interval belongs here */
   const [{ data, error }, reexecute] = useQuery({
     query: LIVE_CHAT_QUERY,
     variables: { videoId, cursor },
@@ -269,12 +262,6 @@ export const LiveChat = ({ videoId }: { videoId: string }) => {
 
   const page = data?.liveChat
 
-  /* Retry a failed poll, because nothing else will.
-
-     The chain advances only when an answer carries the next cursor, so a single
-     failure ends it: the panel sits on whatever it had and never asks again.
-     That is easy to hit, since the first poll can go out while the engine is
-     still starting. Backoff keeps a genuinely broken chat from hammering. */
   const attemptRef = useRef(0)
   useEffect(() => {
     if (!error || ended) {
@@ -295,22 +282,17 @@ export const LiveChat = ({ videoId }: { videoId: string }) => {
         const next = removed.size
           ? current.filter((message) => !removed.has(message.id))
           : current
-        // Ids repeat when urql replays a cursor on remount, and a duplicate key
-        // would render the same line twice.
+        // ids repeat when urql replays a cursor on remount
         const seen = new Set(next.map((message) => message.id))
         const added = page.items.filter((message) => !seen.has(message.id) && !removed.has(message.id))
         const grown = added.length ? [...next, ...added] : next
         return grown.length > TRANSCRIPT_LIMIT ? grown.slice(grown.length - TRANSCRIPT_LIMIT) : grown
       })
     }
-    // No cursor means the chat is over. Holding the last one would poll a
-    // finished stream forever.
     if (!page.cursor) setEnded(true)
     else if (page.cursor !== cursor) setCursor(page.cursor)
   }, [page])
 
-  // Following the tail is the default, but only while the reader is there:
-  // scrolling up to read something is exactly when an autoscroll is worst.
   useEffect(() => {
     const log = logRef.current
     if (!log || !pinned) return
@@ -331,7 +313,6 @@ export const LiveChat = ({ videoId }: { videoId: string }) => {
     const result = await send({ videoId, text })
     if (result.error) {
       showToast(result.error.graphQLErrors[0]?.message ?? 'Could not send that message')
-      // Put it back rather than losing what they typed.
       setDraft(text)
     }
   }

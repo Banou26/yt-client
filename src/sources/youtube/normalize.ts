@@ -12,9 +12,6 @@ type Text = {
   runs?: RunNode[]
 }
 
-// One run of a rich text body. The endpoint's payload is keyed by the endpoint
-// NAME upstream, so these four fields are the union of the ones this client
-// reads across url, watch and browse endpoints.
 type RunNode = {
   text?: string
   endpoint?: {
@@ -138,13 +135,6 @@ type PlaylistVideoNode = FeedVideo & {
   style?: string
 }
 
-// GridPlaylist and the legacy Playlist node share every field this reads. They
-// differ only in `author`: GridPlaylist always builds an Author, while Playlist
-// hands back a bare Text byline when the response carries a simple one.
-/* Also describes the legacy `Playlist` renderer, which a channel's Releases and
-   Podcasts tabs still serve: it declares the same field names, and differs only
-   in putting its cover on a thumbnail_renderer when the playlist has a custom
-   one rather than a video still. */
 type GridPlaylistNode = {
   id?: string
   title?: string | Text
@@ -156,11 +146,6 @@ type GridPlaylistNode = {
   author?: Author | Text
 }
 
-// The queue row on a watch page. It shares almost nothing with a feed video:
-// `thumbnail` is singular in NAME but holds the whole array (youtubei.js builds
-// it from `data.thumbnail` through Thumbnail.fromResponse), the duration is
-// pre-parsed rather than a length badge, and the byline is a plain string with
-// no channel id anywhere on the node.
 type PlaylistPanelVideoNode = {
   video_id?: string
   title?: Text
@@ -169,13 +154,9 @@ type PlaylistPanelVideoNode = {
   author?: string
   selected?: boolean
   set_video_id?: string
-  // PlaylistPanelVideoWrapper, the YouTube Music shape, keeps the real row here.
   primary?: PlaylistPanelVideoNode
 }
 
-// TwoColumnWatchNextResults hand-flattens the raw playlist panel into a plain
-// object rather than instantiating a node, so this is the complete field set:
-// totalVideos, isCourse and isEditable are dropped before we ever see them.
 type WatchNextPlaylistPanel = {
   id?: string
   title?: string
@@ -201,9 +182,6 @@ type PlaylistDetails = {
   }
 }
 
-// `contents` is a SECTION, not the account. The account details live on an
-// AccountItem inside that section's own `contents`, which also mixes in
-// CompactLink rows that carry none of these fields.
 type AccountItemNode = {
   account_name?: Text
   account_photo?: Thumbnail[]
@@ -249,15 +227,7 @@ const presentText = (value: string | Text | undefined) => {
   return result === 'N/A' ? undefined : result
 }
 
-/* Upstream publishes several sizes of every image and this used to take the
-   widest of them unconditionally, so a 12-card grid pulled maxres (1280x720)
-   stills into 360px slots and 800px channel photos into 24px avatars.
-
-   `minWidth` is the narrowest candidate that still covers the slot the image
-   renders into, at 2x for a HiDPI display. The smallest candidate at or above
-   it wins; if upstream publishes nothing that large, the widest is still the
-   best available. Omitting it keeps the old widest-wins behaviour for the
-   places that genuinely want the full-size asset. */
+// `minWidth` is the narrowest candidate that covers the slot at 2x; omitting it takes the widest
 const thumbnail = (items: Thumbnail[] | undefined, minWidth?: number) => {
   const sorted = items
     ?.filter((item): item is Thumbnail & { url: string } => Boolean(item.url))
@@ -269,22 +239,14 @@ const thumbnail = (items: Thumbnail[] | undefined, minWidth?: number) => {
   return (covering ?? sorted[sorted.length - 1])?.url
 }
 
-/* The same candidates as a srcset, so the browser picks per slot and per pixel
-   ratio instead of every card taking the one width chosen here.
-
-   Only widths upstream actually published are listed: a srcset is a promise
-   about what exists at each URL, so a fabricated entry is a broken image rather
-   than a smaller download. Candidates without a width cannot be described at
-   all and are dropped, and a single candidate is not a choice, so both cases
-   answer undefined and leave the plain `thumbnail` to serve. */
+// only widths upstream actually published are listed: a fabricated entry is a broken image
 const srcset = (items: Thumbnail[] | undefined) => {
   const described = items?.filter(
     (item): item is Thumbnail & { url: string, width: number } =>
       Boolean(item.url) && Number.isFinite(item.width) && (item.width ?? 0) > 0,
   )
   if (!described || described.length < 2) return undefined
-  // Deduped by width: upstream publishes the same size more than once (a webp
-  // and a jpg of one still), and a repeated descriptor is invalid.
+  // deduped by width: upstream publishes the same size more than once, and a repeated descriptor is invalid
   const byWidth = new Map(described.map((item) => [item.width, item.url]))
   return [...byWidth]
     .sort((a, b) => a[0] - b[0])
@@ -292,13 +254,10 @@ const srcset = (items: Thumbnail[] | undefined) => {
     .join(', ')
 }
 
-// A channel photo renders at 24px in a comment, 40px on a watch page and 80px
-// on a channel header, so 160 covers the largest of them at 2x.
+// a channel photo renders at 80px at most, so 160 covers it at 2x
 const AVATAR_WIDTH = 160
 
-// A grid card is roughly 360px wide and the watch sidebar's is roughly 168px,
-// so 720 covers the larger at 2x. maxres beyond that is a download nothing on
-// screen can show.
+// a grid card is roughly 360px wide, so 720 covers it at 2x
 const STILL_WIDTH = 720
 
 const durationSeconds = (value: string | undefined) => {
@@ -330,10 +289,7 @@ const likeStatus = (value: unknown): SourceLikeStatus | undefined =>
 
 const NOTIFICATION_LEVELS: SourceNotificationLevel[] = ['ALL', 'PERSONALIZED', 'NONE']
 
-// The toggle reports its state as a style id like
-// 'STATE_SUBSCRIBE_NOTIFICATION_PREFERENCE_PERSONALIZED'; only the tail is
-// meaningful and the vocabulary changes, so an unknown value reads as absent
-// rather than as NONE (which the bell would render as "notifications off").
+// the state arrives as a style id whose tail is the level; an unknown one reads as absent, never as NONE
 const notificationLevel = (value: unknown): SourceNotificationLevel | undefined => {
   if (typeof value !== 'string') return undefined
   const upper = value.toUpperCase()
@@ -347,9 +303,6 @@ const metadataTexts = (metadata: MetadataParts | undefined) =>
     .filter((value): value is string => Boolean(value))
     ?? []
 
-// youtubei.js's Author fills BOTH id and name with the literal 'N/A' when the
-// node carries no byline (PlaylistVideo builds one unconditionally), so an
-// absent author otherwise reads as a real channel and renders a dead link.
 const authorChannel = (author: Author | undefined): SourceChannel | undefined => {
   const id = presentText(author?.id)
   const name = presentText(author?.name)
@@ -363,25 +316,14 @@ const authorChannel = (author: Author | undefined): SourceChannel | undefined =>
   }
 }
 
-// Upstream's own localized badge texts, taken from `label` rather than the
-// style id: the style vocabulary is internal and changes, while the label is
-// what YouTube itself renders on the card. An unrecognized badge still shows.
 const badgeTexts = (badges: { label?: string, text?: string }[] | undefined) =>
   (badges ?? [])
     .map((badge) => presentText(badge.label) ?? presentText(badge.text))
     .filter((value): value is string => Boolean(value))
 
-// Both are badge-derived. Members-only is matched on the style id because its
-// label is a whole localized sentence, while upcoming has a real getter on the
-// legacy node and only needs the badge as a fallback.
 const hasBadgeStyle = (badges: { style?: string }[] | undefined, fragment: string) =>
   (badges ?? []).some((badge) => badge.style?.includes(fragment))
 
-// A playlist byline is an Author on some renderers and a plain Text on others.
-// Only the Author shape has an `id`; a Text keeps the channel id on its
-// endpoint. Both paths read a named field rather than stringifying the node,
-// because an Author has no `text` and would otherwise fall through as the
-// literal '[object Object]'.
 const bylineChannel = (author: Author | Text | undefined): SourceChannel | undefined => {
   const fromAuthor = authorChannel(author as Author | undefined)
   if (fromAuthor) return fromAuthor
@@ -397,8 +339,6 @@ const lockupParts = (lockup: LockupVideo) =>
     .map((part) => part.text)
     ?? []
 
-// The first metadata part is the channel; its id rides on that part's endpoint,
-// falling back to the avatar's tap target when the part carries no link.
 const lockupChannel = (lockup: LockupVideo, parts: (Text | undefined)[]): SourceChannel | undefined => {
   const name = text(parts[0])
   const id = parts[0]?.endpoint?.payload?.browseId
@@ -432,9 +372,6 @@ export const normalizeChannel = (input: unknown, fallbackId?: string): SourceCha
   }
 }
 
-// The subscribed-channel rail comes back as GridChannel/Channel nodes, which
-// carry their id on `author`/`id` rather than the `metadata.external_id` shape
-// normalizeChannel expects off a browse response.
 export const normalizeFeedChannel = (input: unknown): SourceChannel | undefined => {
   const node = input as {
     id?: string
@@ -455,11 +392,6 @@ export const normalizeFeedChannel = (input: unknown): SourceChannel | undefined 
   }
 }
 
-// A search Channel node is neither of the shapes the other two channel
-// normalizers handle: it keeps its id at the top level and its name on an
-// Author, where normalizeChannel wants a browse response's
-// `metadata.external_id` (and throws without one) and normalizeFeedChannel
-// wants the id on the Author. Verified against parser/classes/Channel.d.ts.
 export const normalizeSearchChannel = (input: unknown): SourceChannel | undefined => {
   const node = input as {
     id?: string
@@ -472,12 +404,7 @@ export const normalizeSearchChannel = (input: unknown): SourceChannel | undefine
   const id = node.id ?? presentText(node.author?.id)
   const name = presentText(node.author?.name)
   if (!id || !name) return undefined
-  // The two count fields are MISNAMED on this node and reading them literally
-  // renders the handle twice. YouTube repurposed the renderer's slots and
-  // youtubei.js kept the original property names, flagging it in its own source
-  // (parser/classes/Channel.js:25): `subscriberCountText` now carries the
-  // handle and `videoCountText` carries the subscriber count. A video count is
-  // simply not on this node, so it stays absent rather than being invented.
+  // MISNAMED upstream (youtubei.js parser/classes/Channel.js:25): subscriber_count holds the handle, video_count the subscriber count
   const handle = handleFromUrl(node.author?.url) ?? presentText(node.subscriber_count)
   return {
     id,
@@ -491,11 +418,6 @@ export const normalizeSearchChannel = (input: unknown): SourceChannel | undefine
   }
 }
 
-// Two renderer generations are BOTH live: newer channels answer with
-// AboutChannel wrapping an AboutChannelView, older ones still serve the legacy
-// ChannelAboutFullMetadata, whose fields are Text nodes where the modern one
-// uses plain strings. Reading only the modern shape leaves the panel blank on
-// exactly the channels old enough to have filled it in.
 export const normalizeChannelAbout = (input: unknown): SourceChannelAbout | undefined => {
   const node = input as {
     metadata?: {
@@ -534,8 +456,7 @@ export const normalizeChannelAbout = (input: unknown): SourceChannelAbout | unde
     }
   }
   const legacy = node
-  // The legacy renderer carries no counts beyond views, so those stay absent
-  // rather than being back-filled from the header, which is a different read.
+  // the legacy renderer carries no counts beyond views, so those stay absent rather than back-filled
   const about: SourceChannelAbout = {
     description: presentText(legacy.description),
     country: presentText(legacy.country),
@@ -548,7 +469,6 @@ export const normalizeChannelAbout = (input: unknown): SourceChannelAbout | unde
       return title && url ? [{ title, url }] : []
     }),
   }
-  // A node that is neither shape yields nothing worth a panel.
   return Object.values(about).some((value) => value !== undefined && value.length !== 0) ? about : undefined
 }
 
@@ -570,34 +490,20 @@ export const normalizeCommunityPost = (input: unknown): SourcePost | undefined =
   return {
     id,
     author: authorChannel(node?.author),
-    // A post can be an image or a poll with no words at all, so empty text is a
-    // real state rather than a reason to drop the row.
     text: presentText(node?.content) ?? '',
     publishedText: presentText(node?.published),
     voteCountText: presentText(node?.vote_count),
-    // Only the two attachment kinds a card can actually draw. The node behind
-    // `attachment` is a whole union, and the rest needs a surface first.
-    // Guarded because most posts carry no attachment at all, and
-    // normalizeFeedVideo takes a node rather than a maybe-node: it casts and
-    // reads `video_id` straight off, which throws on undefined.
+    // guarded because normalizeFeedVideo takes a node rather than a maybe-node and throws on undefined
     attachedVideo: node?.attachment === undefined ? undefined : normalizeFeedVideo(node.attachment),
     attachedImage: thumbnail(attachment?.image ?? attachment?.thumbnails),
   }
 }
 
-/* Upstream hands a text body back as runs, each of which may carry an endpoint.
-   Collapsing them with text() is what makes every URL, @mention, #hashtag and
-   12:34 timestamp inert, which is the state descriptions and comments are in.
-
-   Deliberately NOT Text.toHTML(): that returns a markup string, and rendering
-   it would mean injecting upstream HTML into the tree. Runs are data, so the
-   component decides what an anchor, a route link and a seek button are. */
+// deliberately NOT Text.toHTML(): that returns a markup string, and rendering it injects upstream HTML into the tree
 export const normalizeRuns = (value: string | Text | undefined): SourceTextRun[] => {
   if (typeof value === 'string') return value.length > 0 ? [{ text: value }] : []
   const runs = (value as { runs?: RunNode[] } | undefined)?.runs
   if (!runs || runs.length === 0) {
-    // A body with no runs is still a body: keep it as one unlinked segment so
-    // the caller never has to fall back to the flat string itself.
     const flat = presentText(value)
     return flat ? [{ text: flat }] : []
   }
@@ -610,8 +516,6 @@ export const normalizeRuns = (value: string | Text | undefined): SourceTextRun[]
       text: runText,
       url: payload?.url,
       videoId: payload?.videoId,
-      // 0 is a real position (a chapter at the very start), so it survives on
-      // its own rather than being filtered out as falsy.
       startSeconds: typeof startSeconds === 'number' && Number.isFinite(startSeconds) ? startSeconds : undefined,
       browseId: payload?.browseId,
     }]
@@ -635,9 +539,7 @@ export const normalizeNotification = (input: unknown): SourceNotification | unde
     id,
     message,
     sentText: presentText(node?.sent_time),
-    // `thumbnails` is the channel avatar and `video_thumbnails` the still. They
-    // are separate fields rather than one list, and swapping them puts a 16:9
-    // frame in a round avatar slot.
+    // `thumbnails` is the channel avatar and `video_thumbnails` the still, never one list
     avatar: thumbnail(node?.thumbnails, AVATAR_WIDTH),
     thumbnail: thumbnail(node?.video_thumbnails, STILL_WIDTH),
     videoId: node?.endpoint?.payload?.videoId,
@@ -648,12 +550,6 @@ export const normalizeNotification = (input: unknown): SourceNotification | unde
 const clampPercent = (value: unknown) =>
   typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : undefined
 
-// The watched fraction reaches us two different ways and both are live: legacy
-// Video nodes hang a ThumbnailOverlayResumePlayback off `thumbnail_overlays`
-// with `percent_duration_watched`, while LockupView nodes carry a
-// ThumbnailBottomOverlayView on the image whose progress bar reports
-// `start_percent`. History and home mix the two node kinds, so reading only one
-// shape leaves the resume bar missing from half the page.
 const legacyProgressPercent = (input: unknown) => {
   const overlays = (input as { thumbnail_overlays?: { percent_duration_watched?: number }[] }).thumbnail_overlays ?? []
   return overlays.map((overlay) => clampPercent(overlay.percent_duration_watched)).find((value) => value !== undefined)
@@ -688,18 +584,10 @@ export const normalizeFeedVideo = (input: unknown): SourceVideo | undefined => {
   }
 }
 
-// A live gap rather than a missing feature: Feed.videos includes
-// ShortsLockupView, but that node carries NEITHER `video_id` nor `id`, so
-// normalizeFeedVideo returned undefined for every Short and each one was
-// silently dropped from home, subscriptions and channel feeds. The id lives on
-// the tap endpoint (a reel watch endpoint), with entity_id as the fallback.
 export const normalizeShortsLockup = (input: unknown): SourceVideo | undefined => {
   const node = input as {
     entity_id?: string
     thumbnail?: Thumbnail[]
-    // Seen empty in practice on the home shelf while overlay_metadata reads
-    // fine, so the image is looked for in the other places a lockup can carry
-    // one before falling back below.
     content_image?: { image?: Thumbnail[], primary_thumbnail?: { image?: Thumbnail[] } }
     on_tap_endpoint?: { payload?: { videoId?: string } }
     overlay_metadata?: { primary_text?: Text, secondary_text?: Text }
@@ -707,17 +595,10 @@ export const normalizeShortsLockup = (input: unknown): SourceVideo | undefined =
     badge?: { label?: string, text?: string }
   } | undefined
   const id = node?.on_tap_endpoint?.payload?.videoId ?? node?.entity_id
-  // The overlay title is the only title a Short carries; the accessibility text
-  // is a whole sentence ('Title, 1.2M views') and is used only as a last resort.
   const title = presentText(node?.overlay_metadata?.primary_text) ?? node?.accessibility_text
   if (!id || !title) return undefined
-  /* The node's own image comes back empty on the home shelf even though its
-     title and view count parse, so the canonical still is derived from the
-     video id when none is present. That URL is not invented: i.ytimg.com serves
-     it for every public video id, it is what YouTube's own markup points at,
-     and the id here came off a real watch endpoint. A short's still is the
-     vertical frame letterboxed into 16:9, so the 9:16 card crops back to the
-     content rather than showing bars. */
+  // i.ytimg.com/vi/ID/hqdefault.jpg is the canonical still for any public video id, used when the node carries none
+  // a Short's still from a feed lockup is the vertical frame letterboxed into 16:9, which is why the 9:16 card crops back to the content rather than showing bars; the reel endpoint's poster is the true 1080x1920 portrait frame and wins wherever it exists
   const image = thumbnail(node?.thumbnail)
     ?? thumbnail(node?.content_image?.primary_thumbnail?.image ?? node?.content_image?.image)
     ?? `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`
@@ -725,8 +606,7 @@ export const normalizeShortsLockup = (input: unknown): SourceVideo | undefined =
     id,
     title,
     thumbnail: image,
-    // Shorts carry no length anywhere on this node, and inventing one would put
-    // a duration badge on a card that should not have one.
+    // no durationSeconds: Shorts carry no length on this node and a card should not show one
     viewCount: presentText(node?.overlay_metadata?.secondary_text),
     isShort: true,
     badges: badgeTexts(node?.badge ? [node.badge] : undefined),
@@ -745,8 +625,6 @@ export const normalizeVideoDetails = (input: unknown): SourceVideo | undefined =
     durationSeconds: video.duration,
     viewCount: video.view_count === undefined ? undefined : String(video.view_count),
     isLive: video.is_live === true ? true : undefined,
-    // /player's basic_info carries no badge list, so this is genuinely empty
-    // rather than unread.
     badges: [],
     channel: video.channel_id && video.author
       ? { id: video.channel_id, name: video.author }
@@ -754,13 +632,7 @@ export const normalizeVideoDetails = (input: unknown): SourceVideo | undefined =
   }
 }
 
-// One lockup renderer fronts every kind of content. The watchable kinds all
-// normalize as a video (a Short and a clip both play through /watch), while the
-// collection kinds have their own normalizers and must never be forced through
-// this one. An absent content_type means UNSPECIFIED, which older responses use
-// for ordinary videos. Rejecting by an explicit list rather than by "not VIDEO"
-// is what lets a playlist lockup reach normalizePlaylistLockup instead of being
-// swallowed here.
+// an explicit allow-list rather than "not VIDEO" so a playlist lockup falls through to normalizePlaylistLockup instead of being swallowed here: the collection kinds have their own normalizers and must never be forced through this one
 const VIDEO_LOCKUPS = new Set(['UNSPECIFIED', 'VIDEO', 'SHORT', 'CLIP', 'MOVIE'])
 
 export const normalizeLockupVideo = (input: unknown): SourceVideo | undefined => {
@@ -788,9 +660,7 @@ export const normalizeLockupVideo = (input: unknown): SourceVideo | undefined =>
     isMembersOnly: hasBadgeStyle(badges.map((badge) => ({ style: badge.badge_style })), 'MEMBERS_ONLY')
       ? true
       : undefined,
-    // The overlay badges on a lockup carry the DURATION and the live pill, both
-    // of which are already read above as their own fields. Re-listing them here
-    // would render '12:04' as if it were a 4K or CC badge.
+    // empty because a lockup's overlay badges carry only the duration and the live pill, both read above
     badges: [],
     channel: lockupChannel(lockup, parts),
   }
@@ -802,11 +672,6 @@ export const normalizePlaylistLockup = (input: unknown): SourcePlaylist | undefi
   const id = lockup.content_id
   const title = presentText(lockup.metadata?.title)
   if (!id || !title) return undefined
-  // A playlist lockup wraps its image in a CollectionThumbnailView, which owns
-  // no overlays of its own: the badge carrying "50 videos" sits one hop deeper
-  // than on a video lockup, where content_image IS the ThumbnailView. Reading
-  // content_image.overlays here yields undefined rather than an error, so the
-  // count would silently go missing.
   const image = lockup.content_image?.primary_thumbnail ?? lockup.content_image
   const badges = image?.overlays?.flatMap((overlay) => overlay.badges ?? []) ?? []
   const parts = lockupParts(lockup)
@@ -814,9 +679,6 @@ export const normalizePlaylistLockup = (input: unknown): SourcePlaylist | undefi
     id,
     title,
     thumbnail: thumbnail(image?.image, STILL_WIDTH),
-    // Only the badge is read for the count. The metadata rows carry a localized
-    // mix of counts and update dates with nothing to tell them apart, so
-    // picking one would be a guess that renders "Updated today" as a count.
     videoCountText: badges.map((badge) => badge.text).find((value) => Boolean(value)),
     channel: lockupChannel(lockup, parts),
   }
@@ -833,17 +695,12 @@ export const normalizeGridPlaylist = (input: unknown): SourcePlaylist | undefine
     thumbnail: thumbnail(node.thumbnails, STILL_WIDTH)
       ?? thumbnail(node.sidebar_thumbnails, STILL_WIDTH)
       ?? thumbnail(node.thumbnail_renderer?.thumbnail, STILL_WIDTH),
-    // `video_count` is the long form ("50 videos"); the short one is the bare
-    // number, which only reads correctly next to a label the card supplies.
     videoCountText: presentText(node.video_count) ?? presentText(node.video_count_short),
     channel: bylineChannel(node.author),
   }
 }
 
-// The playlist id is nowhere in `info`, on any renderer, so the caller has to
-// carry the id it browsed with. A continuation page degrades every other field
-// too (no header, no sidebar), which is why the page assembly reuses the
-// playlist read from the first page instead of re-reading it per page.
+// the playlist id is nowhere in `info` on any renderer, so the caller carries the id it browsed with
 export const normalizePlaylistDetails = (input: unknown, id: string): SourcePlaylist => {
   const info = (input as PlaylistDetails).info
   return {
@@ -851,8 +708,6 @@ export const normalizePlaylistDetails = (input: unknown, id: string): SourcePlay
     title: presentText(info?.title) ?? id,
     description: presentText(info?.description),
     thumbnail: thumbnail(info?.thumbnails, STILL_WIDTH),
-    // The three stats stringify to 'N/A' when the sidebar is absent, so they go
-    // through presentText rather than being surfaced as literal text.
     videoCountText: presentText(info?.total_items),
     viewCountText: presentText(info?.views),
     updatedText: presentText(info?.last_updated),
@@ -864,18 +719,12 @@ export const normalizePlaylistDetails = (input: unknown, id: string): SourcePlay
   }
 }
 
-// PlaylistVideo fuses the view count and the upload date into one `video_info`
-// line instead of the separate fields a feed video carries. The bullet is what
-// the renderer emits under any hl, so splitting on it beats leaving the whole
-// string in one field.
+// PlaylistVideo fuses view count and upload date into one line, bullet-separated under any hl
 const videoInfoParts = (value: Text | undefined) =>
   presentText(value)?.split('•').map((part) => part.trim()).filter((part) => part.length > 0) ?? []
 
 export const normalizePlaylistItem = (input: unknown): SourcePlaylistItem | undefined => {
   const node = input as PlaylistVideoNode
-  // A playlist page also carries a recommended-videos rail built from the same
-  // renderer. Those entries are not in the playlist and have no setVideoId, so
-  // a remove or reorder against one would fail.
   if (node.style === 'PLAYLIST_VIDEO_RENDERER_STYLE_RECOMMENDED_VIDEO') return undefined
   const video = normalizeFeedVideo(node)
   if (!video) return undefined
@@ -893,13 +742,7 @@ export const normalizePlaylistItem = (input: unknown): SourcePlaylistItem | unde
   }
 }
 
-// The panel byline is an Author for a real playlist and a Text for a mix. Only
-// the Author path has a name field, and Author defines no toString, so the Text
-// branch is taken ONLY when the node really carries one: falling through to
-// presentText on an Author would stringify it to the literal '[object Object]',
-// which survives the 'N/A' filter and renders as the queue's byline. Author
-// fills `name` with 'N/A' whenever the byline node is empty, which is exactly
-// when that fallthrough used to happen.
+// the Text branch is taken ONLY on a real Text: stringifying an Author yields '[object Object]', which survives the 'N/A' filter
 const bylineText = (author: Author | Text | undefined) => {
   const named = presentText((author as Author | undefined)?.name)
   if (named) return named
@@ -908,10 +751,6 @@ const bylineText = (author: Author | Text | undefined) => {
 }
 
 export const normalizePlaylistPanelVideo = (input: unknown): SourceVideo | undefined => {
-  // Three node kinds share the queue array. PlaylistPanelVideoWrapper keeps the
-  // row on `primary`, and AutomixPreviewVideo (the mix teaser tail) carries no
-  // video at all, so it falls out on the id check rather than needing its own
-  // branch.
   const node = input as PlaylistPanelVideoNode | undefined
   const row = node?.primary ?? node
   const id = row?.video_id
@@ -922,12 +761,9 @@ export const normalizePlaylistPanelVideo = (input: unknown): SourceVideo | undef
     title,
     thumbnail: thumbnail(row?.thumbnail, STILL_WIDTH),
     thumbnailSrcset: srcset(row?.thumbnail),
-    // Already in seconds, but it comes from parsing 'N/A' when the row carries
-    // no length, which yields NaN rather than an absent value.
     durationSeconds: Number.isFinite(row?.duration?.seconds) ? row?.duration?.seconds : undefined,
     badges: [],
-    // No channel: the row's byline is display text and the node carries no
-    // channel id on any field, so a Channel built from it would link nowhere.
+    // no channel: this node carries no channel id on any field, so one built here would link nowhere
   }
 }
 
@@ -942,7 +778,7 @@ export const normalizeWatchPlaylist = (input: unknown): SourceWatchPlaylist | un
     items: (panel?.contents ?? [])
       .map(normalizePlaylistPanelVideo)
       .filter((video) => video !== undefined),
-    // 0-based, so 0 is a real position and must survive the guard.
+    // 0-based, so 0 is a real position and must survive the guard
     currentIndex: Number.isInteger(panel?.current_index) ? panel?.current_index : undefined,
     isInfinite: panel?.is_infinite,
   }
@@ -954,9 +790,6 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
   const first = (type: string) => memo.get(type)?.[0]
   const primary = first('VideoPrimaryInfo') as {
     title?: Text
-    /* `is_live` sits on the VIEW COUNT rather than on the info block: upstream
-       models a live stream as a view count that is a concurrent-viewer count,
-       and `original_view_count` is that number. */
     view_count?: { view_count?: Text, short_view_count?: Text, is_live?: boolean, original_view_count?: number }
     published?: Text
     relative_date?: Text
@@ -987,13 +820,7 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
   const commentsHeader = first('CommentsEntryPointHeader') as {
     comment_count?: Text
   } | undefined
-  // The queue panel IS in contents_memo, unlike player_overlays: the parser
-  // builds TwoColumnWatchNextResults inside the window where the memo is live,
-  // and that constructor parses the panel rows synchronously, so both the
-  // container and every PlaylistPanelVideo land in it. The container is read
-  // rather than memo.get('PlaylistPanelVideo') because the id, title, byline
-  // and current index exist nowhere else, and the flat memo key over-collects
-  // the counterparts nested inside a wrapper.
+  // the container, not memo.get('PlaylistPanelVideo'): the id, title, byline and current index exist nowhere else
   const watchNext = first('TwoColumnWatchNextResults') as {
     playlist?: unknown
   } | undefined
@@ -1008,9 +835,6 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
     ...(memo.get('CompactVideo') ?? []).map(normalizeFeedVideo),
     ...(memo.get('LockupView') ?? []).map(normalizeLockupVideo),
   ].filter((video) => video !== undefined)
-  // The modern LikeButtonView carries the signed-in state directly; the legacy
-  // segmented button only exposes it as a pair of toggles. Without this a user
-  // who already liked a video sees an unlit button and un-likes it by clicking.
   const status = likeStatus(likeButtonView?.like_status_entity?.like_status ?? likeButtonView?.like_status)
     ?? (likeLegacy?.like_button?.is_toggled === true
       ? 'LIKE'
@@ -1026,8 +850,6 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
     likeCountText: likeCount,
     commentCountText: text(commentsHeader?.comment_count),
     description: text(secondary?.description),
-    // The same body segmented, so its links and chapter timestamps work. The
-    // flat string above stays for the collapsed clamp.
     descriptionRuns: normalizeRuns(secondary?.description),
     likeStatus: status,
     channel: author?.id && author.name
@@ -1049,14 +871,7 @@ export const normalizeWatchMeta = (input: unknown, id: string): SourceWatchMeta 
 }
 
 export const normalizeSession = (input: unknown): SourceSession => {
-  /* One level deeper than it looks. AccountInfo.contents is an
-     AccountItemSection, and the signed-in account is an AccountItem inside ITS
-     contents; reading the section directly finds none of these fields, which is
-     what left the header avatar blank while the session still read as signed in.
-
-     The section also lists other accounts on the same login plus CompactLink
-     rows, so the selected item is preferred and anything without a name is
-     skipped rather than taken by position. */
+  // AccountInfo.contents is an AccountItemSection: the account is an AccountItem inside ITS contents
   const rows = (input as AccountInfo).contents?.contents ?? []
   const named = rows.filter((row) => row.account_name !== undefined)
   const account = named.find((row) => row.is_selected === true) ?? named[0]
@@ -1065,9 +880,7 @@ export const normalizeSession = (input: unknown): SourceSession => {
     name: presentText(account?.account_name),
     avatar: thumbnail(account?.account_photo, AVATAR_WIDTH),
     handle: presentText(account?.channel_handle),
-    /* Position among the NAMED rows, not among all of them: the section also
-       carries CompactLink rows, and counting those would offset every index and
-       switch to the wrong account. */
+    // position among the NAMED rows: counting the section's CompactLink rows would switch to the wrong account
     accounts: named.map((row, index) => ({
       index,
       name: presentText(row.account_name),
@@ -1079,9 +892,6 @@ export const normalizeSession = (input: unknown): SourceSession => {
   }
 }
 
-// Split from the thread wrapper because a REPLY is a bare CommentView with no
-// thread around it: CommentThread.replies is an ObservedArray<CommentView>, so
-// the reply path would otherwise need a fake `{ comment }` wrapper per row.
 export const normalizeCommentView = (input: unknown): SourceComment | undefined => {
   const comment = input as CommentViewNode | undefined
   if (!comment?.comment_id) return undefined
@@ -1113,13 +923,6 @@ export const normalizeCommentView = (input: unknown): SourceComment | undefined 
 export const normalizeCommentThread = (input: unknown): SourceComment | undefined =>
   normalizeCommentView((input as CommentThread | undefined)?.comment)
 
-/* A live chat line.
-
-   Chat items are a small family of node types rather than one: a plain message,
-   a paid one (a Super Chat), a paid sticker and a membership announcement. They
-   share an id, an author and a timestamp, and differ in whether they carry an
-   amount and their own colours, so one normalizer covers all of them and the
-   paid fields simply stay absent for the common case. */
 type LiveChatItemNode = {
   type?: string
   id?: string
@@ -1135,17 +938,13 @@ type LiveChatItemNode = {
   body_background_color?: number
 }
 
-/* Upstream sends colours as signed 32-bit ARGB integers, which CSS cannot use.
-   The alpha byte is dropped rather than converted: these are backgrounds behind
-   opaque text, and every observed value is fully opaque anyway. */
+// upstream sends colours as signed 32-bit ARGB integers; the alpha byte is dropped rather than converted
 const argbColor = (value: number | undefined) => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
   return `#${(value >>> 0 & 0xffffff).toString(16).padStart(6, '0')}`
 }
 
-/* An emoji run has no useful text: upstream fills it with a `:shortcut:` that
-   renders as literal punctuation, so the image is the content and the shortcut
-   becomes its alt text. */
+// an emoji run's text is a `:shortcut:` that renders as literal punctuation, so the image is the content
 const normalizeLiveChatRuns = (value: Text | undefined): SourceLiveChatRun[] => {
   const runs = (value as { runs?: (RunNode & { emoji?: { image?: Thumbnail[], shortcuts?: string[], is_custom?: boolean } })[] } | undefined)?.runs
   if (!runs?.length) return normalizeRuns(value)
@@ -1160,7 +959,7 @@ const normalizeLiveChatRuns = (value: Text | undefined): SourceLiveChatRun[] => 
   })
 }
 
-// Chat emoji render at 24px, so 48 covers them at 2x.
+// chat emoji render at 24px, so 48 covers them at 2x
 const EMOJI_WIDTH = 48
 
 const AUTHOR_OWNER_BADGES = new Set(['OWNER'])
@@ -1171,9 +970,7 @@ export const normalizeLiveChatMessage = (input: unknown): SourceLiveChatMessage 
   if (!item?.id) return undefined
   const badges = item.author?.badges ?? []
   const iconTypes = badges.flatMap((badge) => (badge.icon_type ? [badge.icon_type] : []))
-  /* A member badge is a CUSTOM image rather than a named icon: sponsors get the
-     channel's own emoji, so there is no icon_type to match on and the presence
-     of a custom thumbnail is the signal. */
+  // a member badge is the channel's own emoji, so there is no icon_type to match on
   const isMember = badges.some((badge) => (badge.custom_thumbnail?.length ?? 0) > 0)
   const body = item.message ?? item.header_subtext
   return {

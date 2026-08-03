@@ -41,9 +41,7 @@ const MAX_HARVESTED_SEGMENT_BYTES = 32 * 1024 * 1024
 const MAX_MEDIA_CACHE_BYTES = 64 * 1024 * 1024
 const START_TIME_TOLERANCE_MS = 2
 const REFRESH_ERROR = 'SabrSessionRefreshError'
-/* How long a live request will wait for the segment it actually named. The
-   ceiling is Shaka's own 30s segment timeout: giving up first turns a wait into
-   a retry we control instead of a network error it reports. */
+// under Shaka's own 30s segment timeout, so a wait turns into a retry we control
 const LIVE_SEGMENT_WAIT_MS = 20_000
 // Segments kept in the advertised timeline, which is also the rewind window.
 const LIVE_TIMELINE_LIMIT = 48
@@ -232,15 +230,7 @@ const createPlayerAdapter = (state: AdapterState): SabrPlayerAdapter => ({
   dispose: () => {},
 })
 
-/* A rangeless init answer is the initialization segment CONCATENATED with a
-   media segment: ftyp + moov + emsg + moof + mdat, of which only the first few
-   hundred bytes are the init. MSE needs the initialization segment on its own,
-   and handing it the whole blob does not error, it just leaves readyState and
-   videoWidth at 0 forever.
-
-   Only correct for the rangeless (live) case. A VOD range request returns
-   ftyp + moov + sidx, and cutting at moov would drop the sidx that SegmentBase
-   indexing depends on. */
+// rangeless (live) only: a VOD range answer ends with a sidx that cutting at moov would drop
 const initSegmentPrefix = (data: Uint8Array) => {
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
   let offset = 0
@@ -272,8 +262,7 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
   if (!initialVideoFormat || !initialAudioFormat) throw new Error('youtube: no supported audio and video formats')
   let videoFormat: PlaybackFormat = initialVideoFormat
   let audioFormat: PlaybackFormat = initialAudioFormat
-  // Every live stream measured used 5s segments; the formats' own figure wins
-  // wherever they publish one.
+  // Every live stream measured used 5s segments
   const targetDurationMs = initialVideoFormat.targetDurationMs ?? initialAudioFormat.targetDurationMs ?? 5_000
 
   const byKey = new Map(source.formats.map((format) => [FormatKeyUtils.fromFormat(format), format]))
@@ -314,14 +303,7 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
   }
   const mediaCache = new Map<string, CachedMedia>()
   let mediaCacheBytes = 0
-  /* The live timeline, recorded from what the transport actually delivered.
-
-     A live MPD can only honestly describe segments the session can serve, and
-     the session can only serve what it has already received: the server ignores
-     the address on a request and answers with its current edge, so a timeline
-     extrapolated forward names segments that will never arrive. Video drives it
-     because it is the track a viewer notices stalling; audio fills a sequence in
-     only when video has not reported it yet. */
+  // the server ignores the address on a request and answers with its current edge, so only delivered segments can be advertised
   const liveTimeline = new Map<number, { sequenceNumber: number, startMs: number, durationMs: number }>()
   const recordLiveSegment = (segment: CachedMedia, targetMs: number) => {
     const { sequenceNumber, startMs, track } = segment
@@ -330,8 +312,6 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     liveTimeline.set(sequenceNumber, {
       sequenceNumber,
       startMs,
-      // A final short segment would leave a hole in the timeline; the target
-      // duration is the stream's own answer for how long a segment covers.
       durationMs: segment.durationMs && segment.durationMs > 0 ? segment.durationMs : targetMs,
     })
     while (liveTimeline.size > LIVE_TIMELINE_LIMIT) {
@@ -359,7 +339,6 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     if (!sabrFormat) return
     if (segment.header.isInitSeg) {
       const cacheKey = FormatKeyUtils.createSegmentCacheKey(segment.header, sabrFormat)
-      // A combined init+index blob may already be cached; never shrink it.
       const existing = bytes(state.cache?.getInitSegment(cacheKey))
       if (!existing || existing.byteLength < segment.data.byteLength) {
         state.cache?.setInitSegment(cacheKey, segment.data)
@@ -399,9 +378,6 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     }
   }
 
-  // The span this session can still answer for, per format. Outside it a request
-  // is unservable rather than slow: the transport cannot rewind, and anything
-  // older has already been evicted.
   const cachedSequenceRange = (track: 'audio' | 'video', formatKey: string) => {
     let oldest: number | undefined
     let newest: number | undefined
@@ -446,23 +422,12 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
   }
 
   let chain: Promise<unknown> = Promise.resolve()
-  // Where init requests fork from: the last serial (media/select) operation.
-  // Inits run parallel to each other but never overtake pending media work,
-  // since a format switch inside an init cancels the harvest media relies on.
+  // inits fork from the last serial operation so they never overtake pending media work
   let serialTail: Promise<unknown> = Promise.resolve()
 
-  // The SabrStreamingAdapter tracks, per format, how far ahead we've buffered and
-  // reports it to the server so it knows how much readahead to push. It only
-  // resets that tracking on a *backward* seek (getPlayerTime() < lastPlayerTimeSecs);
-  // a forward jump leaves ranges anchored at t=0 with the pre-seek duration. Then a
-  // post-seek request claims a tiny buffered window far behind the requested
-  // position, and the server withholds media entirely (streamProtectionStatus 2 +
-  // PLAYBACK_START_POLICY, no MEDIA parts) for any seek past its readahead window —
-  // which our loop then mistakes for a fatal error and refresh-loops on. Clearing
-  // the tracking on any seek makes the next request look like a fresh start, which
-  // the server serves at the requested position (exactly how initial load works).
-  // (The playback cookie is intentionally NOT reset here — it carries session/format
-  // state and a seek only changes playerTimeMs, not the session.)
+  // SabrStreamingAdapter only resets its buffered-range tracking on a *backward* seek
+  // clearing it on ANY seek is what makes the next request look like a fresh start; without it the request claims a tiny buffered window far behind the position and the server withholds media entirely (streamProtectionStatus 2 + PLAYBACK_START_POLICY, no MEDIA parts), which the retry loop refresh-loops on
+  // the playback cookie is deliberately NOT reset here: it carries session/format state and a seek only changes playerTimeMs, not the session
   let seekGeneration = 0
   const resetBufferTracking = () => {
     const internals = adapter as unknown as { initializedFormats?: { clear?: () => void } }
@@ -474,13 +439,7 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     const next = formats.find((format) => format.key === key)
     if (!next) throw new Error(`youtube: unknown ${track} format ${key}`)
     void cancelActiveHarvest()
-    /* The live timeline deliberately SURVIVES a format switch. Sequence numbers
-       are aligned across formats (a sequence covers the same media time in every
-       one of them), so the sequence-to-time mapping is format independent even
-       though the cached bytes are not. Clearing it here re-anchored the whole
-       presentation on every switch: ABR moved ten times in a minute, the
-       manifest re-anchored ten times behind it, and playback collapsed to
-       readyState 0 about five seconds in. */
+    // the live timeline deliberately SURVIVES a format switch: sequence numbers are aligned across formats
     if (track === 'video') {
       videoFormat = next
       state.video = byKey.get(next.key)
@@ -674,27 +633,12 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     return output
   }
 
-  /* Live keeps the stream flowing on its own, independent of player demand.
-
-     SABR is a PUSH transport: a request opens a stream the server keeps feeding,
-     and it always feeds from its current edge. A manifest can therefore only
-     honestly advertise segments that have already arrived. That closes a loop
-     if nothing else pulls: the timeline only grows when segments arrive,
-     segments only arrive when something fetches, and the player only fetches
-     what the timeline advertises. Measured, that deadlock is total, two segment
-     requests in fifty-six seconds with an empty buffer.
-
-     So the session consumes the stream continuously and the player reads out of
-     the cache behind it. This is also what the transport wants: one long-lived
-     harvest rather than a fetch per segment. */
   let livePump: Promise<void> | undefined
 
   const runLivePump = async () => {
     while (!closeController.signal.aborted) {
       try {
         if (!activeHarvest) {
-          // Ask from the edge we know about, so the server's readahead picks up
-          // where the last harvest left off rather than restarting behind it.
           const startTimeMs = [...liveTimeline.values()]
             .reduce((newest, segment) => Math.max(newest, segment.startMs + segment.durationMs), 0)
           const run = chain.then(() => execute(
@@ -710,15 +654,11 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
           serialTail = chain
           await run
         }
-        // Harvesting happens off the chain, so player requests stay responsive
-        // while the stream feeds the cache behind them.
         const harvest = activeHarvest
         if (harvest) await harvest.done
         else await wait(Math.round(targetDurationMs / 2), closeController.signal)
       } catch {
         if (closeController.signal.aborted) return
-        // A failed pull is not fatal: the next one re-opens from the edge, which
-        // is where the server would have put us anyway.
         await wait(1_000, closeController.signal).catch(() => {})
       }
     }
@@ -732,8 +672,7 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
   }
 
   const initFetches = new Map<string, Promise<Uint8Array>>()
-  // Init blob fetches are shared between requesters, so they must not die with
-  // any single requester's signal, only with the session itself.
+  // init blob fetches are shared between requesters, so they die with the session, not with one signal
   const closeController = new AbortController()
 
   const initCacheKey = (formatKey: string) => {
@@ -745,9 +684,6 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     } as never, sabrFormat)
   }
 
-  // Fetches the whole init+index head of a format in one round trip and caches
-  // it, so Shaka's separate init and SegmentBase index requests share a single
-  // fetch instead of two serial ones.
   const fetchInitBlob = async (
     track: 'audio' | 'video',
     format: PlaybackFormat,
@@ -760,11 +696,7 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     const end = Math.max(format.initRange?.end ?? 0, format.indexRange?.end ?? 0)
     const response = await execute(
       `sabr://${track}?key=${encodeURIComponent(format.key)}`,
-      /* No init range means nothing to slice. Asking for `bytes=0-0` returns
-         exactly one byte, and the success path below CACHES it, so every later
-         read serves that byte and MSE fails the append (shaka 3014). The server
-         sends the init segment on the stream instead, filed by
-         storeCollectedSegment under the same key this function reads. */
+      // `bytes=0-0` would return one byte, get cached, and fail every later append (shaka 3014)
       format.initRange ? { Range: `bytes=0-${end}` } : {},
       startTimeMs,
       true,
@@ -774,17 +706,8 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
       0,
       dualTrack,
     )
-    /* Which of the two answers is the init segment depends on how it was asked
-       for. A RANGE request (VOD) returns the init+index head as the response
-       body. A rangeless one (live) returns a MEDIA blob as the body, several
-       hundred KB of it, while the real init arrives separately on the stream
-       and is filed in the cache by storeCollectedSegment. Preferring the body
-       in that case hands MSE half a megabyte of media as an initialization
-       segment, which leaves readyState at 0 and videoWidth at 0 rather than
-       erroring.
-
-       The VOD branch is deliberately byte-for-byte what it always was, so this
-       whole live path cannot regress it. */
+    // which answer is the init depends on how it was asked: a RANGE request (VOD) returns the init+index head as the BODY, a rangeless one (live) returns a several-hundred-KB MEDIA blob as the body while the real init arrives on the stream, filed under the same key by storeCollectedSegment
+    // preferring the body for live hands MSE media as an init segment, leaving readyState and videoWidth at 0 with no error
     const collected = bytes(state.cache?.getInitSegment(initCacheKey(format.key) ?? ''))
     const data = format.initRange
       ? bytes(response.data)
@@ -797,7 +720,6 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
         notifyCacheChange()
       }
       try {
-        // Remember the redirected edge host so the next load dials it at boot.
         if (response.url.includes('googlevideo.com')) localStorage.setItem(GVS_ORIGIN_KEY, new URL(response.url).origin)
       } catch {}
       return data
@@ -819,16 +741,10 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     progress: (phase: string) => void = () => {},
     signal?: AbortSignal,
   ) => {
-    // A generation bump means the player seeked. Reset the adapter's buffered-range
-    // tracking so the post-seek request reports a clean (empty) buffer at the new
-    // position instead of a stale one anchored at t=0.
     if (request.generation > seekGeneration) {
       seekGeneration = request.generation
       resetBufferTracking()
     }
-    // Init and index requests are plain byte-range reads: they run concurrently
-    // across tracks, while media requests keep the strict session ordering and
-    // wait for every launched init fetch.
     const base = request.kind === 'init' ? serialTail : chain
     const run = base.then(async () => {
       if (signal?.aborted) throw signal.reason
@@ -856,8 +772,6 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
           }
         }
         if (request.kind === 'media') {
-          // Live names the segment by the server's own sequence, which is exact.
-          // VOD has no sequence and matches on start time instead.
           const cached = request.sequenceNumber === undefined
             ? findCachedMedia(request.track, format.key, request.startTimeMs)
             : findCachedSequence(request.track, format.key, request.sequenceNumber)
@@ -916,11 +830,6 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
           elapsedMs: response.elapsedMs,
         }
         const raw = bytes(response.data)
-        /* A rangeless init answer (live) is the initialization segment with a
-           media segment glued to it: ftyp + moov + emsg + moof + mdat, of which
-           only the first few hundred bytes are the init. MSE wants the
-           initialization segment alone, and handing it the whole blob does not
-           error, it just leaves readyState and videoWidth at 0. */
         const data = raw && request.kind === 'init' && !requestedRange ? initSegmentPrefix(raw) : raw
         const media = response.metadata.streamInfo?.mediaHeader
         if (data?.byteLength && !response.incomplete) {
@@ -950,39 +859,15 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
         }
         throw refreshError(`youtube: ${reason} after ${MAX_SEGMENT_ATTEMPTS} attempts`)
       }
-      /* A live media request resolves the exact sequence it named, or fails.
-
-         The server ignores the address and always answers with its current
-         edge, so returning that answer under the requested segment's name puts
-         media wherever the stream happens to be rather than where the timeline
-         says it belongs. Measured, that is the whole stutter: Shaka asked for
-         the same position fifteen times while the server walked fifteen
-         sequences forward, and the playhead starved in the widening hole.
-
-         A future sequence is worth waiting for, because the stream is producing
-         it in real time. A sequence older than the cache is not: the transport
-         cannot rewind, so it is reported and the refreshed manifest moves the
-         viewer forward instead. */
       const awaitLiveSequence = async (sequenceNumber: number): Promise<SegmentEnvelope> => {
         const deadline = Date.now() + LIVE_SEGMENT_WAIT_MS
-        // The pump owns fetching, so this only ever reads. Kicking it here is
-        // what heals a pump that died with the last session refresh.
         ensureLivePump()
         for (;;) {
-          // Captured BEFORE the lookup: a segment landing between the miss and
-          // the await would otherwise leave this waiting for the one after it.
+          // captured BEFORE the lookup: a segment can land between the miss and the await
           const changed = cacheChange
           const cached = getCachedSegment()
           if (cached) return cached
-          /* Plain errors, NEVER refreshError.
-
-             A refresh tears the SABR session down and builds a new one, which
-             starts with an empty live timeline. The manifest is generated from
-             that timeline, so one unservable segment took out the whole
-             presentation: liveManifest had nothing to describe, Shaka could not
-             reload, and a stream that was merely a few seconds out of position
-             went to a black frame permanently. These conditions mean "ask again"
-             or "look at the refreshed manifest", not "the session is broken". */
+          // Plain errors, NEVER refreshError: a refresh starts with an empty live timeline and the manifest is generated from it
           const { oldest, newest } = cachedSequenceRange(request.track, format.key)
           if (oldest !== undefined && sequenceNumber < oldest) {
             throw new Error(`youtube: live segment ${sequenceNumber} is older than the session window`)
@@ -1005,8 +890,6 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
         if (cached) return cached
         let blobPromise = initFetches.get(format.key)
         if (!blobPromise) {
-          // Only the first concurrent init fetch asks the server to push both
-          // tracks' opening segments; the others stay range-only.
           const wantDual = initFetches.size === 0
           blobPromise = fetchInitBlob(request.track, format, request.startTimeMs, request.generation, progress, wantDual)
           initFetches.set(format.key, blobPromise)
@@ -1027,8 +910,6 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
             data: blob.slice(requestedRange.start, requestedRange.end + 1).buffer as ArrayBuffer,
           } satisfies SegmentEnvelope
         }
-        // The blob came back shorter than the requested range: fall back to a
-        // direct ranged fetch rather than serving truncated bytes.
         return fetchSegment()
       }
       return fetchSegment()
@@ -1048,8 +929,6 @@ export const createSabrSession = (source: SabrSource, maxHeight = 1_080) => {
     videoFormats,
     audioFormats,
     targetDurationMs,
-    // The segments this session can actually serve, which is the only honest
-    // basis for a live manifest.
     get liveSegments() { return [...liveTimeline.values()] },
     startLivePump: ensureLivePump,
     get videoFormat() { return videoFormat },

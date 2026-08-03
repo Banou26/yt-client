@@ -10,47 +10,17 @@ import { startEngine } from '../scramjet/client'
 import { clock } from './controls'
 import { warmShaka } from './prefetch'
 
-// Type-only, so it is erased at build and adds no runtime edge back to the
-// chunk this file deliberately loads on demand.
 import type { startShakaPlayback } from './shaka'
 
-/* An inline preview is a REAL playback session: it opens a SABR session in the
-   frame, mints a token and streams media, the same as the watch page. Three
-   consequences shape everything here.
-
-   It costs a tunneled round trip, so it starts only after a dwell delay: moving
-   the pointer across a grid must not open a session per card passed over.
-
-   Only ONE can be live at a time. Each session holds a media cache in the
-   frame, so a reader sweeping a feed would otherwise accumulate them until the
-   frame is carrying a dozen. The token below is module scope because no single
-   card can know about the others.
-
-   The box is small, and startShakaPlayback derives its format ceiling from the
-   element, so a preview asks for a low resolution rather than the 1080p the
-   watch page would. */
+// only ONE preview can be live at a time: module scope because no single card can know about the others
 let activeToken = 0
 
-// About as long as a deliberate pause. Shorter turns an accidental sweep into a
-// burst of sessions; longer reads as the preview being broken.
 const DWELL_MS = 700
 
-/* Carried between previews so unmuting one card does not have to be repeated on
-   the next, and NOT persisted: the rule is that a feed may never start talking
-   on its own, which is about the default, not about forgetting a choice the
-   viewer just made. A fresh page load starts silent again. */
+// carried between previews and deliberately NOT persisted: a feed may never start talking on its own
 let preferMuted = true
 
-/* The watch scrubber wants the SHARPEST sheet; a card wants the largest one
-   that FITS. YouTube ships levels roughly 48, 80, 160 and 320 wide, and
-   `bestStoryboard` takes the 320 - which is wider than a grid card, so the tile
-   hangs off both edges and no amount of clamping helps: a clamp can recentre a
-   frame, it cannot shrink one.
-
-   Capped at 60% of the strip so the frame stays clearly a preview OF the card
-   rather than a second card sitting on top of it. Falls back to the smallest
-   level when even that does not fit, which is the least bad of the bad options
-   and still beats overflowing onto the neighbour. */
+// a card wants the largest sheet that FITS, not the sharpest one `bestStoryboard` picks
 const previewStoryboard = (boards: Storyboard[], stripWidth: number) => {
   const fitting = boards.filter((board) => board.thumbnailWidth <= stripWidth * 0.6)
   if (fitting.length) return bestStoryboard(fitting)
@@ -214,33 +184,14 @@ const style = css`
   }
 `
 
-/**
- * A muted inline preview drawn over a card thumbnail.
- *
- * Mounted only while the pointer is dwelling on the card. Failure is silent by
- * design: this is a hover affordance over a thumbnail that is already correct,
- * so an error card in its place would be worse than no preview.
- */
 export const HoverPreview = ({ videoId }: { videoId: string }) => {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [progress, setProgress] = useState(0)
   const [buffered, setBuffered] = useState(0)
   const [ready, setReady] = useState(false)
-  /* Separate from `ready`, which says the controller exists. This says PIXELS
-     exist, which is the only thing that makes covering the thumbnail correct.
-     `loadeddata` is exactly that signal: readyState has reached
-     HAVE_CURRENT_DATA, so there is a frame for the current position. */
   const [painted, setPainted] = useState(false)
   const [muted, setMuted] = useState(preferMuted)
   const [storyboards, setStoryboards] = useState<Storyboard[]>([])
-  /* Where the pointer is over the strip, which is NOT the playhead: the frame
-     under the pointer is what a scrub is aiming at, and showing the playhead
-     instead would make the preview lag the gesture it exists to guide.
-
-     Carries pixels rather than a ratio because the frame has to be clamped
-     inside the card, and a card is a fraction of the width the watch scrubber
-     gets: a sheet tile centred on ratio 0 hangs half its width off the left
-     edge, over the neighbouring card. */
   const [hover, setHover] = useState<{ x: number, width: number, time: number } | undefined>()
 
   useEffect(() => {
@@ -249,18 +200,11 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
     const token = ++activeToken
     const abort = new AbortController()
     let controller: Awaited<ReturnType<typeof startShakaPlayback>> | undefined
-    // Never read from settings and never persisted: a preview is muted because
-    // a feed that starts talking when the pointer rests on it is hostile, not
-    // because the viewer chose it. `preferMuted` only carries a choice the
-    // viewer made a moment ago, in this session.
     video.muted = preferMuted
 
     const timer = setTimeout(() => {
       void (async () => {
-        // Loaded on demand so Shaka stays out of the entry chunk. The card's
-        // own hover prefetch has normally warmed it already.
         const [api, { startShakaPlayback }] = await Promise.all([startEngine(), warmShaka()])
-        // A newer hover has taken over while the engine was coming up.
         if (abort.signal.aborted || token !== activeToken) return
         controller = await startShakaPlayback({
           api,
@@ -271,22 +215,17 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
           onError: () => {},
         })
         if (abort.signal.aborted) return
-        // Muted, so the autoplay policy permits this without a gesture. Kept
-        // here rather than relied on from startShakaPlayback so a preview that
-        // starts paused still rolls.
         void video.play().catch(() => {})
         setStoryboards(controller.storyboards)
         setReady(true)
       })().catch(() => {
-        // Silent: the thumbnail underneath is still the right thing to show.
+        // silent: the thumbnail underneath is still the right thing to show
       })
     }, DWELL_MS)
 
     const onTime = () => {
       if (video.duration > 0) setProgress(video.currentTime / video.duration)
-      // The range that CONTAINS the playhead, not the last one: a seek leaves
-      // earlier ranges behind, and taking the final one would draw a buffer
-      // that has nothing to do with where playback actually is.
+      // the range that CONTAINS the playhead, not the last one: a seek leaves earlier ranges behind
       const ranges = video.buffered
       for (let index = 0; index < ranges.length; index += 1) {
         if (ranges.start(index) <= video.currentTime && video.currentTime <= ranges.end(index)) {
@@ -298,9 +237,6 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
     video.addEventListener('timeupdate', onTime)
     video.addEventListener('progress', onTime)
 
-    // Checked as well as listened for: Shaka can reach HAVE_CURRENT_DATA before
-    // this effect gets to attach, and a missed event would hold the preview
-    // invisible for its whole life.
     const onPainted = () => setPainted(true)
     if (video.readyState >= 2) onPainted()
     video.addEventListener('loadeddata', onPainted)
@@ -315,9 +251,6 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
     }
   }, [videoId])
 
-  // Dragging anywhere on the strip seeks, rather than only a press on the drawn
-  // line: the line is a few pixels tall over a card, so requiring precision
-  // would make it unusable at the size it actually renders.
   const ratioFromPointer = (event: PointerEvent) => {
     const bar = event.currentTarget as HTMLElement
     const box = bar.getBoundingClientRect()
@@ -332,8 +265,6 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
     setProgress(ratio)
   }
 
-  // Tracked on every move, pressed or not, so the storyboard frame follows the
-  // pointer before a drag starts - which is the whole point of a scrub preview.
   const trackHover = (event: PointerEvent) => {
     const video = videoRef.current
     if (!video?.duration) return
@@ -344,8 +275,7 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
 
   const board = hover ? previewStoryboard(storyboards, hover.width) : undefined
   const frame = board && hover ? storyboardFrame(board, hover.time) : undefined
-  // Half the tile plus its 2px border, so the clamp accounts for what is
-  // actually painted rather than for the sprite alone.
+  // half the tile plus its 2px border
   const half = frame ? frame.width / 2 + 2 : 0
   const previewLeft = hover
     ? Math.min(Math.max(hover.x, half), Math.max(half, hover.width - half))
@@ -353,9 +283,7 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
 
   return (
     <div css={style} data-painted={painted ? '' : undefined}>
-      {/* No preload='none': Shaka drives this element through MSE, and an
-          element told not to preload never runs its resource selection, so the
-          MediaSource attaches and then sits at networkState 0 forever. */}
+      {/* No preload='none': an element told not to preload never runs its resource selection, so the MediaSource sits at networkState 0 forever */}
       <video ref={videoRef} muted playsInline tabIndex={-1} aria-hidden='true' />
       {ready
         ? (
@@ -363,9 +291,6 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
             type='button'
             className='muted'
             aria-label={muted ? 'Unmute preview' : 'Mute preview'}
-            /* Same guard as the scrubber: this is drawn INSIDE the card's watch
-               link, so an unguarded press opens the video instead of toggling
-               sound. */
             onPointerDown={(event: PointerEvent) => {
               event.preventDefault()
               event.stopPropagation()
@@ -390,14 +315,9 @@ export const HoverPreview = ({ videoId }: { videoId: string }) => {
             className='scrubber'
             onPointerLeave={() => setHover(undefined)}
             onPointerDown={(event: PointerEvent) => {
-              /* The preview is drawn INSIDE the card's watch link, so a press
-                 here would otherwise open the video: scrubbing and clicking
-                 through are the same gesture to the anchor above. Both are
-                 stopped, and the click below covers the anchor's own default. */
+              // this is drawn INSIDE the card's watch link, so an unguarded press opens the video
               event.preventDefault()
               event.stopPropagation()
-              // Captured so a drag that leaves the strip keeps seeking rather
-              // than stopping the moment the pointer slips off a short target.
               ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
               seekFromPointer(event)
             }}

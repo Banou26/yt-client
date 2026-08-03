@@ -16,8 +16,6 @@ import { gql } from '../generated'
 type VideosPage = ChannelViewQuery['channel']['videos']
 type PostsPage = CommunityPostsQuery['communityPosts']
 
-// Both are their own round trip and only one tab needs each, so they are
-// separate documents rather than fields folded into the channel query.
 const CHANNEL_ABOUT_QUERY = gql(`
   query ChannelAbout($id: ID!) {
     channelAbout(id: $id) {
@@ -105,9 +103,6 @@ const CHANNEL_VIEW_QUERY = gql(`
   }
 `)
 
-// Upstream reports which tabs a channel actually has, so the strip renders that
-// set rather than a fixed one. The label is ours because the enum is not
-// display text; the order comes from the source, which keeps upstream's.
 const TAB_LABELS: Record<ChannelTab, string> = {
   HOME: 'Home',
   VIDEOS: 'Videos',
@@ -122,10 +117,6 @@ const TAB_LABELS: Record<ChannelTab, string> = {
   SEARCH: 'Search',
 }
 
-/* What an empty tab should say it is missing. Built off the tab's own label so
-   a tab added to the enum gets a sentence rather than being forgotten, with the
-   three video-shaped tabs named explicitly because "no Videos" reads worse than
-   "no videos". */
 const emptyMessageFor = (tab?: ChannelTab) => {
   if (tab === undefined || tab === 'VIDEOS' || tab === 'HOME') return 'This channel has no videos.'
   if (tab === 'SHORTS') return 'This channel has no shorts.'
@@ -424,28 +415,15 @@ const style = css`
   }
 `
 
-/* Reached from two routes, because a channel has two URL forms and the app has
-   to accept both: `/channel/UC...` and the one youtube.com actually hands out
-   now, `/@handle`. The source already resolves a handle (it detects the leading
-   `@` and spends one resolveURL round trip on it), so the handle is passed
-   straight through as the id rather than resolved here. Without the second route
-   a pasted canonical channel URL landed on the 404 page. */
 export const ChannelPage = ({ params }: { params: { channelId?: string, handle?: string } }) => {
   const id = params.channelId ?? `@${params.handle ?? ''}`
-  // The channel id stays a path param, matching youtube.com, while the tab and
-  // its options ride in the query string: they address a view of the same page
-  // rather than a different page, and that keeps a tab shareable.
   const search = useSearch()
   const urlParams = new URLSearchParams(search)
   const [, navigate] = useLocation()
   const tab = (urlParams.get('tab') ?? undefined) as ChannelTab | undefined
   const sort = urlParams.get('sort') ?? undefined
   const channelQuery = urlParams.get('query') ?? undefined
-  // Consumed pages carry the channel they came from, so switching channels
-  // starts from an empty grid in the same render rather than one frame later.
-  // The tab, sort and in-channel query are part of the feed identity: switching
-  // any of them has to restart paging rather than append one tab's rows under
-  // another's.
+  // tab, sort and in-channel query are part of the feed identity: switching any of them MUST restart paging
   const feedKey = `${id}|${tab ?? ''}|${sort ?? ''}|${channelQuery ?? ''}`
   const [loaded, setLoaded] = useState<{ id: string, pages: VideosPage[] }>({ id: feedKey, pages: [] })
   const pages = loaded.id === feedKey ? loaded.pages : []
@@ -455,15 +433,10 @@ export const ChannelPage = ({ params }: { params: { channelId?: string, handle?:
   })
   const channel = data?.channel.channel
   const page = data?.channel.videos
-  // urql keeps the previous result while the next page is in flight, so the
-  // live page can repeat one already consumed: useInfiniteFeed dedupes by id.
   const { items, cursor } = useInfiniteFeed({
     pages: page ? [...pages, page] : pages,
     key: video => video.id
   })
-  // The Playlists, Releases and Podcasts tabs are made of playlist rows rather
-  // than videos, so they accumulate alongside the grid on the same pages and
-  // are deduped the same way.
   const { items: playlists } = useInfiniteFeed({
     pages: (page ? [...pages, page] : pages).map(entry => ({ items: entry.playlists, cursor: entry.cursor })),
     key: playlist => playlist.id,
@@ -476,9 +449,7 @@ export const ChannelPage = ({ params }: { params: { channelId?: string, handle?:
     .filter(part => part != null && part.length > 0)
   const meta = metaParts.length > 0 ? metaParts.join(' • ') : undefined
 
-  // One writer for every view parameter, so a tab switch always clears the sort
-  // and query that belonged to the previous tab: upstream's sort labels differ
-  // per tab, and carrying one across would send an option the new tab rejects.
+  // a tab switch MUST clear sort and query: upstream's sort labels differ per tab and the new tab rejects the old one
   const setView = (param: 'tab' | 'sort', value: string) => {
     const next = new URLSearchParams(search)
     if (param === 'tab') {
@@ -492,8 +463,6 @@ export const ChannelPage = ({ params }: { params: { channelId?: string, handle?:
   }
 
   const activeTab = data?.channel.tab
-  // Both are gated on their tab being open: each is a separate browse, and a
-  // channel page that fired all three would pay two round trips it discards.
   const [{ data: aboutData, fetching: aboutFetching }] = useQuery({
     query: CHANNEL_ABOUT_QUERY,
     variables: { id },
@@ -676,9 +645,6 @@ export const ChannelPage = ({ params }: { params: { channelId?: string, handle?:
                     </div>
                   )
                   : undefined}
-                {/* Named for what the tab actually holds. "This channel has no
-                    videos" was rendered under Playlists, Releases and Podcasts
-                    too, where it described the wrong thing entirely. */}
                 {data && !fetching && !error && items.length === 0 && playlists.length === 0
                   ? <p className='status'>{emptyMessageFor(tab)}</p>
                   : undefined}

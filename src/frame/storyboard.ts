@@ -1,5 +1,4 @@
 export type Storyboard = {
-  // Sheet URL with the sheet index still to be substituted for $M.
   templateUrl: string
   thumbnailWidth: number
   thumbnailHeight: number
@@ -18,11 +17,7 @@ export type StoryboardFrame = {
   height: number
 }
 
-// The player response ships every storyboard level in one pipe-delimited spec:
-// a base URL, then one segment per level. Each segment is
-// width#height#count#columns#rows#interval#name#sigh, where `sigh` is a
-// per-level signature that has to be written back onto the base URL, and $L/$N
-// in the base stand for the level index and its name.
+// spec is a pipe-delimited base URL then one width#height#count#columns#rows#interval#name#sigh segment per level, with $L/$N the level index and name, and $M the sheet index
 export const parseStoryboards = (spec: string | undefined): Storyboard[] => {
   if (!spec) return []
   const parts = spec.split('|')
@@ -58,16 +53,12 @@ export const parseStoryboards = (spec: string | undefined): Storyboard[] => {
   })
 }
 
-// Levels run smallest to largest; the hover preview wants the sharpest one.
 export const bestStoryboard = (boards: Storyboard[]) =>
   boards.reduce<Storyboard | undefined>(
     (best, board) => (!best || board.thumbnailWidth > best.thumbnailWidth ? board : best),
     undefined,
   )
 
-// Maps a playhead position onto one tile of one sheet. Returns the sprite
-// offsets rather than an image, so the caller can render it with a single
-// background-position and never decode more than one sheet per hover.
 export const storyboardFrame = (board: Storyboard, seconds: number): StoryboardFrame | undefined => {
   if (!Number.isFinite(seconds) || seconds < 0) return undefined
   const perSheet = board.columns * board.rows

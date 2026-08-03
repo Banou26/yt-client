@@ -3,10 +3,7 @@ import { useEffect, useRef } from 'preact/hooks'
 
 type FeedPage<Item> = { items: Item[], cursor?: string | null }
 
-// Continuations overlap: the same video or comment routinely comes back on the
-// next page, and a repeated key makes preact reconcile two cards onto one slot.
-// Every consumer therefore flattens through this one key set instead of
-// concatenating pages.
+// continuations overlap, so every consumer flattens through this key set rather than concatenating pages
 export const useInfiniteFeed = <Item,>(
   { pages, key }: { pages: FeedPage<Item>[], key: (item: Item) => string },
 ) => {
@@ -20,7 +17,6 @@ export const useInfiniteFeed = <Item,>(
       items.push(item)
     }
   }
-  // Only the newest page can extend the feed, earlier cursors are spent.
   return { items, cursor: pages[pages.length - 1]?.cursor ?? undefined }
 }
 
@@ -30,16 +26,12 @@ const sentinelStyle = css`
   height: 0.1rem;
 `
 
-// Roughly two rows of lookahead: the next page is usually in hand by the time
-// the last visible row scrolls up, so the feed never shows a stall.
 const ROOT_MARGIN = '1200px 0px'
 
 export const FeedSentinel = ({ onVisible, disabled }: { onVisible: () => void, disabled?: boolean }) => {
   const ref = useRef<HTMLDivElement>(null)
   const onVisibleRef = useRef(onVisible)
-  // Callers pass an inline closure, so holding it in a ref keeps a parent
-  // re-render from tearing down and re-arming the observer, which would fire
-  // onVisible again for a page already in flight.
+  // held in a ref so a parent re-render does not re-arm the observer and fire onVisible again for a page already in flight
   onVisibleRef.current = onVisible
 
   useEffect(() => {

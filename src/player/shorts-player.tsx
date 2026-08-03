@@ -1,7 +1,6 @@
 import type { TargetedMouseEvent, TargetedPointerEvent } from 'preact'
 
-// Type-only, so it is erased at build and adds no runtime edge back to the
-// chunk this file deliberately loads on demand.
+// must stay type-only: a value import puts the on-demand shaka chunk back in the entry
 import type { startShakaPlayback } from './shaka'
 
 import { css } from '@emotion/react'
@@ -141,18 +140,7 @@ const MuteIcon = ({ muted }: { muted: boolean }) => (
   </svg>
 )
 
-/**
- * The Shorts player.
- *
- * A separate component from `VideoPlayer` rather than a mode of it: the two
- * share only the Shaka startup call. This one loops, has no control bar, no
- * quality menu, no fullscreen and no keyboard map, and it is mounted and torn
- * down as slides scroll rather than living for a route.
- *
- * `active` is what gates playback. Only the visible slide is allowed to hold a
- * SABR session, because each open session pins a per-session media cache in the
- * frame and a pager that left them open would multiply them per swipe.
- */
+// only the visible slide may hold a SABR session: each one pins a per-session media cache in the frame
 const ShortsPlayer = (
   { videoId, poster, active }: { videoId: string, poster?: string, active: boolean },
 ) => {
@@ -165,8 +153,6 @@ const ShortsPlayer = (
   const [scrubbing, setScrubbing] = useState(false)
   const [attempt, setAttempt] = useState(0)
 
-  // A slide that failed once starts over when it becomes active again, so a
-  // swipe back is a fresh try rather than a permanently dead slide.
   useEffect(() => {
     if (!active) setAttempt(0)
   }, [active])
@@ -177,21 +163,13 @@ const ShortsPlayer = (
     const settings = getSettings()
     video.volume = settings.volume
     video.muted = settings.muted
-    // Shorts loop, and the loop has to be on the element rather than an `ended`
-    // handler: restarting through currentTime would re-enter the SABR request
-    // chain as a seek on every wrap.
+    // the loop MUST be on the element: restarting through currentTime re-enters the SABR chain as a seek
     video.loop = true
     const abort = new AbortController()
     let controller: Awaited<ReturnType<typeof startShakaPlayback>> | undefined
     let retryTimer: ReturnType<typeof setTimeout> | undefined
     setReady(false)
     setStatus('')
-    /* Bounded retry, the same shape the watch player has. Without it a single
-       transient upstream answer killed the slide for good: the watch-page
-       scrape occasionally comes back without a player response, and there was
-       nothing to try again. Observed live, so this is not a hypothetical.
-
-       Live is the one refusal not worth retrying, because it cannot succeed. */
     const fail = (error: unknown) => {
       if (abort.signal.aborted || retryTimer !== undefined) return
       const message = error instanceof Error ? error.message : String(error)
@@ -204,10 +182,6 @@ const ShortsPlayer = (
       }, 400)
     }
     void (async () => {
-      // Imported here rather than at the top so Shaka stays out of the entry
-      // chunk. `warmShaka` has normally already resolved this, so it is a
-      // registry hit; the await is what makes a cold path correct rather than
-      // fast.
       const [api, { startShakaPlayback }] = await Promise.all([startEngine(), warmShaka()])
       controller = await startShakaPlayback({
         api,
@@ -219,16 +193,7 @@ const ShortsPlayer = (
       })
       if (abort.signal.aborted) return
       setReady(true)
-      /* Pin a format that COVERS the box instead of leaving it to ABR.
-         Measured: in an 818px-tall box on a 1.5x display (1227 device px) ABR
-         settled on the 360x640 variant, a 1.9x upscale on the surface that IS
-         the page. Portrait tiers step 640 -> 1080 -> 1280, so the smallest one
-         at or above the display height is the right pick.
-
-         Routed through selectQuality rather than Shaka's own restrictions
-         because quality here is TWO coordinated moves: the frame's SABR session
-         has to serve the format before Shaka may select it, and configuring
-         only the Shaka half leaves the session advertising the old one. */
+      // through selectQuality, not Shaka restrictions: the frame's SABR session must serve the format before Shaka may select it
       const displayHeight = Math.ceil(video.getBoundingClientRect().height * devicePixelRatio)
       const covering = [...controller.heights].sort((a, b) => a - b).find((height) => height >= displayHeight)
       if (covering) await controller.selectQuality(covering).catch(() => {})
@@ -237,7 +202,6 @@ const ShortsPlayer = (
       abort.abort()
       clearTimeout(retryTimer)
       setReady(false)
-      // Closing the session is the point of tearing down an inactive slide.
       void controller?.destroy()
     }
   }, [videoId, active, attempt])
@@ -250,8 +214,6 @@ const ShortsPlayer = (
       setMuted(video.muted)
     }
     const tick = () => {
-      // A drag owns the fill until it ends, or the element's own time would
-      // fight the pointer and make the handle jump back.
       if (scrubbing) return
       const duration = video.duration
       setProgress(Number.isFinite(duration) && duration > 0 ? video.currentTime / duration : 0)
@@ -287,8 +249,6 @@ const ShortsPlayer = (
 
   return (
     <div css={playerStyle} onClick={togglePlay}>
-      {/* Kept until the first frame is decodable so a slide never flashes black
-          between the poster and playback. */}
       {poster && !ready ? <img className='poster' src={poster} alt='' /> : undefined}
       <video key={attempt} ref={videoRef} playsInline preload='auto' />
       {active && !ready && !status ? <div className='spinner' /> : undefined}
@@ -307,8 +267,6 @@ const ShortsPlayer = (
             className='mute'
             aria-label={muted ? 'Unmute' : 'Mute'}
             onClick={(event: TargetedMouseEvent<HTMLButtonElement>) => {
-              // The surface toggles playback, so every control on top of it has
-              // to stop the click from reaching it.
               event.stopPropagation()
               const video = videoRef.current
               if (!video) return

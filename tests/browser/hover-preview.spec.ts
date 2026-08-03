@@ -1,17 +1,7 @@
 import { expect, test } from '@playwright/test'
 
-/* The inline preview must never paint over a thumbnail it cannot yet replace.
-
-   Its root is an opaque black box covering the whole thumbnail, mounted the
-   moment the pointer lands but with no frame to show until a session has been
-   opened and media has arrived. That was drawn as a black rectangle where a
-   picture used to be, for the whole of the load, and it read as the card
-   breaking rather than as the card loading.
-
-   Sampled continuously rather than checked at the ends, because the defect is a
-   flash: a before-and-after assertion passes straight through it. The condition
-   that only the fix satisfies is "never visible while readyState < 2", which is
-   false on every frame of the old behaviour. */
+/* The inline preview must never paint over a thumbnail it cannot yet replace: its root is an opaque black box mounted the moment the pointer lands.
+   Sampled continuously because the defect is a flash, which a before-and-after assertion passes straight through. */
 
 test('keeps the thumbnail until the preview has a frame, then fades it in', async ({ page }) => {
   test.setTimeout(240_000)
@@ -41,7 +31,6 @@ test('keeps the thumbnail until the preview has a frame, then fades it in', asyn
   })
 
   await cards.first().hover()
-  // Long enough to cover the slow tunnelled path as well as the direct one.
   await expect
     .poll(
       () =>
@@ -59,7 +48,5 @@ test('keeps the thumbnail until the preview has a frame, then fades it in', asyn
   expect(samples.length, 'no samples were taken, so nothing was proven').toBeGreaterThan(3)
   expect(tooEarly, `the preview was visible with no decodable frame: ${JSON.stringify(tooEarly.slice(0, 3))}`)
     .toHaveLength(0)
-  // And it does eventually reveal, so the test cannot pass by the preview
-  // simply never appearing.
   expect(samples.some(sample => sample.painted && sample.opacity > 0.95)).toBe(true)
 })

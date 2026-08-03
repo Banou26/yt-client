@@ -8,22 +8,15 @@ export type Settings = {
   volume: number
   muted: boolean
   playbackRate: number
-  // A ceiling on the video height rather than an exact pick: the exact
-  // representation may not exist for every video, and ABR still moves below it.
+  // a ceiling on the video height, not an exact pick: ABR still moves below it
   quality: QualityPreference
   captionsEnabled: boolean
   captionsLanguage?: string
   theater: boolean
   guideCollapsed: boolean
-  // Whether the header may offer the FKN extension. On by default because the
-  // extension is a straight latency win, off for good once dismissed: an offer
-  // that keeps coming back after being declined is an ad.
+  // off for good once dismissed: an offer that keeps coming back after being declined is an ad
   suggestExtension: boolean
-  /* Last resolved answer to "is the extension exposed here", which is a CACHE
-     rather than a preference: it lets the header render its final shape on the
-     first paint instead of settling into it a beat later, which is a layout
-     shift on a fixed row. The live DOM signal always wins over it. Absent until
-     the first answer, so a first visit is the only one that can shift. */
+  // a CACHE rather than a preference, and the live DOM signal always wins over it
   extensionSeen?: boolean
 }
 
@@ -44,9 +37,7 @@ const STORAGE_KEY = 'yt-client:settings'
 
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
 
-// Storage is user-editable and survives across versions of this code, so every
-// field is validated rather than trusted: one bad entry must not take out the
-// whole store and reset every unrelated preference.
+// storage is user-editable and survives across versions of this code, so one bad entry must not take out the whole store
 const coerce = (stored: Partial<Record<keyof Settings, unknown>>): Settings => {
   const theme = stored.theme
   const quality = stored.quality
@@ -104,8 +95,7 @@ export const updateSettings = (patch: Partial<Settings>) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
   } catch {
-    // storage unavailable (private mode, quota): keep the in-memory value so
-    // the session still behaves, it just does not survive a reload
+    // storage unavailable (private mode, quota): the in-memory value still stands
   }
   for (const listener of listeners) listener(next)
   return next
@@ -122,23 +112,15 @@ const prefersLight = () => {
 export const resolveTheme = (preference: ThemePreference): 'light' | 'dark' =>
   preference === 'device' ? (prefersLight() ? 'light' : 'dark') : preference
 
-// The stylesheet keys light mode off [data-theme='light'] and treats everything
-// else as dark, so 'device' is resolved here rather than by a media query. An
-// explicit choice then always wins without depending on rule order.
 const THEME_COLOR = { dark: '#0f0f0f', light: '#f9f9f9' }
 
 export const applyTheme = (preference: ThemePreference = current.theme) => {
   const resolved = resolveTheme(preference)
   document.documentElement.dataset.theme = resolved
-  // The browser chrome (mobile address bar, PWA title bar, task switcher card)
-  // frames the page, so leaving it pinned to the dark value puts a black bar
-  // around a white app.
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_COLOR[resolved])
   return resolved
 }
 
-// 'device' has to keep tracking the OS after load, but an explicit light/dark
-// choice must not be overwritten when the OS flips.
 export const watchDeviceTheme = () => {
   let media: MediaQueryList
   try {

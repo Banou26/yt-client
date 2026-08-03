@@ -4,8 +4,6 @@ import { normalizeChannel, normalizeChannelAbout, normalizeNotification, normali
 
 describe('youtube normalization', () => {
   it('keeps the notification avatar and still in their own slots', () => {
-    // They are two separate fields rather than one list: putting the 16:9 still
-    // in the round avatar slot is what reading them as interchangeable does.
     expect(normalizeNotification({
       notification_id: 'n1',
       short_message: { text: 'Blender uploaded a new video' },
@@ -26,23 +24,14 @@ describe('youtube normalization', () => {
   })
 
   it('describes only the stills upstream actually published', () => {
-    /* A srcset is a promise about what exists at each URL, so it can only ever
-       repeat what came back. The same Video renders at ~380px in a grid and
-       168px in the watch sidebar, which is why one picked width cannot serve
-       both and this exists at all. */
     const srcsetOf = (thumbnails: { url?: string, width?: number }[]) =>
       normalizeFeedVideo({ video_id: 'v', title: { text: 'T' }, thumbnails })?.thumbnailSrcset
 
     expect(srcsetOf([{ url: 'b', width: 480 }, { url: 'a', width: 120 }])).toBe('a 120w, b 480w')
-    // One candidate is not a choice, so the plain thumbnail serves alone.
     expect(srcsetOf([{ url: 'only', width: 480 }])).toBeUndefined()
-    // A candidate with no width cannot be described, and dropping it can leave
-    // too few to choose between.
     expect(srcsetOf([{ url: 'sized', width: 480 }, { url: 'unsized' }])).toBeUndefined()
     expect(srcsetOf([{ url: 'a', width: 120 }, { url: 'b', width: 480 }, { url: 'c' }]))
       .toBe('a 120w, b 480w')
-    // Upstream publishes one still more than once (a webp and a jpg of the same
-    // size), and a repeated width descriptor is invalid.
     expect(srcsetOf([{ url: 'jpg', width: 480 }, { url: 'webp', width: 480 }, { url: 'a', width: 120 }]))
       .toBe('a 120w, webp 480w')
   })
@@ -54,8 +43,6 @@ describe('youtube normalization', () => {
   })
 
   it('segments a rich text body into linkable runs', () => {
-    // Every one of these is inert when the body is collapsed with text(), which
-    // is the state descriptions and comments were in.
     expect(normalizeRuns({
       text: 'See 1:23 and https://example.com and #tag',
       runs: [
@@ -77,8 +64,6 @@ describe('youtube normalization', () => {
   })
 
   it('keeps a chapter that starts at zero', () => {
-    // 0 is a real position, and a falsy check would drop the opening chapter of
-    // every description that has one.
     expect(normalizeRuns({
       text: 'Intro',
       runs: [{ text: 'Intro', endpoint: { payload: { videoId: 'abc', startTimeSeconds: 0 } } }],
@@ -90,14 +75,11 @@ describe('youtube normalization', () => {
       { text: 'Plain body', url: undefined, videoId: undefined, startSeconds: undefined, browseId: undefined },
     ])
     expect(normalizeRuns('a string')).toEqual([{ text: 'a string' }])
-    // Nothing to render is an empty list rather than a run with empty text.
     expect(normalizeRuns(undefined)).toEqual([])
     expect(normalizeRuns('')).toEqual([])
   })
 
   it('reads the About panel from both renderer generations', () => {
-    // Modern channels answer with AboutChannel wrapping an AboutChannelView,
-    // whose fields are plain strings.
     expect(normalizeChannelAbout({
       metadata: {
         description: 'We make things',
@@ -122,8 +104,6 @@ describe('youtube normalization', () => {
   })
 
   it('falls back to the legacy About renderer, whose fields are Text nodes', () => {
-    // Older channels still serve ChannelAboutFullMetadata, and reading only the
-    // modern shape leaves the panel blank on exactly those channels.
     expect(normalizeChannelAbout({
       description: { text: 'An older channel' },
       country: { text: 'Japan' },
@@ -137,14 +117,11 @@ describe('youtube normalization', () => {
       viewCountText: '99 views',
       links: [{ title: 'Blog', url: 'https://blog.example' }],
     })
-    // Neither shape means there is no panel worth rendering.
     expect(normalizeChannelAbout({})).toBeUndefined()
     expect(normalizeChannelAbout(undefined)).toBeUndefined()
   })
 
   it('keeps a community post that carries no words and no attachment', () => {
-    // A post can be a bare poll or image, so empty text is a real state rather
-    // than a reason to drop the row.
     expect(normalizeCommunityPost({
       id: 'Ugkx',
       author: { id: 'UC1', name: 'Chan' },
@@ -159,22 +136,17 @@ describe('youtube normalization', () => {
       attachedVideo: undefined,
       attachedImage: undefined,
     })
-    // No id is the one thing that makes a row unrenderable.
     expect(normalizeCommunityPost({ content: { text: 'orphan' } })).toBeUndefined()
     expect(normalizeCommunityPost(undefined)).toBeUndefined()
   })
 
   it('keeps the shorts that every feed used to drop', () => {
-    // ShortsLockupView carries NEITHER video_id NOR id, so normalizeFeedVideo
-    // returned undefined for every Short and each one fell out of home,
-    // subscriptions and channel feeds without a trace.
     expect(normalizeShortsLockup({
       entity_id: 'shorts-entity',
       on_tap_endpoint: { payload: { videoId: 'realId' } },
       thumbnail: [{ url: 'small', width: 120 }, { url: 'large', width: 480 }],
       overlay_metadata: { primary_text: { text: 'A Short' }, secondary_text: { text: '1.2M views' } },
     })).toEqual({
-      // The tap endpoint wins: entity_id is not a video id and would not play.
       id: 'realId',
       title: 'A Short',
       thumbnail: 'large',
@@ -185,13 +157,10 @@ describe('youtube normalization', () => {
   })
 
   it('derives a still for a short whose own image field is empty', () => {
-    // The home shelf returns shorts whose title and view count parse while the
-    // image comes back empty, which rendered a rail of blank boxes.
     expect(normalizeShortsLockup({
       on_tap_endpoint: { payload: { videoId: 'abc123' } },
       overlay_metadata: { primary_text: { text: 'A Short' } },
     })?.thumbnail).toBe('https://i.ytimg.com/vi/abc123/hqdefault.jpg')
-    // A real image on the node always wins over the derived one.
     expect(normalizeShortsLockup({
       on_tap_endpoint: { payload: { videoId: 'abc123' } },
       overlay_metadata: { primary_text: { text: 'A Short' } },
@@ -209,9 +178,6 @@ describe('youtube normalization', () => {
   })
 
   it('reads a search channel off the shape normalizeChannel cannot take', () => {
-    // A search Channel keeps its id at the top level and its name on an Author.
-    // normalizeChannel wants a browse response's metadata.external_id and
-    // THROWS without one, so reusing it here would take out the whole page.
     expect(normalizeSearchChannel({
       id: 'UC123',
       author: {
@@ -221,9 +187,7 @@ describe('youtube normalization', () => {
         thumbnails: [{ url: 'avatar', width: 176 }],
         is_verified: true,
       },
-      // Both slots are MISNAMED upstream: subscriberCountText carries the
-      // handle and videoCountText carries the subscriber count. youtubei.js
-      // flags this in parser/classes/Channel.js:25 and keeps the old names.
+      // Both slots are MISNAMED upstream: subscriberCountText carries the handle and videoCountText carries the subscriber count (youtubei.js parser/classes/Channel.js:25).
       subscriber_count: { text: '@achannel' },
       video_count: { text: '1.2M subscribers' },
       description_snippet: { text: 'We make things' },
@@ -241,15 +205,12 @@ describe('youtube normalization', () => {
   })
 
   it('takes the search channel handle off the misnamed slot when the url has none', () => {
-    // Reading the two slots literally rendered the handle twice on every search
-    // channel row: once as the handle and again as the subscriber count.
     expect(normalizeSearchChannel({
       id: 'UC123',
       author: { id: 'UC123', name: 'A Channel' },
       subscriber_count: { text: '@achannel' },
       video_count: { text: '1.2M subscribers' },
     })).toMatchObject({ handle: '@achannel', subscriberCountText: '1.2M subscribers' })
-    // A slot that does not hold a handle must not be shown as one.
     expect(normalizeSearchChannel({
       id: 'UC123',
       author: { id: 'UC123', name: 'A Channel' },
@@ -260,8 +221,6 @@ describe('youtube normalization', () => {
   it('drops a search node that is not a channel', () => {
     expect(normalizeSearchChannel({ id: 'UC123' })).toBeUndefined()
     expect(normalizeSearchChannel({})).toBeUndefined()
-    // The placeholder Author upstream builds for an absent byline must not read
-    // back as a real channel behind a dead link.
     expect(normalizeSearchChannel({ author: { id: 'N/A', name: 'N/A' } })).toBeUndefined()
   })
 
@@ -278,26 +237,17 @@ describe('youtube normalization', () => {
     })).toMatchObject({
       id: 'abc',
       isUpcoming: true,
-      // Matched on the style id rather than the label, which is a whole
-      // localized sentence.
       isMembersOnly: true,
       badges: ['4K', 'CC', 'Members only'],
     })
   })
 
   it('leaves badges an empty list rather than absent', () => {
-    // The GraphQL field is non-null, so every path has to produce a list: an
-    // absent one would make the resolver invent it.
     expect(normalizeFeedVideo({ video_id: 'abc', title: { text: 'T' } })?.badges).toEqual([])
     expect(normalizeVideoDetails({ id: 'abc', title: 'T' })?.badges).toEqual([])
   })
 
   it('picks an image that covers its slot rather than the widest published', () => {
-    /* Taking the widest unconditionally is what made a 12-card grid download
-       maxres stills into 360px slots and 800px channel photos into 24px
-       avatars. The still wants the smallest candidate at or above the card's
-       2x width, and the avatar a much smaller one, so the two must not resolve
-       to the same asset. */
     const video = normalizeFeedVideo({
       video_id: 'abc',
       title: { text: 'T' },
@@ -318,15 +268,11 @@ describe('youtube normalization', () => {
         ],
       },
     })
-    // 720 is the target, so 1280 is the narrowest candidate that covers it.
     expect(video?.thumbnail).toBe('hd.jpg')
-    // 160 is the target, so 176 covers it and 800 is four times too wide.
     expect(video?.channel?.avatar).toBe('a176.jpg')
   })
 
   it('falls back to the widest image when nothing published covers the slot', () => {
-    // A channel whose largest photo is smaller than the target still needs an
-    // avatar: covering is a preference, not a requirement.
     const video = normalizeFeedVideo({
       video_id: 'abc',
       title: { text: 'T' },
@@ -497,9 +443,6 @@ describe('youtube normalization', () => {
   })
 
   it('normalizes a short lockup as a video and still refuses a collection', () => {
-    // One renderer fronts every kind of content. A Short plays through /watch
-    // like any other video, so rejecting by an explicit non-video list rather
-    // than by "not VIDEO" keeps it in the feed.
     expect(normalizeLockupVideo({
       content_id: 'abc',
       content_type: 'SHORT',
@@ -517,9 +460,6 @@ describe('youtube normalization', () => {
       content_id: 'PL123',
       content_type: 'PLAYLIST',
       content_image: {
-        // The count badge hangs off primary_thumbnail, one hop deeper than on a
-        // video lockup, and reading content_image.overlays here would silently
-        // yield nothing.
         primary_thumbnail: {
           image: [{ url: 'cover', width: 640 }],
           overlays: [{ badges: [{ text: '50 videos' }] }],
@@ -574,10 +514,6 @@ describe('youtube normalization', () => {
   })
 
   it('falls back to a playlist custom thumbnail', () => {
-    // The `Playlist` renderer a channel's Releases and Podcasts tabs serve puts
-    // its cover on thumbnail_renderer when the playlist has a custom one, and
-    // leaves `thumbnails` empty. Reading only `thumbnails` gave every release a
-    // blank cover.
     expect(normalizeGridPlaylist({
       id: 'PL123',
       title: { text: 'Bossa Lofi' },
@@ -636,9 +572,6 @@ describe('youtube normalization', () => {
   })
 
   it("drops a playlist row's placeholder author", () => {
-    // The row builds an Author unconditionally and fills both id and name with
-    // the literal 'N/A' when it carries no byline, which would otherwise render
-    // as a real channel behind a dead link.
     expect(normalizePlaylistItem({
       id: 'abc',
       title: { text: 'Row title' },
@@ -688,8 +621,6 @@ describe('youtube normalization', () => {
   })
 
   it('treats absent playlist stats as absent rather than as the text N/A', () => {
-    // A continuation page has no header and no sidebar, so every stat
-    // stringifies to 'N/A' and the id is nowhere in the response at all.
     expect(normalizePlaylistDetails({
       info: { total_items: 'N/A', views: 'N/A', last_updated: 'N/A' },
     }, 'PL123')).toEqual({ id: 'PL123', title: 'PL123' })
@@ -754,10 +685,6 @@ describe('youtube normalization', () => {
   })
 
   it('reads liveness off the view count, which is where upstream puts it', () => {
-    /* A live stream has no separate live flag on VideoPrimaryInfo: the view
-       count IS the concurrent-viewer count and carries the flag. Reading a
-       top-level field instead finds nothing, and the watch page would then
-       mount a player that cannot start. */
     const memo = new Map<string, unknown[]>([
       ['VideoPrimaryInfo', [{
         title: { text: 'Live now' },
@@ -770,9 +697,6 @@ describe('youtube normalization', () => {
   })
 
   it('normalizes a queue row off its singular thumbnail field', () => {
-    // The field is named `thumbnail` but holds the whole array, so the feed
-    // normalizer's `thumbnails` read would find nothing here. The duration is
-    // already in seconds rather than a length badge.
     expect(normalizePlaylistPanelVideo({
       video_id: 'q1',
       title: { text: 'Queue row' },
@@ -793,9 +717,7 @@ describe('youtube normalization', () => {
   it('unwraps a queue row and drops the rows that carry no video', () => {
     expect(normalizePlaylistPanelVideo({ primary: { video_id: 'q2', title: { text: 'Wrapped' } } }))
       .toEqual({ id: 'q2', title: 'Wrapped', thumbnail: undefined, durationSeconds: undefined, badges: [] })
-    // The mix teaser tail has no video id at all.
     expect(normalizePlaylistPanelVideo({ playlist_video: {} })).toBeUndefined()
-    // A missing length parses to NaN upstream rather than to an absent value.
     expect(normalizePlaylistPanelVideo({
       video_id: 'q3',
       title: { text: 'No length' },
@@ -810,8 +732,6 @@ describe('youtube normalization', () => {
           playlist: {
             id: 'PL1',
             title: 'My queue',
-            // A real playlist bylines with an Author, which has a `name` and no
-            // toString: stringifying it would give '[object Object]'.
             author: { id: 'UC1', name: 'Owner' },
             contents: [{ video_id: 'q1', title: { text: 'First' } }],
             current_index: 0,
@@ -824,7 +744,6 @@ describe('youtube normalization', () => {
       title: 'My queue',
       author: 'Owner',
       items: [{ id: 'q1', title: 'First', thumbnail: undefined, durationSeconds: undefined, badges: [] }],
-      // 0-based, so position zero has to survive the guard.
       currentIndex: 0,
       isInfinite: false,
     })
@@ -837,7 +756,6 @@ describe('youtube normalization', () => {
       author: { text: 'YouTube' },
       is_infinite: true,
     })).toEqual({ id: 'RD1', title: 'Mix', author: 'YouTube', items: [], currentIndex: undefined, isInfinite: true })
-    // No panel at all is the ordinary case: a watch outside a playlist.
     expect(normalizeWatchPlaylist(undefined)).toBeUndefined()
     expect(normalizeWatchPlaylist({})).toBeUndefined()
   })
@@ -867,8 +785,6 @@ describe('youtube normalization', () => {
       id: 'UgxComment',
       author: { id: 'UC123', name: '@viewer', avatar: 'avatar', handle: '@viewer' },
       text: 'Nice video',
-      // The same body segmented. A body with no runs still yields one unlinked
-      // segment, so the renderer never has to fall back to the flat string.
       runs: [{ text: 'Nice video', url: undefined, videoId: undefined, startSeconds: undefined, browseId: undefined }],
       publishedText: '2 days ago',
       likeCountText: '1.2K',
@@ -879,9 +795,6 @@ describe('youtube normalization', () => {
   })
 
   it('normalizes account info into a session', () => {
-    // AccountInfo.contents is a SECTION; the account is an AccountItem inside
-    // its own contents. Reading the section directly finds none of these, which
-    // is what left the header avatar blank on a signed-in session.
     expect(normalizeSession({
       contents: {
         contents: [{
@@ -900,8 +813,6 @@ describe('youtube normalization', () => {
       avatar: 'large',
       handle: '@banou',
       channelId: undefined,
-      // The same rows the header reads are the account list, so offering a
-      // switch costs no extra round trip.
       accounts: [{
         index: 0,
         name: 'Banou',
@@ -914,10 +825,7 @@ describe('youtube normalization', () => {
   })
 
   it('numbers accounts by position among the NAMED rows', () => {
-    /* account_index becomes X-Goog-Authuser, so the number has to match the
-       order authuser itself uses. The section mixes in CompactLink rows that
-       carry none of these fields, and counting those would offset every index
-       and switch to the wrong account. */
+    // account_index becomes X-Goog-Authuser, so the number has to match the order authuser itself uses.
     const session = normalizeSession({
       contents: {
         contents: [
@@ -933,8 +841,6 @@ describe('youtube normalization', () => {
   })
 
   it('takes the selected account, not the first row', () => {
-    // The section lists every account on the login and mixes in CompactLink
-    // rows that carry none of these fields, so position is not identity.
     expect(normalizeSession({
       contents: {
         contents: [
@@ -958,8 +864,6 @@ describe('youtube normalization', () => {
   })
 
   it('still reports a signed-in session when the account section is unreadable', () => {
-    // The cookie jar probe is what decides signed-in; this call only decorates
-    // it, so a shape change must not read back as signed out.
     expect(normalizeSession({})).toEqual({
       signedIn: true,
       name: undefined,

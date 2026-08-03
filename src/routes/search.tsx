@@ -17,9 +17,6 @@ import { gql } from '../generated'
 type ResultsPage = SearchResultsQuery['search']
 type SearchRow = ResultsPage['results'][number]
 
-/* Results are a union, so each member is selected through its own inline
-   fragment. `__typename` is what the render switch reads, and urql needs it in
-   the document anyway to normalize the row. */
 const SEARCH_RESULTS_QUERY = gql(`
   query SearchResults($query: String!, $filters: SearchFilters, $cursor: String) {
     search(query: $query, filters: $filters, cursor: $cursor) {
@@ -67,10 +64,7 @@ const SEARCH_RESULTS_QUERY = gql(`
   }
 `)
 
-/* The filter set lives in readable query parameters rather than youtube.com's
-   `sp=`, which is an opaque base64 protobuf this client cannot build or parse.
-   The trade is that a link pasted FROM youtube.com keeps its query but loses
-   its filters, which beats silently applying the wrong ones. */
+// filters live in readable query parameters, not youtube.com's `sp=` protobuf, so a link pasted from youtube.com keeps its query but loses its filters
 const FILTER_PARAMS = ['upload_date', 'type', 'duration', 'sort', 'features']
 
 type FilterGroup<Value extends string> = {
@@ -112,9 +106,7 @@ const DURATION: FilterGroup<SearchDuration> = {
   ],
 }
 
-// Only the two orderings youtubei.js can actually encode. Upload date and
-// rating are reachable only through the response's own sub_menu endpoints,
-// which carry pre-baked params, so offering them here would be a dead control.
+// only the two orderings youtubei.js can actually encode; upload date and rating need the response's own sub_menu endpoints
 const SORT: FilterGroup<SearchSort> = {
   param: 'sort',
   label: 'Sort by',
@@ -453,16 +445,13 @@ const style = css`
   }
 `
 
-// A video and a channel can hold the same id string, so the key carries the
-// member as well: without it one would evict the other from the deduped feed.
+// a video and a channel can hold the same id string, so the key carries the member as well or one evicts the other from the deduped feed
 const rowKey = (row: SearchRow) =>
   row.__typename === 'Channel' ? `channel:${row.id}` : `${row.__typename}:${row.id}`
 
 const SearchPage = () => {
   const search = useSearch()
   const params = new URLSearchParams(search)
-  // URLSearchParams hands back an already-decoded value, so decoding it again
-  // would corrupt any query containing a literal '%'.
   const query = params.get('search_query') ?? ''
   const [, navigate] = useLocation()
   useDocumentTitle(query.length > 0 ? query : 'Search')
@@ -478,8 +467,6 @@ const SearchPage = () => {
   const activeFilters = FILTER_PARAMS.filter(param => params.get(param)).length
   const [panelOpen, setPanelOpen] = useState(activeFilters > 0)
 
-  // The filter set is part of the feed identity: changing one has to restart
-  // paging, not append filtered results underneath unfiltered ones.
   const feedKey = `${query}|${FILTER_PARAMS.map(param => params.get(param) ?? '').join('|')}`
   const [loaded, setLoaded] = useState<{ key: string, pages: ResultsPage[] }>({ key: feedKey, pages: [] })
   const pages = loaded.key === feedKey ? loaded.pages : []
@@ -490,8 +477,6 @@ const SearchPage = () => {
     pause: query.length === 0
   })
   const page = data?.search
-  // urql keeps the previous result while the next page is in flight, so the
-  // live page can repeat one already consumed: useInfiniteFeed dedupes.
   const { items, cursor } = useInfiniteFeed({
     pages: page ? [...pages, page].map(entry => ({ items: entry.results, cursor: entry.cursor })) : [],
     key: rowKey
@@ -502,8 +487,6 @@ const SearchPage = () => {
     setLoaded({ key: feedKey, pages: pages[pages.length - 1] === page ? pages : [...pages, page] })
   }
 
-  // Rewriting the URL rather than holding filters in state keeps a filtered
-  // search shareable and survivable across a reload, the same way the query is.
   const setParam = (param: string, value: string | undefined) => {
     const next = new URLSearchParams(search)
     if (value === undefined || next.get(param) === value) next.delete(param)
@@ -522,9 +505,6 @@ const SearchPage = () => {
   }
 
   const onRefine = (refinement: string) => {
-    // A refinement is a whole new search, so the filter set does not carry over:
-    // upstream picked those words, not the reader, and keeping a narrow duration
-    // filter would usually return nothing.
     navigate(`/results?${new URLSearchParams({ search_query: refinement })}`)
   }
 
@@ -669,7 +649,6 @@ const SearchPage = () => {
                   ? (
                     <img
                       src={row.thumbnail}
-                      // A search row's still sits in a fixed 36rem column.
                       srcSet={row.thumbnailSrcset ?? undefined}
                       sizes='36rem'
                       alt=''

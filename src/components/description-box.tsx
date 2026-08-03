@@ -59,8 +59,6 @@ export const DescriptionBox = (
     viewCountText?: string | null
     publishedDateText?: string | null
     description?: string | null
-    // The same body segmented. Present whenever the watch query selected it;
-    // the flat string is what the collapsed clamp measures.
     runs?: readonly RichTextRun[]
     videoId?: string
   }

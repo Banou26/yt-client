@@ -2,9 +2,7 @@ import type { SearchFilters } from '../generated/graphql'
 import type { Resolvers } from '../generated/resolvers'
 import type { SourceSearchFilters } from '../sources/types'
 
-// GraphQL nullables arrive as null and the Source contract speaks in undefined,
-// so the boundary is converted field by field rather than passed through: a
-// null reaching youtubei.js is a real filter value, not an absent one.
+// A null reaching youtubei.js is a real filter value, not an absent one, so every field is converted rather than passed through
 const searchFilters = (filters: SearchFilters | null | undefined): SourceSearchFilters | undefined => {
   if (!filters) return undefined
   return {
@@ -17,8 +15,6 @@ const searchFilters = (filters: SearchFilters | null | undefined): SourceSearchF
 }
 
 export const resolvers = {
-  // The source tags every row with its kind, so this stays a field switch and
-  // never has to recognize a youtubei.js node shape.
   SearchResult: {
     __resolveType: (result) =>
       result.kind === 'video' ? 'Video' : result.kind === 'channel' ? 'Channel' : 'Playlist',

@@ -3,9 +3,6 @@ import type { ComponentChildren, FunctionComponent, RefObject } from 'preact'
 import { css } from '@emotion/react'
 import { useEffect } from 'preact/hooks'
 
-// The trigger markup stays with the caller (an avatar, a pill, an icon button
-// all look different), so this exports the dismiss BEHAVIOUR separately from
-// the panel rather than owning a trigger of its own.
 export const useDismiss = (
   { open, onClose, rootRef, triggerRef }: {
     open: boolean
@@ -24,8 +21,6 @@ export const useDismiss = (
       if (event.key !== 'Escape') return
       event.stopPropagation()
       onClose()
-      // Returning focus to the trigger is what makes keyboard dismissal usable:
-      // without it focus falls back to <body> and tab order restarts.
       triggerRef?.current?.focus()
     }
     document.addEventListener('pointerdown', onPointerDown)

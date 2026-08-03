@@ -145,8 +145,6 @@ export const VideoCardCompact = ({ video, context }: { video: VideoCardData, con
           ? (
             <img
               src={video.thumbnail}
-              // A fixed 16.8rem slot, which is where the saving is: a watch page
-              // renders twenty of these and used to pull a 720px still into each.
               srcSet={video.thumbnailSrcset ?? undefined}
               sizes='16.8rem'
               alt=''

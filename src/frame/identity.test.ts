@@ -95,11 +95,6 @@ describe('account selection', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it('survives resetIdentity', async () => {
-    /* The selection is the one piece of identity state a switch must KEEP.
-       resetIdentity drops identity RESIDUE so the next engine derives a clean
-       one, and switching calls it for exactly that reason; clearing the
-       selection there would make every switch reset itself to the first
-       account. */
     const storage = createFakeStorage()
     storage.setItem(VISITOR_DATA_KEY, 'visitor')
     vi.stubGlobal('localStorage', storage)
@@ -111,8 +106,7 @@ describe('account selection', () => {
   })
 
   it('treats the first account as an absence rather than a value', () => {
-    // Index 0 is the default authuser, so storing it would pin a selection that
-    // is really just "no selection".
+    // Index 0 is the default authuser, so storing it would pin a selection that is really just "no selection"
     const storage = createFakeStorage()
     vi.stubGlobal('localStorage', storage)
     storeAccountIndex(3)

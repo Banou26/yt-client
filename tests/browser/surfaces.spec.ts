@@ -2,19 +2,8 @@ import type { Page } from '@playwright/test'
 
 import { expect, test } from '@playwright/test'
 
-/* Every surface renders, and the player survives leaving its page.
-
-   This is the coverage that used to live in a set of hand-rolled probe scripts
-   with their own pass/fail counters, which meant it only ran when someone
-   remembered to run it. The scripts also carried a dimension this cannot: they
-   loaded the real unpacked extension to check both egress paths. That half is
-   covered by extension-notice.spec.ts, which drives the same page-visible
-   contract without needing the extension built next door.
-
-   Two expectations here look wrong and are not, both learned the hard way:
-   a signed-out home feed is EMPTY by design, matching youtube.com for a fresh
-   anonymous visitor, and a channel is reached by following the app's own link
-   rather than a guessed URL. */
+/* A signed-out home feed is EMPTY by design, and a channel is reached by
+   following the app's own link rather than a guessed URL. */
 
 const ROUTES = [
   ['shorts', '/shorts'],
@@ -39,8 +28,6 @@ test('renders every route without a page error', async ({ page }) => {
 
   for (const [name, path] of ROUTES) {
     await page.goto(path)
-    // The header is on every route, so it is the one thing whose absence means
-    // the page did not render at all rather than merely rendered empty.
     await expect(page.locator('header'), `${name} did not render`).toBeVisible({ timeout: 30_000 })
     expect(errors, `${name} raised a page error`).toEqual([])
   }
@@ -49,8 +36,6 @@ test('renders every route without a page error', async ({ page }) => {
 test('shows an empty home for an anonymous session, and real search results', async ({ page }) => {
   test.setTimeout(240_000)
   await page.goto('/')
-  // Cards OR the anonymous empty state: a signed-in run legitimately has a
-  // feed, and a fresh one legitimately has none.
   await expect
     .poll(
       () => page.evaluate(() =>
@@ -72,8 +57,6 @@ test('opens a channel from the app own link', async ({ page }) => {
   await expect(channelLink).toBeVisible({ timeout: 90_000 })
   const href = await channelLink.getAttribute('href')
   await page.goto(href ?? '/')
-  // Not a video count: a channel can legitimately lead with playlists, which is
-  // what made an earlier "at least three videos" check fail on a real channel.
   await expect(page.locator('h1')).toBeVisible({ timeout: 90_000 })
   await expect(page.locator('.tab').first()).toBeVisible()
 })
@@ -88,15 +71,13 @@ test('keeps playing in the miniplayer after leaving the watch page', async ({ pa
     { timeout: 120_000 },
   ).toBeGreaterThan(1)
 
-  /* Client-side navigation, NOT page.goto: a full load tears the player down,
-     so a goto here would assert that a fresh page has no miniplayer. */
+  // Client-side navigation, NOT page.goto: a full load tears the player down
   await page.evaluate(() => {
     history.pushState(null, '', '/settings')
     dispatchEvent(new PopStateEvent('popstate'))
   })
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({ timeout: 30_000 })
 
-  // The element survives the route change, and the clock keeps moving.
   await expect(video).toBeVisible()
   const before = await video.evaluate(element => (element as HTMLVideoElement).currentTime)
   await expect.poll(

@@ -12,14 +12,8 @@ export const FRAME_BOOTSTRAP_URL = 'https://www.youtube.com/__yt_client__/frame'
 const frameBootstrap = new URL(FRAME_BOOTSTRAP_URL)
 const frameBootstrapHtml = '<!doctype html><html><head><meta charset="utf-8"></head><body></body></html>'
 
-// Google's sign-in flow spans these hosts; they emit soft redirects (200 + Location).
 const AUTH_HOST = /(^|\.)(accounts|myaccount)\.google\.com$/
 
-// The egress strategy differs per transport: the engine uses the FKN broker proxy
-// (fknFetch); the sign-in frame uses libcurl over the webvpn relay (in-browser
-// Chrome-impersonated TLS Google's login backend accepts). The request-shaping
-// (bootstrap short-circuit, header/body marshalling, and the auth soft-redirect
-// promotion) is identical, so both share this builder.
 type EgressFetch = (url: string, options: TransportRequest, signal: AbortSignal | undefined) => Promise<TransportResponse>
 
 const createTransport = (ready: () => Promise<void>, egressFetch: EgressFetch): ProxyTransport => {
@@ -49,21 +43,12 @@ const createTransport = (ready: () => Promise<void>, egressFetch: EgressFetch): 
         }
       }
       const requestHeaders = Object.fromEntries(headers)
-      // A GET/HEAD must never carry a body. Chromium's service worker reports
-      // request.body as null, but Firefox never implemented the body getter, so
-      // it arrives as undefined - a strict null check let it through as an
-      // empty (truthy) ArrayBuffer, which the native fetch downstream (broker,
-      // extension) rejects: "Request constructor: HEAD or GET Request cannot
-      // have a body."
+      // loose null check: Firefox never implemented the service worker body getter, so it arrives as undefined
       const bytes = body == null || method === 'GET' || method === 'HEAD'
         ? undefined
         : await new Response(body).arrayBuffer()
       const response = await egressFetch(url.href, { method, headers: requestHeaders, body: bytes, redirect: 'manual' }, signal)
-      // Google's auth endpoints answer some navigation hops with 200 + a Location
-      // header (a "soft redirect" scramjet won't rewrite as a 200, so the browser
-      // downloads the opaque blob and the frame never advances). Promote those to a
-      // hard 302. Scoped to document navigations on auth hosts so nothing else is
-      // affected; the login flow's XHRs pass through untouched.
+      // Google's auth endpoints answer some navigation hops with a soft redirect (200 + Location) scramjet will not rewrite
       const isNavigation = (requestHeaders['sec-fetch-dest'] ?? requestHeaders['Sec-Fetch-Dest']) === 'document'
       if (isNavigation && AUTH_HOST.test(url.hostname) && response.status >= 200 && response.status < 300) {
         const location = response.headers.find(([key]) => key.toLowerCase() === 'location')?.[1]
@@ -92,17 +77,12 @@ const createTransport = (ready: () => Promise<void>, egressFetch: EgressFetch): 
   return transport
 }
 
-// A window-realm fetch (the FKN browser extension's CORS-free native fetch). It
-// returns null when the extension isn't available so the caller falls back.
 export type ExtEgressFetch = (
   url: string,
   options: TransportRequest,
   signal: AbortSignal | undefined,
 ) => Promise<TransportResponse | null>
 
-// The engine transport: metadata/token traffic. When the FKN extension is present
-// it goes over the extension's native fetch (direct, no proxy/tunnel round trip);
-// otherwise it falls back to the latency-tuned FKN proxy.
 export const createFknTransport = (
   remote: Promise<Pick<EgressApi, 'fknFetch'>>,
   extFetch?: ExtEgressFetch,
@@ -116,24 +96,7 @@ export const createFknTransport = (
     },
   )
 
-/* The sign-in transport: the WHOLE login flow (youtube.com + accounts.google.com)
-   over ONE connection, so Google sees a single consistent session, which its
-   login backend accepts where the FKN proxy is rejected.
-
-   It takes NO extension fetch, and that omission is the design rather than an
-   oversight. Two things rule the extension out here, either alone being enough:
-
-   - Every request this proxies asks for `redirect: 'manual'`, because the flow
-     has to read each 3xx and promote its Location itself. A browser fetch
-     answers that with an OPAQUE redirect: status 0, no headers, no body. There
-     is nothing to promote, and forwarding the status crashes the engine's
-     response rebuild (see `isOpaqueRedirect` in platform.ts).
-   - Falling back per hop would not rescue it. Hops split between the browser
-     and the tunnel are two different sessions reaching Google, which is exactly
-     what the one-connection design above exists to prevent.
-
-   b691605 shipped this path over the extension and broke sign-in outright; the
-   parameter is gone rather than defaulted so it cannot come back by accident. */
+// takes NO extension fetch by design: `redirect: 'manual'` there yields an opaque redirect, and split hops are two sessions to Google
 export const createWebvpnTransport = (
   remote: Promise<Pick<EgressApi, 'libcurlFetch' | 'cancelLibcurlFetch'>>,
 ): ProxyTransport => {

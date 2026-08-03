@@ -7,11 +7,6 @@ import { useDocumentTitle } from '../app'
 import { clearSessionCookies, startEngine } from '../scramjet/client'
 import { useSession } from '../session'
 
-/* The account surface, and the only place a login with several accounts can be
-   seen whole. The header menu offers the same switch, but as a shortcut: this
-   page is where the current identity, its channel and every alternative are
-   laid out together. */
-
 const style = css`
   max-width: 78rem;
   padding: 2.4rem 1.6rem;
@@ -163,9 +158,7 @@ export const AccountPage = () => {
 
   const busy = signingOut || switching !== undefined
 
-  /* Both actions below rebuild the engine by reloading, because identity is
-     baked into the Innertube clients at module load: youtubei.js has no runtime
-     switch, so recording the choice and reloading IS the switch. */
+  // youtubei.js has no runtime identity switch, so recording the choice and reloading IS the switch
   const onSwitch = async (index: number) => {
     if (busy) return
     setSwitching(index)
@@ -188,8 +181,7 @@ export const AccountPage = () => {
       await (await startEngine()).resetIdentity()
     } catch {}
     try {
-      // The cookie clear IS the sign-out, so only reload once the jar is gone:
-      // otherwise the user comes back signed in believing they signed out.
+      // The cookie clear IS the sign-out, so only reload once the jar is gone
       await clearSessionCookies()
     } catch {
       setSigningOut(false)
@@ -221,10 +213,6 @@ export const AccountPage = () => {
         </div>
       </div>
 
-      {/* Linked by HANDLE, not by id. The account carries no browse id at all:
-          its endpoint is a selectActiveIdentityEndpoint holding GAIA tokens, so
-          the handle is the only address it gives, and the channel route resolves
-          one. */}
       {handle
         ? (
           <div className='section'>

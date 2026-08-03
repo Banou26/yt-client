@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vite-plus/test'
 
 import { json3ToWebVtt, parseCaptionTracks, parseJson3, preferredTrack, timedTextUrl } from './captions'
 
-// Shape of a real player-response tracklist: youtubei.js parses `name` into a
-// Text node, so the label arrives as an object rather than a string.
+// youtubei.js parses `name` into a Text node, so the label arrives as an object
 const TRACKLIST = {
   caption_tracks: [
     {
@@ -60,7 +59,6 @@ describe('parseCaptionTracks', () => {
       caption_tracks: [
         { base_url: 'https://x/1', name: { text: 'English' }, language_code: 'en' },
         { base_url: 'https://x/2', name: { text: 'English auto' }, language_code: 'en', kind: 'asr' },
-        // Same synthesized id as the first, so it is unreachable and dropped.
         { base_url: 'https://x/3', name: { text: 'Duplicate' }, language_code: 'en' },
       ],
     })
@@ -136,7 +134,6 @@ describe('parseJson3', () => {
   })
 
   it('cuts an overrunning cue at the next one, so a rolling caption shows once', () => {
-    // Generated tracks publish this shape: each event outlives the next start.
     const cues = parseJson3(JSON.stringify({
       events: [
         { tStartMs: 0, dDurationMs: 5_000, segs: [{ utf8: 'first' }] },
@@ -164,7 +161,6 @@ describe('parseJson3', () => {
       ],
     }))
     expect(cues[0]!.endMs).toBe(2_000)
-    // The final cue has no next start to borrow, so it takes the orphan window.
     expect(cues[1]!.endMs).toBe(6_000)
   })
 
@@ -195,7 +191,6 @@ describe('json3ToWebVtt', () => {
     }))
     expect(vtt.startsWith('WEBVTT\n\n')).toBe(true)
     expect(vtt).toContain('00:00:00.000 --> 00:00:01.500\nfirst')
-    // One hour, one minute, one second, to prove the clock carries.
     expect(vtt).toContain('01:01:01.000 --> 01:01:02.000\nlater')
   })
 
@@ -204,7 +199,6 @@ describe('json3ToWebVtt', () => {
       events: [{ tStartMs: 0, dDurationMs: 1_000, segs: [{ utf8: '<i>a & b</i> -->' }] }],
     }))
     expect(vtt).toContain('&lt;i&gt;a &amp; b&lt;/i&gt; --&gt;')
-    // Exactly one cue separator, so the escaped arrow did not split the block.
     expect(vtt.match(/-->/g)).toHaveLength(1)
   })
 

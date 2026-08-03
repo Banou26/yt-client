@@ -7,8 +7,6 @@ import { Link } from 'wouter'
 
 import { formatViews } from './format'
 
-// A short opens the vertical pager, seeded on the one that was clicked, rather
-// than the 16:9 watch page.
 const shortsHrefFor = (id: string) => `/shorts/${encodeURIComponent(id)}`
 
 const style = css`
@@ -124,8 +122,6 @@ export const ShortsShelf = ({ shorts }: { shorts: readonly VideoCardData[] }) =>
   const [atStart, setAtStart] = useState(true)
   const [atEnd, setAtEnd] = useState(false)
 
-  // Which arrows to show is a measurement, not a count: the number of cards
-  // that fit depends on the viewport, and a rail that already fits needs none.
   useLayoutEffect(() => {
     const track = trackRef.current
     if (!track) return

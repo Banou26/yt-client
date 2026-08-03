@@ -2,9 +2,7 @@ export type SourceLikeStatus = 'LIKE' | 'DISLIKE' | 'INDIFFERENT'
 
 export type SourceNotificationLevel = 'ALL' | 'PERSONALIZED' | 'NONE'
 
-// Write-side vocabulary. `SourcePlaylist.privacy` stays a plain string because
-// it echoes whatever the playlist header carries, which is not guaranteed to
-// stay inside this set.
+// `SourcePlaylist.privacy` stays a plain string because it echoes whatever the playlist header carries
 export type SourcePlaylistPrivacy = 'PUBLIC' | 'UNLISTED' | 'PRIVATE'
 
 export type SourceChannel = {
@@ -27,8 +25,6 @@ export type SourceVideo = {
   description?: string
   descriptionSnippet?: string
   thumbnail?: string
-  // Every still upstream published, as a srcset. See the schema for why one URL
-  // cannot serve both the grid card and the watch sidebar.
   thumbnailSrcset?: string
   durationSeconds?: number
   viewCount?: string
@@ -38,20 +34,13 @@ export type SourceVideo = {
   isUpcoming?: boolean
   isMembersOnly?: boolean
   isShort?: boolean
-  // Upstream's own localized badge texts. `badges` is always present so the
-  // resolver never has to invent an empty list for a non-null GraphQL field.
   badges: string[]
   channel?: SourceChannel
 }
 
 export type SourceVideoPage = {
   items: SourceVideo[]
-  /* Playlist rows on the same page. A channel's Playlists, Releases and
-     Podcasts tabs are made ENTIRELY of these, so a page shaped as videos alone
-     described those three tabs as empty no matter what upstream sent.
-
-     Required rather than optional so the compiler names every page builder
-     rather than letting one quietly answer without them. */
+  // Required rather than optional so the compiler names every page builder
   playlists: SourcePlaylist[]
   cursor?: string
 }
@@ -61,20 +50,10 @@ export type SourceVideoSection = {
   items: SourceVideo[]
 }
 
-/* One slide of the Shorts pager.
-   Deliberately NOT a SourceVideo. The reel sequence answers with an id and a
-   still per entry and a full metadata block for only the first one, so a
-   SourceVideo here would need a fabricated title for every slide after it.
-   The pager fetches the real metadata per slide as each becomes active, which
-   is the same watch call the watch page already makes. */
+// Deliberately NOT a SourceVideo: a SourceVideo would need a fabricated title for every slide after the first
 export type SourceShort = {
   id: string
-  // The reel endpoint carries the true 1080x1920 portrait frame. A feed lockup
-  // carries the same frame letterboxed into 16:9, so this is the better still
-  // wherever it exists.
   poster?: string
-  // Present for the seed and the one entry the sequence prefetches; absent for
-  // the rest.
   title?: string
 }
 
@@ -94,9 +73,6 @@ export type SourceFeedChip = {
   selected: boolean
 }
 
-// The paged half of the home feed. Shorts are separate from `items` because
-// the grid renders them as their own carousel row, and a page beyond the first
-// can carry another shelf.
 export type SourceHomePage = {
   items: SourceVideo[]
   shorts: SourceVideo[]
@@ -127,11 +103,7 @@ export type SourceSearchFilters = {
   features?: SourceSearchFeature[]
 }
 
-// Discriminated at the source so the worker's __resolveType is a field switch
-// and never has to recognize a youtubei.js node. The tag sits ALONGSIDE the
-// entity's own fields rather than wrapping them: GraphQL resolves the members'
-// fields off this same object, and a wrapper would need an unwrapping resolver
-// for all three types. `kind` is not in the schema, so it is never selectable.
+// The tag sits ALONGSIDE the entity's own fields rather than wrapping them, and `kind` is not in the schema
 export type SourceSearchResult =
   | (SourceVideo & { kind: 'video' })
   | (SourceChannel & { kind: 'channel' })
@@ -203,29 +175,18 @@ export type SourceChannelPage = {
   appliedSort?: string
 }
 
-// The queue rail a playlist-context watch comes back with. It is NOT a
-// SourcePlaylist: `currentIndex` belongs to the video being watched, and the
-// panel carries none of the playlist's stats.
 export type SourceWatchPlaylist = {
   id: string
   title?: string
-  // The owner byline as text. A mix has no channel behind its byline.
   author?: string
   items: SourceVideo[]
-  // 0-based, and reported BY THE SERVER: an out-of-range requested index comes
-  // back corrected here rather than as an error.
   currentIndex?: number
   isInfinite?: boolean
 }
 
 export type SourceWatchMeta = {
   id: string
-  // Live playback is not wired yet, so this is what the watch page branches on
-  // to render an explanation instead of a player that cannot start.
   isLive?: boolean
-  // Concurrent viewers rather than total views. Upstream models a live stream
-  // as a view count that is a watching-now count, so the two share a field
-  // there and are separated here.
   concurrentViewers?: number
   title?: string
   viewCountText?: string
@@ -241,9 +202,6 @@ export type SourceWatchMeta = {
   playlist?: SourceWatchPlaylist
 }
 
-// One segment of a rich text body. Which target field is set is what names the
-// kind: a run whose endpoint is a kind this client does not model keeps its
-// text and simply renders unlinked, rather than being dropped.
 export type SourceTextRun = {
   text: string
   url?: string
@@ -252,12 +210,6 @@ export type SourceTextRun = {
   browseId?: string
 }
 
-/* One rendered line of live chat.
-
-   Emoji are the reason this carries runs rather than a string: a chat message is
-   mostly custom emoji, which arrive as separate nodes with image URLs and have
-   no textual form worth showing. `text` stays alongside for anything that only
-   needs something plain, the same split `SourceComment` already uses. */
 export type SourceLiveChatMessage = {
   id: string
   author?: SourceChannel
@@ -267,17 +219,11 @@ export type SourceLiveChatMessage = {
   isOwner?: boolean
   isModerator?: boolean
   isMember?: boolean
-  /* A paid message (a Super Chat) or a paid sticker. The amount is the whole
-     reason the line looks different, so its presence is what the renderer
-     branches on rather than a separate kind field. */
   purchaseAmountText?: string
-  // Upstream picks these per amount tier, so they are carried rather than
-  // recomputed: a locally invented scale would not match what viewers know.
   headerBackgroundColor?: string
   bodyBackgroundColor?: string
 }
 
-// A text run, or a custom emoji, which has an image and no meaningful text.
 export type SourceLiveChatRun = SourceTextRun & {
   emojiUrl?: string
   emojiLabel?: string
@@ -285,14 +231,9 @@ export type SourceLiveChatRun = SourceTextRun & {
 
 export type SourceLiveChatPage = {
   items: SourceLiveChatMessage[]
-  // Poll this to get whatever has arrived since. Absent once the chat ends.
   cursor?: string
-  /* Ids the server retracted, from a moderator deletion or an author ban. The
-     client holds the transcript, so a removal has to travel as its own
-     instruction rather than as an absence from the next page. */
+  // The client holds the transcript, so a removal has to travel as its own instruction
   removedIds?: string[]
-  // Live chat is off for this video, or it has no chat at all. Distinct from an
-  // empty page, which just means nothing was said since the last poll.
   disabled?: boolean
 }
 
@@ -310,13 +251,8 @@ export type SourceComment = {
   isDisliked?: boolean
   isCreator?: boolean
   isMember?: boolean
-  // A cursor into the same registry every other page uses, minted only for a
-  // comment that actually has replies. Opaque to the caller, like all cursors.
   repliesCursor?: string
-  // Opaque handle for this comment's like, dislike and reply endpoints, which
-  // are per-comment protobuf params that cannot be rebuilt from the id. Absent
-  // when the read carried no commands, which is what a signed-out page looks
-  // like: a control with no token is a control that should not be offered.
+  // Opaque handle for this comment's like, dislike and reply endpoints, which cannot be rebuilt from the id
   actionsToken?: string
 }
 
@@ -344,15 +280,11 @@ export type SourcePlaylist = {
   channel?: SourceChannel
 }
 
-// A playlist entry WRAPS its video instead of extending it: removing or
-// reordering an entry needs `setVideoId`, which identifies the slot rather than
-// the video, and the same video can legitimately sit in a playlist twice.
+// A playlist entry WRAPS its video instead of extending it: `setVideoId` identifies the slot, and the same video can sit in a playlist twice
 export type SourcePlaylistItem = {
   video: SourceVideo
   setVideoId?: string
-  // 1-BASED, unlike SourceWatchPlaylist.currentIndex and watch()'s
-  // playlistIndex. It is upstream's own row number, which is also what a
-  // `&index=` link addresses.
+  // 1-BASED, unlike SourceWatchPlaylist.currentIndex and watch()'s playlistIndex
   index?: number
 }
 
@@ -367,20 +299,13 @@ export type SourcePlaylistListPage = {
   cursor?: string
 }
 
-/* One account on the signed-in Google login.
-
-   `index` is the identity, because it is the only handle the transport accepts:
-   youtubei.js switches accounts by `account_index`, which becomes
-   X-Goog-Authuser, and there is no runtime switch method that takes anything
-   else. It is the account's position in the list the account endpoint returns,
-   which is the order authuser itself is numbered in. */
+// `index` is the identity: youtubei.js switches accounts by `account_index`, which becomes X-Goog-Authuser
 export type SourceAccount = {
   index: number
   name?: string
   avatar?: string
   handle?: string
   selected?: boolean
-  // A brand account with no channel cannot be browsed as one.
   hasChannel?: boolean
 }
 
@@ -389,112 +314,59 @@ export type SourceSession = {
   name?: string
   avatar?: string
   handle?: string
-  /* Every account on this login, including the selected one. Comes off the same
-     response the header avatar does, so listing them costs no extra round trip.
-     Empty when signed out, and a single entry is the ordinary case. */
   accounts: SourceAccount[]
 }
 
 export type Source = {
   id: string
   home(chip?: string, cursor?: string): Promise<SourceHomeFeed>
-  /* The Shorts pager. `seed` names the short to open on and the sequence
-     follows from it, which is how a deep link keeps its place.
-
-     There is no Shorts DESTINATION feed to fall back on: `FEshorts` parses to
-     an empty response (verified against the live endpoint), and youtubei.js
-     offers only the per-video reel sequence. With no seed the first short of
-     the home shelf becomes one, so an anonymous session, whose home is empty,
-     legitimately has no Shorts feed to show. */
+  // There is no Shorts DESTINATION feed to fall back on: `FEshorts` parses to an empty response
   shorts(seed?: string, cursor?: string): Promise<SourceShortsPage>
   subscriptions(cursor?: string): Promise<SourceVideoPage>
   history(cursor?: string): Promise<SourceSectionedVideoPage>
   subscribedChannels(): Promise<SourceChannel[]>
-  // A cursor is bound to the query AND the filters that minted it: changing a
-  // filter has to start a new feed, not page the previous one's results.
   search(query: string, filters?: SourceSearchFilters, cursor?: string): Promise<SourceSearchPage>
-  // Not an InnerTube call. It reads suggestqueries-clients6.youtube.com through
-  // the rewritten fetch, so every keystroke that reaches it is a tunneled round
-  // trip and the caller is expected to debounce.
+  // Not an InnerTube call: every keystroke that reaches it is a tunneled round trip, so the caller is expected to debounce
   searchSuggestions(query: string, previousQuery?: string): Promise<string[]>
   video(id: string): Promise<SourceVideo | undefined>
-  // `tab` omitted means the channel's own landing tab. `query` applies only to
-  // the SEARCH tab. `sort` is one of the page's own sortOptions labels.
   channel(id: string, tab?: SourceChannelTab, sort?: string, query?: string, cursor?: string): Promise<SourceChannelPage>
-  // A second browse on top of channel(): only the About tab needs it, so it is
-  // its own call rather than a field every other tab would pay for.
   channelAbout(id: string): Promise<SourceChannelAbout | undefined>
   communityPosts(channelId: string, cursor?: string): Promise<SourcePostPage>
-  // Passing a playlist puts the video in a queue, and the same call then also
-  // brings back the panel. `playlistIndex` is 0-based; the server corrects an
-  // out-of-range one, so the honoured position is the one on the result.
+  // `playlistIndex` is 0-based; the server corrects an out-of-range one, so the honoured position is the one on the result
   watch(id: string, playlistId?: string, playlistIndex?: number): Promise<SourceWatchMeta | undefined>
-  // A cursor is bound to the sort that minted it: switching order has to start
-  // a new feed rather than page the previous ordering's results.
   comments(videoId: string, sort?: SourceCommentSort, cursor?: string): Promise<SourceCommentPage>
-  // Replies page through the same cursor mechanism as everything else: the
-  // cursor comes off SourceComment.repliesCursor and its own page carries the
-  // next one. There is no videoId argument because the cursor already names
-  // exactly which thread it belongs to.
   commentReplies(cursor: string): Promise<SourceCommentPage>
-  /* Live chat, polled rather than streamed.
-
-     Upstream is an EventEmitter, and the whole stack from here up is one
-     response per request: the frame bridge resolves once, every SourceApi
-     method returns a single Promise, and urql runs cacheExchange plus
-     fetchExchange with no subscription transport. So the emitter is kept
-     running inside the source and each call drains what it has buffered since
-     the previous cursor. Opening without one starts the chat and returns its
-     first batch. */
+  // Polled rather than streamed: the emitter is kept running and each call drains what it buffered since the previous cursor
   liveChat(videoId: string, cursor?: string): Promise<SourceLiveChatPage>
-  // More of the watch sidebar. The cursor already names its video.
   relatedVideos(cursor: string): Promise<SourceVideoPage>
-  // The library aggregation is signed-in only; a single playlist is not, so a
-  // public one opens anonymously.
   playlists(cursor?: string): Promise<SourcePlaylistListPage>
   playlist(id: string, cursor?: string): Promise<SourcePlaylistPage>
   notifications(cursor?: string): Promise<SourceNotificationPage>
   unseenNotificationCount(): Promise<number>
   session(): Promise<SourceSession>
-  // Writes resolve to the affected entity so the normalized cache can merge the
-  // new state. Only identity and the changed fields are meaningful; the rest is
-  // filled with placeholders because the write does not refetch the entity.
+  // Writes resolve to the affected entity: only identity and the changed fields are meaningful, the rest is placeholders
   rateVideo(id: string, status: SourceLikeStatus): Promise<SourceWatchMeta>
   removeFromHistory(videoId: string): Promise<string>
-  // Resolves to a Boolean rather than the created comment: the response carries
-  // no parseable comment, and inventing an id would poison the normalized cache.
-  // Resolves to the id so the cache can mark just that row read.
   markNotificationRead(id: string): Promise<string>
   postComment(videoId: string, text: string): Promise<boolean>
-  /* Sends to the chat this video already has running. It reuses that session
-     rather than opening its own, so a send before the panel has loaded is a
-     failure rather than a silent no-op. */
   sendLiveChatMessage(videoId: string, text: string): Promise<boolean>
   replyToComment(actionsToken: string, text: string): Promise<boolean>
   rateComment(actionsToken: string, status: SourceLikeStatus): Promise<SourceComment>
   setSubscribed(channelId: string, subscribed: boolean): Promise<SourceChannel>
   setNotificationLevel(channelId: string, level: SourceNotificationLevel): Promise<SourceChannel>
   addToPlaylist(playlistId: string, videoIds: string[]): Promise<SourcePlaylist>
-  // Entries are addressed by their setVideoId, which names the SLOT. Passing
-  // plain video ids would be ambiguous for a playlist holding one video twice,
-  // and upstream's own helper pays a full browse (plus a continuation per extra
-  // page) just to translate them.
   removeFromPlaylist(playlistId: string, setVideoIds: string[]): Promise<SourcePlaylist>
   createPlaylist(title: string, videoIds?: string[], privacy?: SourcePlaylistPrivacy, description?: string): Promise<SourcePlaylist>
   deletePlaylist(id: string): Promise<string>
   renamePlaylist(id: string, title: string): Promise<SourcePlaylist>
   setPlaylistDescription(id: string, description: string): Promise<SourcePlaylist>
   setPlaylistPrivacy(id: string, privacy: SourcePlaylistPrivacy): Promise<SourcePlaylist>
-  // `afterSetVideoId` is the entry the moved one lands after; omitting it asks
-  // for the first position.
   movePlaylistItem(playlistId: string, setVideoId: string, afterSetVideoId?: string): Promise<SourcePlaylist>
 }
 
 export type SourceApi = Omit<Source, 'id'>
 
-// The realm boundaries (app -> frame RPC, GraphQL worker -> source) forward
-// calls by name, so they need the method list at runtime. Adding a method to
-// `Source` without listing it here fails `SourceMethodsAreExhaustive` below.
+// The realm boundaries (app -> frame RPC, GraphQL worker -> source) forward calls by name, so they need the method list at runtime
 export const SOURCE_METHODS = [
   'home',
   'shorts',
@@ -538,29 +410,20 @@ export const SOURCE_METHODS = [
 
 export type SourceMethod = (typeof SOURCE_METHODS)[number]
 
-// Shared with the frame protocol, which guards its own method list the same way.
 export type Exhaustive<Unlisted extends never> = Unlisted
 
-// Resolves to `never` while the list is complete; otherwise the unlisted method
-// name breaks the constraint and the compiler reports it by name.
 export type SourceMethodsAreExhaustive = Exhaustive<Exclude<keyof SourceApi, SourceMethod>>
 
-// Continuation cursors are keys into an in-memory Map inside the frame, so they
-// cannot survive an engine restart. The index marks which argument carries one:
-// a call that passes it must fail rather than silently replay from the start.
+// The index marks which argument carries a cursor: a call that passes one must fail rather than silently replay from the start
 export const SOURCE_CURSOR_ARGUMENT = {
   home: 1,
-  // Sits behind `seed`, the same way home's sits behind `chip`.
   shorts: 1,
   subscriptions: 0,
   history: 0,
-  // Both moved when their argument lists grew in front of the cursor: search
-  // gained `filters` and channel gained `tab`, `sort` and `query`.
   search: 2,
   channel: 4,
   comments: 2,
   commentReplies: 0,
-  // Behind `videoId`, which names the chat the cursor drains.
   liveChat: 1,
   relatedVideos: 0,
   communityPosts: 1,
@@ -569,17 +432,7 @@ export const SOURCE_CURSOR_ARGUMENT = {
   playlist: 1,
 } as const satisfies Partial<Record<SourceMethod, number>>
 
-// When the engine dies mid-call, src/sources/runtime.ts rebuilds it and decides
-// whether to replay the call. Only an idempotent read is safe to replay:
-//
-//   always        pure read, replaying it just costs a round trip
-//   unless-cursor pure read, but a cursored page cannot be replayed because the
-//                 cursor belonged to the frame that died
-//   never         a write, replaying it would like or subscribe twice
-//
-// `satisfies Record<SourceMethod, ...>` makes the classification mandatory, so a
-// method added later cannot quietly inherit a permissive default. Every write
-// method added for mutations MUST be 'never'.
+// src/sources/runtime.ts replays a failed call unless the policy forbids it: every write method MUST be 'never'
 export const SOURCE_REPLAY = {
   home: 'unless-cursor',
   shorts: 'unless-cursor',
@@ -595,10 +448,6 @@ export const SOURCE_REPLAY = {
   watch: 'always',
   comments: 'unless-cursor',
   commentReplies: 'unless-cursor',
-  /* A cursorless open is safe to replay: it just restarts the chat on the
-     rebuilt engine. A cursored poll is not, and it is worse than the usual
-     case: the cursor named a buffer inside the frame that died, so replaying
-     it would silently drop every message that buffer held. */
   liveChat: 'unless-cursor',
   relatedVideos: 'unless-cursor',
   playlists: 'unless-cursor',
@@ -615,8 +464,6 @@ export const SOURCE_REPLAY = {
   rateComment: 'never',
   setSubscribed: 'never',
   setNotificationLevel: 'never',
-  // Every playlist edit is a write. Replaying one after an engine restart adds
-  // the same video twice, or creates a second playlist with the same title.
   addToPlaylist: 'never',
   removeFromPlaylist: 'never',
   createPlaylist: 'never',

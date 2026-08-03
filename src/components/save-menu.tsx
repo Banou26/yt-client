@@ -15,14 +15,7 @@ import { Menu, MenuItem, MenuSection, MenuSeparator } from './ui/menu'
 import { showToast } from './ui/toast'
 import { useInfiniteFeed } from './use-infinite-feed'
 
-// Named for this panel rather than `Playlists`: a library route will want its
-// own selection off the same field, and two operations cannot share a name.
-//
-// No `privacy`: the library feed parses to GridPlaylist and playlist lockups,
-// neither of which carries a visibility, so it would arrive as null and, since
-// Playlist is keyed by id in graphcache, overwrite the value a /playlist read
-// had already stored on that entity. A row created in this panel still shows
-// its icon, because a create is the one write that answers with a real privacy.
+// no `privacy`: the library feed carries no visibility, and Playlist is keyed by id in graphcache, so it would overwrite what a /playlist read stored
 const SAVE_PLAYLISTS_QUERY = gql(`
   query SavePlaylists($cursor: String) {
     playlists(cursor: $cursor) {
@@ -36,13 +29,6 @@ const SAVE_PLAYLISTS_QUERY = gql(`
   }
 `)
 
-/* Identity alone, the same rule RemoveFromPlaylist follows. A save changes the
-   count, but the write does not refetch the playlist and the count is a
-   server-rendered localized string, so the source can only echo whatever its
-   last read of that playlist held: selecting it here writes the PRE-write count
-   back over the cached one, and writes an explicit null over it whenever the
-   source has never read that playlist (a fresh engine, or Watch later, which no
-   library page lists). See the Mutation comment in src/worker/schema.gql. */
 const ADD_TO_PLAYLIST = gql(`
   mutation AddToPlaylist($playlistId: ID!, $videoIds: [ID!]!) {
     addToPlaylist(playlistId: $playlistId, videoIds: $videoIds) {
@@ -51,11 +37,6 @@ const ADD_TO_PLAYLIST = gql(`
   }
 `)
 
-// A create returns a whole new entity, so more of it is knowable than on a
-// write that only edits: the row this paints into the list needs the same
-// fields the list query selects. `privacy` is passed here rather than left to a
-// later edit because creation is the one endpoint that reliably applies it, per
-// the setPlaylistPrivacy comment in src/worker/schema.gql.
 const CREATE_PLAYLIST = gql(`
   mutation CreatePlaylist($title: String!, $videoIds: [ID!], $privacy: PlaylistPrivacy) {
     createPlaylist(title: $title, videoIds: $videoIds, privacy: $privacy) {
@@ -69,8 +50,6 @@ const CREATE_PLAYLIST = gql(`
 
 type PlaylistsPage = SavePlaylistsQuery['playlists']
 
-// The shape a row needs, so a playlist created in this panel and a playlist
-// read from the library can be rendered by the same code path.
 type SaveRow = { id: string, title: string, videoCountText?: string | null, privacy?: string | null }
 
 const triggerStyle = css`
@@ -93,9 +72,6 @@ const triggerStyle = css`
   }
 `
 
-/* Widens the panel past Popup's 20rem floor from the inside: Popup sets a
-   min-width and takes no style of its own, and role=presentation keeps this
-   wrapper out of the accessibility tree so the rows stay owned by the menu. */
 const panelStyle = css`
   min-width: 28rem;
 `
@@ -189,16 +165,7 @@ const formStyle = css`
   }
 `
 
-/**
- * Save to playlist.
- *
- * Membership is write-only here: nothing upstream reports whether a video is
- * already in a given playlist, so a row starts unchecked and only ticks once
- * this panel has put the video there. Unticking is out of reach for a different
- * reason: removeFromPlaylist addresses entries by setVideoId, the slot id, and
- * the only place that is readable is a loaded playlist page. So a saved row
- * goes inert rather than pretending it can undo.
- */
+// membership is write-only: nothing upstream reports whether a video is already in a playlist, so a saved row goes inert rather than pretending it can undo
 export const SaveMenu = (
   { videoId, align = 'end', class: className }: {
     videoId: string
@@ -208,9 +175,6 @@ export const SaveMenu = (
 ) => {
   const [, navigate] = useLocation()
   const { ready, signedIn } = useSession()
-  // Sticky: the library costs a round trip through the tunnel, so it is not
-  // asked for until the panel is opened once, and it is kept alive afterwards
-  // so reopening paints from the cache.
   const [opened, setOpened] = useState(false)
   const [loaded, setLoaded] = useState<PlaylistsPage[]>([])
   const [saved, setSaved] = useState<string[]>([])
@@ -218,24 +182,16 @@ export const SaveMenu = (
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState<SaveRow[]>([])
   const [name, setName] = useState('')
-  // Matches what upstream picks for a playlist created from this panel, and is
-  // the safe default for a list the user has not decided to publish.
   const [privacy, setPrivacy] = useState<PlaylistPrivacy>('PRIVATE')
 
   const [{ data, error, fetching }] = useQuery({
     query: SAVE_PLAYLISTS_QUERY,
     variables: { cursor: loaded[loaded.length - 1]?.cursor },
-    // The library browse is refused in the source before the network call when
-    // signed out, and errors are unmasked, so it is gated rather than fired.
     pause: !opened || !ready || !signedIn,
   })
-  // `pending` rather than the mutation's own fetching flag: the panel has to
-  // know WHICH row is in flight, so only that one goes inert.
   const [, addToPlaylist] = useMutation(ADD_TO_PLAYLIST)
   const [createState, createPlaylist] = useMutation(CREATE_PLAYLIST)
 
-  // urql keeps the previous result while the next page is in flight, so the
-  // live page can repeat one already consumed.
   const page = data?.playlists
   const { items, cursor } = useInfiniteFeed({
     pages: page ? [...loaded, page] : loaded,
@@ -247,11 +203,7 @@ export const SaveMenu = (
     setLoaded(loaded[loaded.length - 1] === page ? loaded : [...loaded, page])
   }
 
-  /* A playlist created here is shown from the mutation result rather than by
-     asking the library again: the entity lands in the cache but nothing tells
-     the cache that the list grew, and a refetch would fetch whichever page the
-     cursor is on, which is not the first one a new playlist appears on. Both
-     sources are deduped by id in case a later page does bring it back. */
+  // a created playlist is shown from the mutation result: a refetch would fetch whichever page the cursor is on, not the first one it appears on
   const rows: SaveRow[] = [
     ...created,
     ...items.filter(playlist =>
@@ -303,8 +255,6 @@ export const SaveMenu = (
     </>
   )
 
-  // Only once the probe has answered: branching while it is still out would
-  // show "sign in" to a signed-in user for a whole round trip.
   if (ready && !signedIn) {
     return (
       <button
@@ -329,9 +279,7 @@ export const SaveMenu = (
       >
         <div css={panelStyle} role='presentation'>
           <MenuSection title='Save video to…'>
-            {/* A row of its own because the library aggregation does not
-                reliably list Watch later, and it is filtered back out of the
-                fetched rows below so it can never appear twice. */}
+            {/* the library aggregation does not reliably list Watch later, and it is filtered back out of the fetched rows below */}
             <MenuItem
               label='Watch later'
               checked={saved.includes(WATCH_LATER_ID)}
@@ -349,9 +297,7 @@ export const SaveMenu = (
                 onSelect={() => onSave(playlist.id, playlist.title)}
               />
             ))}
-            {/* Placeholder rows are menu items rather than bare text so the
-                panel is never empty: focus lands on a row when it opens, and an
-                empty panel would leave focus behind on the trigger. */}
+            {/* placeholder rows are menu items rather than bare text so focus has somewhere to land when the panel opens */}
             {fetching && rows.length === 0
               ? <MenuItem label='Loading…' disabled />
               : undefined}
@@ -381,10 +327,7 @@ export const SaveMenu = (
           />
         </div>
       </Menu>
-      {/* Rendered outside the panel, and reached by a row that closes it first,
-          so the dialog's own focus trap owns the page alone. Closing the menu
-          puts focus back on the trigger before the dialog mounts, which is what
-          the dialog then restores to when it unmounts. */}
+      {/* rendered outside the panel so the dialog's own focus trap owns the page alone */}
       {creating
         ? (
           <Dialog title='New playlist' onClose={() => setCreating(false)}>
@@ -400,9 +343,7 @@ export const SaveMenu = (
                   onInput={onName}
                 />
               </label>
-              {/* Offered here and nowhere else on purpose: creation is the one
-                  endpoint that reliably applies privacy, so a wrong choice made
-                  now cannot be corrected from this panel later. */}
+              {/* creation is the one endpoint that reliably applies privacy, so a wrong choice cannot be corrected from this panel later */}
               <label className='field'>
                 <span className='field-label'>Visibility</span>
                 <select className='privacy' value={privacy} onChange={onPrivacy}>

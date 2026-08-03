@@ -199,9 +199,7 @@ export const AccountMenu = (
     if (signingOut) return
     setSigningOut(true)
     setSignOutError(false)
-    // identity residue self-heals via token recovery — but the cookie clear IS
-    // the sign-out: only reload once the jar is actually gone, else the user
-    // comes back signed in believing they signed out.
+    // the cookie clear IS the sign-out: only reload once the jar is actually gone
     try {
       await (await startEngine()).resetIdentity()
     } catch {}
@@ -212,16 +210,10 @@ export const AccountMenu = (
       setSignOutError(true)
       return
     }
-    // Full reload rebuilds the engine frame on the now-anonymous jar.
     location.assign('/')
   }
 
-  /* Switching is an engine-lifecycle operation, not a mutation.
-
-     The Innertube clients bake the account into every request at module load
-     and youtubei.js has no runtime switch, so the frame only RECORDS the
-     choice and the reload below is what actually applies it. Same shape as
-     signing out, and for the same reason. */
+  // youtubei.js has no runtime switch, so the frame only RECORDS the choice and the reload applies it
   const onSwitch = async (index: number) => {
     if (switching !== undefined || signingOut) return
     setSwitching(index)
@@ -235,7 +227,6 @@ export const AccountMenu = (
   }
 
   const busy = signingOut || switching !== undefined
-  // One account is not a choice, so it is not offered as one.
   const switchable = accounts.filter((account) => !account.selected)
 
   return (
@@ -262,8 +253,7 @@ export const AccountMenu = (
               </div>
             </div>
             <div className='divider' role='presentation' />
-            {/* By handle: the account endpoint carries GAIA tokens, not a
-                browse id, and the channel route resolves a handle. */}
+            {/* By handle: the account endpoint carries GAIA tokens, not a browse id */}
             {handle
               ? (
                 <Link className='row' role='menuitem' href={`/channel/${handle.startsWith('@') ? handle : `@${handle}`}`} onClick={onClose}>

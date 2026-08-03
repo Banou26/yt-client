@@ -12,8 +12,7 @@ expose(sourceApi, {
   transport: worker,
 })
 
-// No top-level await: the handshake must not delay first render or the engine
-// frame boot, so each request awaits it instead.
+// No top-level await: the handshake must not delay first render or the engine frame boot
 const workerApi = expose<WorkerApi>({}, {
   key: 'graphql',
   transport: worker,

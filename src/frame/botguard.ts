@@ -4,13 +4,7 @@ import { BG, buildURL, GOOG_API_KEY } from 'bgutils-js'
 
 import { egressFetch } from './egress'
 
-// BotGuard attestation (att/get, the interpreter script, GenerateIT) runs against
-// Google's anti-bot backends, which reject the server-side FKN proxy fingerprint
-// the scramjet-trapped global fetch routes through (the request aborts) - the same
-// wall the sign-in flow hit. Route these over the libcurl/webvpn egress instead:
-// in-browser Chrome-impersonated TLS that Google accepts, with no CORS. Without a
-// live attestation the mint falls back to a cold-start token, which only earns the
-// ~60s StreamProtectionStatus=2 preview before media is withheld.
+// attestation MUST use the egress path, not the scramjet-trapped global fetch, whose fingerprint is refused
 const attestFetch = (url: string, init?: { method?: string, headers?: Record<string, string>, body?: string }) =>
   egressFetch(url, {
     method: init?.method ?? 'GET',
@@ -84,16 +78,6 @@ const readSapisid = () => {
   }
 }
 
-/* The jar itself, for the challenge request.
-
-   SAPISIDHASH is not a bearer token: it is a hash OF the SAPISID cookie, and the
-   server authenticates it by recomputing the hash from the cookie it received.
-   Sent without that cookie there is nothing to recompute against, so the
-   Authorization header is unverifiable and att/get is answered as if anonymous.
-   This request was sending exactly that, on every transport, which the app's own
-   Innertube clients already get right (see `authCookie` in innertube.ts, whose
-   comment records the inverse failure: identity cookies without a matching
-   Authorization header get 401s). The pairing has to go both ways. */
 const readAuthCookie = () => {
   try {
     return document.cookie.includes('SAPISID=') ? document.cookie : undefined
@@ -102,8 +86,7 @@ const readAuthCookie = () => {
   }
 }
 
-// Signed-in header parity for the challenge fetch (the real client sends it):
-// SAPISIDHASH is the hex sha1 of '<ts> <SAPISID> <origin>' as '<ts>_<hash>'.
+// SAPISIDHASH is the hex sha1 of '<ts> <SAPISID> <origin>' as '<ts>_<hash>'
 const sidAuthorization = async () => {
   const sapisid = readSapisid()
   if (!sapisid) return undefined
@@ -116,12 +99,7 @@ const sidAuthorization = async () => {
   return `SAPISIDHASH ${timestamp}_${hash}`
 }
 
-/* This egress path bypasses Scramjet entirely (it is a direct port to the host,
-   not the rewritten global fetch), so NOTHING adds these for us. The one frame
-   request that has always worked, the SABR media fetch in sabr.ts, sets them by
-   hand for exactly this reason. att/get did not, and Innertube answers a
-   cross-origin-looking POST with no Origin at all with a 403, which is what kept
-   the minter session from ever being built. */
+// the egress path bypasses Scramjet, so nothing adds these, and Innertube answers a POST with no Origin with a 403
 const YOUTUBE_ORIGIN_HEADERS = {
   origin: 'https://www.youtube.com',
   referer: 'https://www.youtube.com/',
@@ -138,8 +116,7 @@ const fetchChallenge = async (context: BotguardContext) => {
       'x-goog-visitor-id': context.client.visitorData,
       'x-youtube-client-name': '1',
       'x-youtube-client-version': context.client.clientVersion,
-      // Only ever together: a hash with no cookie cannot be verified, and a
-      // cookie with no hash is answered with a 401.
+      // only ever together: a hash with no cookie cannot be verified, and a cookie with no hash is answered with a 401
       ...(authorization && authCookie && { authorization, cookie: authCookie }),
     },
     body: JSON.stringify({ engagementType: 'ENGAGEMENT_TYPE_UNBOUND', context }),
@@ -163,11 +140,6 @@ const fetchChallenge = async (context: BotguardContext) => {
   return { ...challenge, interpreter }
 }
 
-/* Names the failing step. Four things can break here and they need completely
-   different fixes: the challenge fetch (auth or transport), evaluating the
-   interpreter (it is obfuscated JS running in a REWRITTEN realm, so the
-   rewriter is a real suspect), taking the snapshot, and GenerateIT. Without a
-   label they all surface as the same silent cold-start fallback. */
 const stage = async <T>(name: string, run: () => Promise<T>): Promise<T> => {
   try {
     return await run()
@@ -183,9 +155,6 @@ const createSession = async (context: BotguardContext): Promise<MinterSession> =
     const element = document.createElement('script')
     element.textContent = challenge.interpreter
     document.head.appendChild(element)
-    // The interpreter defines its global synchronously on evaluation, so a
-    // missing global here means the script did not run as written - which is
-    // what a rewriter that could not parse it would look like.
     if (!(challenge.globalName in globalThis)) {
       element.remove()
       throw new Error(`the interpreter did not define ${challenge.globalName} (script evaluated but its global is absent)`)
@@ -205,7 +174,6 @@ const createSession = async (context: BotguardContext): Promise<MinterSession> =
     const response = await attestFetch(buildURL('GenerateIT', true), {
       method: 'POST',
       headers: {
-        // Same reasoning as att/get: the real client sends these to jnn-pa too.
         ...YOUTUBE_ORIGIN_HEADERS,
         'content-type': 'application/json+protobuf',
         'x-goog-api-key': GOOG_API_KEY,
@@ -231,19 +199,6 @@ const createSession = async (context: BotguardContext): Promise<MinterSession> =
   }
 }
 
-/* Why a botguard failure has to be LOUD.
-
-   Every caller below starts the session with `void getSession(...).catch(() => {})`
-   and carries on with a cold-start token, because a slow chain must not block
-   playback. The cost of that shape is that a PERMANENTLY broken chain looks
-   exactly like a slow one: playback starts, StreamProtectionStatus sits at 2,
-   media is withheld at the ~60s preview, and nothing anywhere says why. The
-   `yt-client:po-tokens` store staying empty is the only outward sign, and you
-   have to know to look for it.
-
-   So report the reason once per distinct message. Deduped rather than logged
-   every mint, because a dead chain is retried on every request and would
-   otherwise bury the rest of the console. */
 const reported = new Set<string>()
 
 const reportSessionFailure = (error: unknown) => {
@@ -274,8 +229,7 @@ const getSession = (context: BotguardContext) => {
   return pending
 }
 
-// Persisted tokens live as long as their integrity token, capped as insurance
-// against a server-side invalidation we cannot observe.
+// cap on a persisted token's own ttl, as insurance against a server-side invalidation we cannot observe
 const PERSISTED_TOKEN_MAX_MS = 6 * 3_600_000
 
 const mintSessionToken = async (target: MinterSession, identifier: string) => {
@@ -287,9 +241,6 @@ const mintSessionToken = async (target: MinterSession, identifier: string) => {
 
 const REFRESH_MARGIN_MS = 30 * 60_000
 
-// Builds the minter session in the background unless a persisted token makes
-// it unnecessary: the botguard chain is three serial round trips that would
-// otherwise compete with startup traffic on the egress tunnel.
 export const warmPoTokenSession = (context: BotguardContext, identifier: string) => {
   if (session && performance.now() < session.expiresAt) return
   const stored = readStoredTokens()[identifier]
@@ -297,11 +248,6 @@ export const warmPoTokenSession = (context: BotguardContext, identifier: string)
   void getSession(context).catch(() => {})
 }
 
-/* How long the first mint may wait for a real minter session.
-
-   Bounded rather than unlimited: if the botguard chain is genuinely dead, a
-   cold-start token still buys the preview window, which is a better outcome
-   than a watch page that never starts at all. */
 const SESSION_WAIT_MS = 10_000
 
 export const mintPoToken = async (identifier: string, context: BotguardContext) => {
@@ -311,21 +257,7 @@ export const mintPoToken = async (identifier: string, context: BotguardContext) 
     warmPoTokenSession(context, identifier)
     return stored
   }
-  /* WAIT for the session instead of starting on a cold-start token.
-
-     The old comment here claimed later requests would "mint through the session
-     once it lands", and that is true of the mint but not of the STREAM: SABR
-     fixes a session's attestation state from its first request, so a stream
-     opened on a cold-start token stays StreamProtectionStatus 2 for its whole
-     life and has media withheld at the ~60s preview even after a real token is
-     available. `recoverMint` cannot rescue it either, since it rebuilds the
-     botguard session and not the playback session.
-
-     `preparePoToken` was written to be awaited before playback for exactly this
-     reason and was never called from anywhere, so the wait has to happen here,
-     at the one point every SABR request funnels through. Everything ahead of it
-     (player fetch, manifest build) still overlaps with the warm-up, so the cost
-     is only whatever the chain has left to finish. */
+  // MUST wait rather than start cold: SABR fixes attestation state from a stream's first request, for its whole life
   const live = await Promise.race([
     getSession(context).catch(() => undefined),
     new Promise<undefined>((resolve) => { setTimeout(() => resolve(undefined), SESSION_WAIT_MS) }),
@@ -334,10 +266,6 @@ export const mintPoToken = async (identifier: string, context: BotguardContext) 
   return BG.PoToken.generateColdStartToken(identifier)
 }
 
-// Called after the server rejected a token: makes sure the next mint comes from
-// a live minter session instead of a cold-start or persisted token. Failures
-// propagate so a dead botguard endpoint surfaces its own error instead of an
-// opaque 403 retry loop.
 export const recoverPoTokenSession = async (context: BotguardContext) => {
   clearStoredTokens()
   if (pending) {

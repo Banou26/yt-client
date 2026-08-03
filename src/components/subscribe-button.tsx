@@ -11,9 +11,7 @@ import { readable } from './format'
 import { MenuItem, Popup, useDismiss } from './ui/popup'
 import { showToast } from './ui/toast'
 
-// Only identity and the fields the write changes are selected: the mutation
-// does not refetch the channel, so anything else would come back null. See the
-// Mutation comment in src/worker/schema.gql.
+// The mutation does not refetch the channel, so anything else would come back null
 const SET_SUBSCRIBED = gql(`
   mutation SetSubscribed($channelId: ID!, $subscribed: Boolean!) {
     setSubscribed(channelId: $channelId, subscribed: $subscribed) {
@@ -105,9 +103,7 @@ export const SubscribeButton = (
 
   const onToggle = () => {
     if (!channelId) return
-    // A signed-out write fails in the source with a message the user cannot act
-    // on, so the click becomes the sign-in prompt instead. Signed-out reads
-    // leave isSubscribed absent, which is what distinguishes them.
+    // Signed-out reads leave isSubscribed absent, which is what distinguishes them
     if (subscribed === undefined || subscribed === null) {
       navigate('/signin')
       return

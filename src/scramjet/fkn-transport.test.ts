@@ -11,7 +11,6 @@ describe('webvpn transport', () => {
     const remote = Promise.resolve({
       libcurlFetch: async (requestId: string, url: string, options: TransportRequest) => {
         libcurl = { requestId, url, options }
-        // simulate Google's soft redirect: 200 + Location on a navigation
         return {
           status: 200,
           statusText: 'OK',
@@ -37,7 +36,6 @@ describe('webvpn transport', () => {
     expect(libcurl?.url).toBe('https://accounts.google.com/ServiceLogin?service=youtube')
     expect(libcurl?.requestId).toMatch(/^signin:\d+$/)
     expect(libcurl?.options).toMatchObject({ method: 'GET', redirect: 'manual' })
-    // the 200 + Location navigation was promoted to a hard 302
     expect(result.status).toBe(302)
     expect(result.headers).toEqual([['location', 'https://accounts.google.com/v3/signin/identifier']])
 
@@ -108,12 +106,8 @@ describe('FKN transport', () => {
 })
 
 describe('webvpn transport keeps the whole login on one connection', () => {
-  /* It used to take an extension fetch and prefer it. That shipped in b691605
-     and broke sign-in outright: every request here asks for
-     `redirect: 'manual'` so the flow can promote each Location itself, and a
-     browser fetch answers that with an opaque redirect carrying no status, no
-     headers and no body. Falling back per hop would not have rescued it either,
-     since hops split across two transports are two sessions to Google. */
+  /* b691605 broke sign-in by preferring an extension fetch: it answers `redirect: 'manual'` with an
+     opaque redirect, and hops split across two transports are two sessions to Google. */
   it('always uses libcurl, with no way to route a hop elsewhere', async () => {
     const calls: string[] = []
     const remote = Promise.resolve({
@@ -128,8 +122,6 @@ describe('webvpn transport keeps the whole login on one connection', () => {
     await transport.request(new URL('https://accounts.google.com/ServiceLogin'), 'GET', null, [], undefined)
     await transport.request(new URL('https://accounts.google.com/signin/challenge'), 'GET', null, [], undefined)
 
-    // Both hops on the same transport, and the ids increment on one counter,
-    // which is what "one connection" looks like from here.
     expect(calls).toEqual([
       'libcurl:signin:1:https://accounts.google.com/ServiceLogin',
       'libcurl:signin:2:https://accounts.google.com/signin/challenge',

@@ -5,9 +5,7 @@ import type { SourceApi } from '../sources/types'
 import { resolvers } from './resolvers'
 import typeDefs from './schema.gql?raw'
 
-// The schema is the source of truth for the root surface, but nothing makes the
-// resolver map follow it: a field added to schema.gql without a resolver only
-// fails when a user hits it, as `Cannot return null for non-nullable field`.
+// A field added to schema.gql without a resolver only fails when a user hits it
 const rootFields = (type: 'Query' | 'Mutation') =>
   (new RegExp(`type ${type} \\{([^}]*)\\}`).exec(typeDefs)?.[1] ?? '')
     .split('\n')
@@ -43,8 +41,6 @@ describe('root queries', () => {
     } as unknown as SourceApi
     await resolvers.Query.watch({}, { id: 'abc', playlistId: 'PL1', playlistIndex: 0 }, { source } as never)
     await resolvers.Query.watch({}, { id: 'abc', playlistId: null, playlistIndex: null }, { source } as never)
-    // A 0 index is a real position, so it must survive the null coalescing that
-    // turns the schema's absent arguments into undefined.
     expect(calls).toEqual([['abc', 'PL1', 0], ['abc', undefined, undefined]])
   })
 
@@ -121,8 +117,6 @@ describe('root mutations', () => {
     } as unknown as SourceApi
     await resolvers.Mutation.addToPlaylist({}, { playlistId: 'PL1', videoIds: ['a'] }, { source } as never)
     await resolvers.Mutation.removeFromPlaylist({}, { playlistId: 'PL1', setVideoIds: ['set-a'] }, { source } as never)
-    // A null predecessor is the schema's way of saying "first position", and it
-    // has to reach the source as undefined rather than as a null target.
     await resolvers.Mutation.movePlaylistItem({}, { playlistId: 'PL1', setVideoId: 'set-b', afterSetVideoId: null }, { source } as never)
     await expect(resolvers.Mutation.deletePlaylist({}, { id: 'PL1' }, { source } as never)).resolves.toBe('PL1')
     expect(calls).toEqual([

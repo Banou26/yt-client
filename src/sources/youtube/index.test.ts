@@ -51,7 +51,6 @@ type FakePlaylists = {
 
 const feed = (id: string, next?: () => Promise<FakeFeed>): FakeFeed => ({
   videos: [{ video_id: id, title: { text: id } }],
-  // The home shelf is where a seedless Shorts feed gets its first short.
   memo: new Map<string, unknown[]>([['ShortsLockupView', [
     { on_tap_endpoint: { payload: { videoId: `short-${id}` } }, overlay_metadata: { primary_text: { text: `Short ${id}` } } },
   ]]]),
@@ -59,8 +58,6 @@ const feed = (id: string, next?: () => Promise<FakeFeed>): FakeFeed => ({
   getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
 })
 
-// A search response carries its rows on `results` rather than `videos`: that
-// getter emits only videos, which is why channel and playlist hits were dropped.
 const search = (id: string, next?: () => Promise<FakeSearch>): FakeSearch => ({
   videos: [],
   results: [
@@ -73,8 +70,6 @@ const search = (id: string, next?: () => Promise<FakeSearch>): FakeSearch => ({
   getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
 })
 
-// Comment actions are per-comment endpoints the source has to retain, so the
-// fake carries real callables and records what was invoked.
 const commentCalls: string[] = []
 
 const commandFor = (id: string, name: string) => ({
@@ -99,8 +94,7 @@ const comments = (id: string, next?: () => Promise<FakeComments>): FakeComments 
   getContinuation: next ?? (() => Promise.reject(new Error('no continuation'))),
 })
 
-// The playlist rows live in the memo rather than behind the `items` getter,
-// which throws on any node outside its union.
+// The playlist rows live in the memo rather than behind the `items` getter, which throws on any node outside its union
 const playlist = (id: string, next?: () => Promise<FakePlaylist>): FakePlaylist => ({
   info: { title: 'My playlist', total_items: '2 videos' },
   memo: new Map<string, unknown[]>([['PlaylistVideo', [
@@ -123,8 +117,6 @@ type FakePosts = {
   getContinuation(): Promise<FakePosts>
 }
 
-// Community rows come off `posts`, which pageItems never reads: a post feed run
-// through the video path yields an empty tab rather than an error.
 const posts = (id: string, next?: () => Promise<FakePosts>): FakePosts => ({
   videos: [],
   posts: [{ id, content: { text: `Body of ${id}` }, published: { text: '2 days ago' }, author: { id: 'UC1', name: 'Chan' } }],
@@ -154,11 +146,7 @@ const notifications = (id: string, next?: () => Promise<FakeNotifications>): Fak
 type FakeCall = { endpoint: string, args?: Record<string, unknown> }
 
 const createFakeClient = () => {
-  // Writes are verified by what reached the wire, so every outbound call is
-  // recorded: the point of these tests is which endpoint fired, not the reply.
   const calls: string[] = []
-  /* A controllable stand-in for youtubei.js's LiveChat emitter, so a test can
-     decide exactly when a message lands and when the stream ends. */
   type ChatListener = (action: { item?: unknown, target_item_id?: string }) => void
   const chatListeners: ChatListener[] = []
   const chatEnders: (() => void)[] = []
@@ -177,12 +165,7 @@ const createFakeClient = () => {
   const endChat = () => {
     for (const ender of chatEnders) ender()
   }
-  // The endpoint alone is not enough for a playlist edit: every one of them
-  // POSTs to browse/edit_playlist and differs only in the body, which is also
-  // where youtubei.js's own casing defects live.
   const payloads: FakeCall[] = []
-  // Filter mapping is a translation layer to upstream's lowercase vocabulary, so
-  // what actually reached the client is the only thing worth asserting on.
   const searchFilters: unknown[] = []
   return {
     calls,
@@ -197,12 +180,7 @@ const createFakeClient = () => {
     },
     getSearchSuggestions: async (query: string) => [`${query} one`, `${query} two`],
     getBasicInfo: async () => ({ basic_info: undefined }),
-    /* Mirrors the real reel sequence rather than a tidied version of it. Three
-       details are load-bearing and each one has burned a normalizer before:
-       the seed's metadata arrives as `basic_info` on the SAME response as the
-       sequence; only ONE entry carries a prefetched title, so the rest are id
-       plus still; and getWatchNextContinuation MUTATES this object and returns
-       `this` rather than handing back a fresh page. */
+    // getWatchNextContinuation MUTATES this object and returns `this` rather than handing back a fresh page
     getShortsVideoInfo: async (id: string) => {
       const entry = (video: string, title?: string) => ({
         payload: {
@@ -226,11 +204,7 @@ const createFakeClient = () => {
       return sequence
     },
     getChannel: async () => {
-      // Real methods rather than arrows, and each one checks its receiver. Every
-      // upstream tab opener is a prototype method that reaches for
-      // `this.getTabByURL`, so looking one up and calling it bare fails with
-      // `reading 'getTabByURL' of undefined`. An arrow would ignore `this` and
-      // let that regression through.
+      // Real methods rather than arrows: every upstream tab opener is a prototype method that reaches for `this.getTabByURL`
       const channel = {
         ...feed('channel'),
         metadata: { external_id: 'c', title: 'Channel' },
@@ -264,8 +238,6 @@ const createFakeClient = () => {
     },
     getInfo: async (id: string) => {
       calls.push(`getInfo:${id}`)
-      // `nochat` stands in for a video with live chat turned off, which is the
-      // case getLiveChat() throws on rather than answering.
       if (id === 'nochat') return { livechat: undefined, getLiveChat: () => { throw new Error('Live Chat is not available') } }
       return {
         livechat: {},
@@ -298,7 +270,6 @@ const createFakeClient = () => {
     },
     account: {
       getInfo: async (): Promise<unknown> => ({
-        // The account is an AccountItem inside the section's own contents.
         contents: {
           contents: [{
             account_name: { text: 'Banou' },
@@ -322,15 +293,9 @@ const createFakeClient = () => {
         }
         const memo: [string, unknown[]][] = [
           ['VideoPrimaryInfo', [{ view_count: { view_count: { text: '42 views' } } }]],
-          /* ONE entry carrying both halves. A Map keeps the last value for a
-             duplicate key, so pushing a second TwoColumnWatchNextResults below
-             would silently hide this one and make the two cases untestable
-             together. The sidebar's continuation is the last item of
-             secondary_results. */
+          // A Map keeps the last value for a duplicate key, so a second TwoColumnWatchNextResults would silently hide this one
           ['TwoColumnWatchNextResults', [{
-            /* Mirrors the real nesting: secondary_results holds an ItemSection
-               whose contents carry the rows and the trailing ContinuationItem.
-               A flat fixture here would pass while the real response does not. */
+            // Mirrors the real nesting: a flat fixture here would pass while the real response does not
             secondary_results: [
               { contents: [
                 { video_id: 'rel1', title: { text: 'Related one' } },
@@ -354,15 +319,11 @@ const createFakeClient = () => {
                 }
               : {}),
           }]],
-          /* A ContinuationItem also sits in the memo for the COMMENTS entry.
-             Reading the first one out of the memo instead of off
-             secondary_results would page comments into the video sidebar. */
           ['ContinuationItem', [{ endpoint: { call: async () => ({}) } }]],
         ]
         return {
           success: true,
-          // `playlistId` is optional on the wire: playlist/create is the only
-          // call here that returns one, and it is never validated upstream.
+          // `playlistId` is optional on the wire and is never validated upstream
           data: { playlistId: 'PLnew' } as { playlistId?: string },
           contents_memo: new Map<string, unknown[]>(memo),
         }
@@ -380,14 +341,10 @@ describe('youtube comment writes', () => {
     })
     const page = await source.comments('abc')
     const token = page.items[0]?.actionsToken
-    // The commands are opaque per-comment protobuf params: without a retained
-    // handle there is no way to reach them from the id alone.
     expect(token).toBeTruthy()
 
     await source.rateComment(token!, 'LIKE')
     await source.rateComment(token!, 'DISLIKE')
-    // Clearing a rating is its own endpoint rather than a parameter, so
-    // INDIFFERENT has to undo whichever direction was set.
     await source.rateComment(token!, 'INDIFFERENT')
     await source.replyToComment(token!, 'well said')
     expect(commentCalls).toEqual([
@@ -422,9 +379,6 @@ describe('youtube search', () => {
       createClient: async () => createFakeClient(),
     })
     const results = await source.search('query')
-    // The rows are tagged rather than wrapped, so the worker's __resolveType is
-    // a field switch and GraphQL still resolves each member's own fields off
-    // this same object.
     expect(results.results.map((row) => row.kind)).toEqual(['video', 'channel'])
     expect(results.results[0]).toMatchObject({ kind: 'video', id: 'search' })
     expect(results.results[1]).toMatchObject({ kind: 'channel', id: 'UCchannel', name: 'A Channel' })
@@ -436,8 +390,6 @@ describe('youtube search', () => {
     const client = createFakeClient()
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
     await source.search('query', { uploadDate: 'WEEK', sortBy: 'POPULARITY', features: ['FOUR_K', 'CREATIVE_COMMONS'] })
-    // ALL is the unset state on every axis: sending it would be a real filter
-    // value upstream rather than an absent one.
     await source.search('query', { uploadDate: 'ALL', type: 'ALL' })
     expect(client.searchFilters[0]).toEqual({
       upload_date: 'week',
@@ -456,11 +408,8 @@ describe('youtube search', () => {
     })
     const unfiltered = await source.search('query')
     expect(unfiltered.cursor).toBeTruthy()
-    // Paging a narrowed search with the unfiltered cursor would append results
-    // the filter excludes, which reads as the filter silently switching off.
     await expect(source.search('query', { uploadDate: 'WEEK' }, unfiltered.cursor))
       .rejects.toThrow('belongs to')
-    // The same filter set still pages normally.
     await expect(source.search('query', undefined, unfiltered.cursor)).resolves.toBeTruthy()
   })
 
@@ -468,7 +417,6 @@ describe('youtube search', () => {
     const client = createFakeClient()
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
     expect(await source.searchSuggestions('bl')).toEqual(['bl one', 'bl two'])
-    // An empty box has nothing to suggest and must not cost a round trip.
     expect(await source.searchSuggestions('   ')).toEqual([])
     client.getSearchSuggestions = async () => { throw new Error('suggest host unreachable') }
     expect(await source.searchSuggestions('bl')).toEqual([])
@@ -485,9 +433,6 @@ describe('youtube channel tabs', () => {
       return inner()
     }
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
-    // A tab switch used to re-browse the channel, and About and Community each
-    // browsed it a SECOND time, so flipping tabs fired a burst of overlapping
-    // POSTs to /browse. One fetched Channel holds every tab it has.
     await source.channel('c')
     await source.channel('c', 'PLAYLISTS')
     await source.channel('c', 'COMMUNITY')
@@ -503,10 +448,6 @@ describe('youtube channel tabs', () => {
       createClient: async () => createFakeClient(),
     })
     const result = await source.channel('c')
-    // The fake carries Videos and Playlists only, so Shorts must not appear:
-    // opening a tab a channel lacks throws `Tab "shorts" not found` upstream.
-    // About and Search render their own surface, so they sit after the content
-    // tabs rather than inside the feed table.
     expect(result.availableTabs).toEqual(['VIDEOS', 'PLAYLISTS', 'COMMUNITY', 'ABOUT'])
     expect(result.tab).toBe('VIDEOS')
     expect(result.videos.items[0]?.id).toBe('channel-videos')
@@ -520,7 +461,6 @@ describe('youtube channel tabs', () => {
     const playlists = await source.channel('c', 'PLAYLISTS')
     expect(playlists.tab).toBe('PLAYLISTS')
     expect(playlists.videos.items[0]?.id).toBe('channel-playlists')
-    // Falling back beats throwing at the page for a tab that is not there.
     const missing = await source.channel('c', 'SHORTS')
     expect(missing.tab).toBe('VIDEOS')
   })
@@ -538,10 +478,7 @@ describe('youtube channel tabs', () => {
 })
 
 describe('youtube source', () => {
-  // The source attaches its listeners inside an async open, so a test that
-  // emits synchronously would fire into a chat nobody is listening to yet.
-  // start() runs immediately after the listeners are attached, so its call is
-  // the signal that emitting is safe.
+  // start() runs immediately after the listeners are attached, so its call is the signal that emitting is safe
   const chatStarted = async (client: { calls: string[] }) => {
     for (let attempt = 0; attempt < 100 && !client.calls.includes('livechat:start'); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 0))
@@ -556,9 +493,6 @@ describe('youtube source', () => {
   })
 
   it('buffers live chat between polls and keeps the session running', async () => {
-    /* The transport is one response per request while upstream is an
-       EventEmitter, so the emitter has to outlive any single call. Anything said
-       between two polls would otherwise be lost outright. */
     const client = createFakeClient()
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
     const opened = source.liveChat('abc')
@@ -569,17 +503,13 @@ describe('youtube source', () => {
     expect(first.items.map((item) => item.id)).toEqual(['c1'])
     expect(first.cursor).toBeTruthy()
 
-    // Said while nothing was polling. It must still arrive.
     client.emitChat({ item: chatItem('c2', 'still here') })
     const second = await source.liveChat('abc', first.cursor)
     expect(second.items.map((item) => item.id)).toEqual(['c2'])
-    // One session, not one per poll.
     expect(client.calls.filter((call) => call === 'livechat:start')).toHaveLength(1)
   })
 
   it('carries a removal as its own instruction', async () => {
-    // The client holds the transcript, so it cannot notice a message going
-    // missing from a later page: a deletion has to travel explicitly.
     const client = createFakeClient()
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
     const opened = source.liveChat('abc')
@@ -593,8 +523,6 @@ describe('youtube source', () => {
   })
 
   it('stops polling once the stream ends', async () => {
-    // No cursor is what tells the client to stop. Handing one back would poll a
-    // finished chat forever.
     const client = createFakeClient()
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
     const opened = source.liveChat('abc')
@@ -608,9 +536,7 @@ describe('youtube source', () => {
   })
 
   it('reports chat being unavailable rather than throwing', async () => {
-    /* getLiveChat() THROWS when a video carries no chat, so absence is checked
-       before calling it. A video with chat turned off is an ordinary answer and
-       the panel says so, rather than the query failing. */
+    // getLiveChat() THROWS when a video carries no chat, so absence is checked before calling it
     const client = createFakeClient()
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
     const page = await source.liveChat('nochat')
@@ -621,8 +547,6 @@ describe('youtube source', () => {
   it('sends through the session the panel already has open', async () => {
     const client = createFakeClient()
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
-    // Sending before the panel has loaded is a failure rather than a silent
-    // no-op, because a second session would poll the same stream twice.
     await expect(source.sendLiveChatMessage('abc', 'hi')).rejects.toThrow('live chat is not open')
     await source.liveChat('abc')
     await source.sendLiveChatMessage('abc', 'hi')
@@ -630,17 +554,11 @@ describe('youtube source', () => {
   })
 
   it('resolves an @handle into a browse id before browsing a channel', async () => {
-    /* getChannel wants a `UC...` id and answers "Invalid channel" for anything
-       else, but a handle is what the app has in hand in two places: a modern
-       YouTube URL is `youtube.com/@name`, and the signed-in account reports its
-       own handle while carrying NO browse id (its endpoint is a
-       selectActiveIdentityEndpoint holding GAIA tokens). */
     const client = createFakeClient()
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
     await source.channel('@someone')
     expect(client.calls).toContain('resolveURL:https://www.youtube.com/@someone')
 
-    // A browse id is already an address, so it costs no resolution.
     client.calls.length = 0
     await source.channel('UCdirect')
     expect(client.calls.some((call) => call.startsWith('resolveURL:'))).toBe(false)
@@ -662,9 +580,7 @@ describe('youtube source', () => {
     expect(first.cursor).toBeTruthy()
     const second = await source.home(undefined, first.cursor)
     expect(second.items[0]?.id).toBe('second')
-    // urql re-executes a query on remount and on back-navigation. Replaying a
-    // cursor must return the same page rather than throwing, and must not cost
-    // a second round trip.
+    // urql re-executes a query on remount and on back-navigation, so replaying a cursor must return the same page
     const replay = await source.home(undefined, first.cursor)
     expect(replay.items[0]?.id).toBe('second')
     expect(continuationCalls).toBe(1)
@@ -677,16 +593,9 @@ describe('youtube source', () => {
       createClient: async () => createFakeClient(),
     })
     const page = await source.shorts('abc')
-    // The seed leads, and the sequence follows it rather than replacing it.
     expect(page.items.map((item) => item.id)).toEqual(['abc', 'reel-1', 'reel-2'])
-    // The seed's own metadata rides the same response as the sequence, so the
-    // first slide renders its title with no second call.
     expect(page.items[0]?.title).toBe('Seed abc')
-    // The widest still wins: the reel endpoint carries the true portrait frame,
-    // and picking the first rather than the largest would ship a 480px poster.
     expect(page.items[1]?.poster).toBe('reel-1.jpg')
-    // Only one entry is prefetched. The rest legitimately have no title, and
-    // inventing one would put a wrong label under a slide.
     expect(page.items[1]?.title).toBe('Prefetched title')
     expect(page.items[2]?.title).toBeUndefined()
   })
@@ -698,14 +607,10 @@ describe('youtube source', () => {
     })
     const first = await source.shorts('abc')
     expect(first.cursor).toBeTruthy()
-    /* getWatchNextContinuation overwrites watch_next_feed on the sequence and
-       returns `this`. Reading the page off the RETURN VALUE is what makes that
-       safe; a version that kept the pre-call feed would serve page one forever. */
     const second = await source.shorts(undefined, first.cursor)
     expect(second.items.map((item) => item.id)).toEqual(['reel-page-1'])
     const third = await source.shorts(undefined, second.cursor)
     expect(third.items.map((item) => item.id)).toEqual(['reel-page-2'])
-    // The sequence reports the end of itself, so the pager stops asking.
     expect(third.cursor).toBeUndefined()
   })
 
@@ -715,8 +620,6 @@ describe('youtube source', () => {
       createClient: async () => createFakeClient(),
     })
     const page = await source.shorts()
-    // There is no Shorts destination feed to browse, so the home shelf supplies
-    // the short the sequence starts from.
     expect(page.items[0]?.id).toBe('short-first')
   })
 
@@ -727,8 +630,6 @@ describe('youtube source', () => {
       fetch: globalThis.fetch,
       createClient: async () => client,
     })
-    // An anonymous home carries no shorts, so there is nothing to seed from.
-    // That is an empty feed, not an error.
     await expect(source.shorts()).resolves.toEqual({ items: [] })
   })
 
@@ -739,13 +640,8 @@ describe('youtube source', () => {
     })
     const home = await source.home()
     expect(home.cursor).toBeTruthy()
-    // Two different rejections, both of which have to hold. Search and home each
-    // keep their own registry now (their pages are not plain video lists), so a
-    // home cursor is not merely the wrong KIND there, it does not exist at all.
     await expect(source.search('query', undefined, home.cursor)).rejects.toThrow('unknown continuation')
     await expect(source.subscriptions(home.cursor)).rejects.toThrow('unknown continuation')
-    // Within ONE registry the kind is what separates feeds: a channel cursor
-    // must not page the subscriptions feed even though both are video pages.
     const channel = await source.channel('c')
     expect(channel.videos.cursor).toBeTruthy()
     await expect(source.subscriptions(channel.videos.cursor)).rejects.toThrow('belongs to channel')
@@ -792,11 +688,7 @@ describe('youtube source', () => {
     expect(second.items[0]?.id).toBe('next')
     expect(second.cursor).toBeUndefined()
     await expect(source.comments('abc', undefined, first.cursor)).resolves.toMatchObject({ items: [{ id: 'next' }] })
-    // Comment cursors are scoped to their video, so the same cursor must not
-    // page a different video's comments.
     await expect(source.comments('other', undefined, first.cursor)).rejects.toThrow('belongs to comments:abc')
-    // ...nor a different ORDERING of the same video: Top and Newest interleave
-    // into nonsense if one's cursor pages the other.
     await expect(source.comments('abc', 'NEWEST', first.cursor)).rejects.toThrow('belongs to comments:abc:TOP')
   })
 
@@ -811,8 +703,6 @@ describe('youtube source', () => {
     expect(first.items[0]?.index).toBe(1)
     const second = await source.playlist('PL1', first.cursor)
     expect(second.items[0]?.video.id).toBe('PL1-second')
-    // A continuation response carries no header, so the playlist has to be the
-    // one read from the first page rather than an entity stripped of its title.
     expect(second.playlist).toEqual(first.playlist)
     await expect(source.playlist('PL2', first.cursor)).rejects.toThrow('belongs to playlist:PL1')
   })
@@ -826,8 +716,6 @@ describe('youtube source', () => {
       ]]]),
     })
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
-    // The playlist id is nowhere in the response, so it can only come from the
-    // id the caller browsed with.
     await expect(source.playlist('PL1')).resolves.toMatchObject({
       playlist: { id: 'PL1', title: 'My playlist', videoCountText: '2 videos', thumbnail: 'cover' },
     })
@@ -884,33 +772,19 @@ describe('youtube source', () => {
     })
   })
 
-  // src/sources/runtime.ts decides whether a failed call may be replayed against
-  // a rebuilt engine by reading the cursor out of SOURCE_CURSOR_ARGUMENT BY
-  // POSITION. Nothing in the type system ties that index to the real signature,
-  // so reordering a parameter would silently start replaying continuations,
-  // which reads to the user as a feed that jumps back to page one. These cases
-  // pin the position: the leading arguments listed here must be exactly the
-  // arguments that come before the cursor.
-  /* commentReplies is deliberately absent: this table encodes "leading
-     arguments, then the cursor", and its ONLY argument is the cursor. There is
-     no first-page call to make before one can be rejected, so it gets its own
-     test below rather than a fake entry here. relatedVideos is the same shape:
-     its cursor comes off WatchMeta rather than from a call of its own. */
+  // Nothing in the type system ties SOURCE_CURSOR_ARGUMENT's index to the real signature, so these cases pin the position
+  // commentReplies and relatedVideos are deliberately absent: their ONLY argument is the cursor, so there are no leading arguments
   const CURSOR_CASES: Record<
     Exclude<keyof typeof SOURCE_CURSOR_ARGUMENT, 'commentReplies' | 'relatedVideos'>,
     string[]
   > = {
     home: [undefined as unknown as string],
-    // The `seed` argument sits in front of the cursor.
     shorts: [undefined as unknown as string],
     subscriptions: [],
     history: [],
-    // Both grew arguments in front of the cursor: search gained `filters` and
-    // channel gained `tab`, `sort` and `query`.
     search: ['query', undefined as unknown as string],
     channel: ['c', undefined as unknown as string, undefined as unknown as string, undefined as unknown as string],
     comments: ['abc', undefined as unknown as string],
-    // `videoId` names the chat the cursor drains.
     liveChat: ['abc'],
     communityPosts: ['c'],
     notifications: [],
@@ -926,8 +800,6 @@ describe('youtube source', () => {
         createClient: async () => createFakeClient(),
       })
       const call = source[method as keyof typeof CURSOR_CASES] as (...args: unknown[]) => Promise<unknown>
-      // The first page has to exist before a continuation can be rejected as
-      // unknown (channel continuations also require the channel to be loaded).
       await call(...leading)
       await expect(call(...leading, 'youtube:bogus')).rejects.toThrow('unknown continuation')
     })
@@ -946,15 +818,10 @@ describe('youtube source', () => {
     const client = createFakeClient()
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
     const meta = await source.watch('abc', 'PL1', 0)
-    // `playlistIndex` is the key /next reads. `index` is only an alias inside
-    // youtubei.js's WatchNextEndpoint.buildRequest, which execute never runs, so
-    // sending it would ship a key InnerTube ignores and silently start the
-    // queue at the wrong row.
+    // `playlistIndex` is the key /next reads; `index` is only an alias inside WatchNextEndpoint.buildRequest, which execute never runs
     expect(client.payloads[0]?.args).toMatchObject({ videoId: 'abc', playlistId: 'PL1', playlistIndex: 0 })
     expect(client.payloads[0]?.args).not.toHaveProperty('index')
     expect(meta?.playlist).toMatchObject({ id: 'PL1', title: 'Queue', author: 'Owner', currentIndex: 0, isInfinite: false })
-    // A wrapper's `primary` is unwrapped, and the mix teaser tail, which
-    // carries no video at all, drops out instead of becoming an empty row.
     expect(meta?.playlist?.items.map((video) => video.id)).toEqual(['q1', 'q2'])
     expect(meta?.playlist?.items[0]).toMatchObject({ thumbnail: 'q1.jpg', durationSeconds: 61 })
   })
@@ -989,8 +856,6 @@ describe('youtube source', () => {
         playlistId: 'PL1',
         actions: [{ action: 'ACTION_MOVE_VIDEO_AFTER', setVideoId: 'set-b', movedSetVideoIdPredecessor: 'set-a' }],
       },
-      // No predecessor asks for the first position, so the key is omitted
-      // rather than sent as an empty target.
       { playlistId: 'PL1', actions: [{ action: 'ACTION_MOVE_VIDEO_AFTER', setVideoId: 'set-b' }] },
     ])
   })
@@ -999,9 +864,7 @@ describe('youtube source', () => {
     const client = createFakeClient()
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
     await expect(source.renamePlaylist('PL1', 'New name')).resolves.toMatchObject({ id: 'PL1', title: 'New name' })
-    // youtubei.js's setName writes the id as snake_case `playlist_id`, which
-    // PlaylistEditEndpoint drops on its way to the wire, so the rename ships
-    // with no target at all. The id has to go out as camelCase `playlistId`.
+    // youtubei.js's setName writes the id as snake_case `playlist_id`, which PlaylistEditEndpoint drops, so it has to go out as camelCase `playlistId`
     expect(client.payloads[0]).toEqual({
       endpoint: 'browse/edit_playlist',
       args: { playlistId: 'PL1', actions: [{ action: 'ACTION_SET_PLAYLIST_NAME', playlistName: 'New name' }] },
@@ -1022,9 +885,6 @@ describe('youtube source', () => {
   it('creates a playlist through the endpoint so privacy and description survive', async () => {
     const client = createFakeClient()
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
-    // The manager's create() sends only a title and video ids; the endpoint it
-    // calls copies privacyStatus and description too, and creation is the one
-    // attested way to set privacy in this version.
     await expect(source.createPlaylist('Mix', ['a'], 'PRIVATE', 'Notes')).resolves.toEqual({
       id: 'PLnew',
       title: 'Mix',
@@ -1045,17 +905,13 @@ describe('youtube source', () => {
       contents_memo: new Map<string, unknown[]>(),
     })
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
-    // The id is the only server-generated value in the write path and it is
-    // optional on the wire. Without it the entity has no cache key, so the
-    // caller has to reread the library rather than merge a stub.
     await expect(source.createPlaylist('Mix')).rejects.toThrow('its id did not come back')
   })
 
   it('deletes through the path youtubei.js cannot reach', async () => {
     const client = createFakeClient()
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
-    // client.playlist.delete throws before the network in 17.0.1: it builds a
-    // raw key with no registered endpoint class, so no api_url is ever found.
+    // client.playlist.delete throws before the network in 17.0.1: it builds a raw key with no registered endpoint class
     await expect(source.deletePlaylist('PL1')).resolves.toBe('PL1')
     expect(client.payloads[0]).toEqual({ endpoint: 'playlist/delete', args: { playlistId: 'PL1' } })
   })
@@ -1064,9 +920,6 @@ describe('youtube source', () => {
     const client = createFakeClient()
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
     await source.playlist('PL1')
-    // Playlist.title is non-null in the schema and no edit endpoint hands a
-    // playlist back, so a write on an already-read playlist has to resolve with
-    // the title it knows rather than blanking the cached entity.
     await expect(source.addToPlaylist('PL1', ['a'])).resolves.toMatchObject({ id: 'PL1', title: 'My playlist' })
   })
 
@@ -1082,9 +935,6 @@ describe('youtube source', () => {
     const client = createFakeClient()
     client.session.logged_in = false
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
-    // browse/edit_playlist carries no browseId, and youtubei.js only runs its
-    // signed-in precheck for payloads that have one, so nothing upstream would
-    // stop these.
     await expect(source.addToPlaylist('PL1', ['a'])).rejects.toThrow('sign in to save to a playlist')
     await expect(source.removeFromPlaylist('PL1', ['set-a'])).rejects.toThrow('sign in to change a playlist')
     await expect(source.renamePlaylist('PL1', 'x')).rejects.toThrow('sign in to rename a playlist')
@@ -1097,9 +947,6 @@ describe('youtube source', () => {
   })
 
   it('classifies every playlist write as non-replayable', () => {
-    // runtime.ts replays a failed call against a rebuilt engine unless the
-    // policy forbids it. A replayed edit adds the same video twice, or leaves a
-    // second playlist behind with the same title.
     const writes = [
       'addToPlaylist',
       'removeFromPlaylist',
@@ -1127,8 +974,6 @@ describe('youtube source', () => {
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
     await source.channel('c')
     const updated = await source.setSubscribed('c', true)
-    // The name survives from the cached read, so the write does not hand back a
-    // channel stripped of everything it already knew.
     expect(updated).toMatchObject({ id: 'c', name: 'Channel', isSubscribed: true })
   })
 
@@ -1180,9 +1025,7 @@ describe('youtube source', () => {
       createClient: async () => client,
       signedIn: () => true,
     })
-    // removeVideo replaces its instance's contents when it has to page forward,
-    // so each removal takes a fresh feed rather than reusing one that may have
-    // already advanced past the video being removed.
+    // removeVideo replaces its instance's contents when it has to page forward, so each removal takes a fresh feed
     await expect(source.removeFromHistory('today')).resolves.toBe('today')
     expect(client.calls).toContain('removeHistory:today')
   })
@@ -1204,8 +1047,6 @@ describe('youtube source', () => {
       signedIn: () => true,
     })
     await source.removeFromHistory('deep')
-    // The default is one page, which would fail for anything the user scrolled
-    // past.
     expect(requested[0]).toBeGreaterThan(1)
   })
 
@@ -1213,8 +1054,7 @@ describe('youtube source', () => {
     const client = createFakeClient()
     client.getHomeFeed = async () => ({
       ...feed('first'),
-      // youtubei.js throws from this getter when the response carries no chip
-      // bar, so optional chaining does not protect the call site.
+      // youtubei.js throws from this getter when the response carries no chip bar, so optional chaining does not protect the call site
       get filter_chips (): never { throw new Error('There are no feed filter chipbars') },
     })
     const source = createYoutubeSource({ fetch: globalThis.fetch, createClient: async () => client })
@@ -1222,10 +1062,6 @@ describe('youtube source', () => {
   })
 
   it('covers every cursored method declared to runtime.ts', () => {
-    // The exclusion is listed rather than assumed, so a method dropped from the
-    // table by accident still fails here. commentReplies is covered by its own
-    // test: its only argument is the cursor, so there are no leading arguments
-    // for the table to pin and no first-page call to make first.
     const covered = [...Object.keys(CURSOR_CASES), 'commentReplies', 'relatedVideos']
     expect(covered.sort()).toEqual(Object.keys(SOURCE_CURSOR_ARGUMENT).sort())
   })
@@ -1239,8 +1075,6 @@ describe('youtube source', () => {
     expect(meta?.relatedCursor).toBeTruthy()
     const more = await source.relatedVideos(meta!.relatedCursor!)
     expect(more.items[0]?.id).toBe('related-next')
-    // Unknown cursors report the same way every other feed reports them, and a
-    // cursor from a real video feed is a different mistake.
     await expect(source.relatedVideos('youtube:bogus')).rejects.toThrow('unknown continuation')
     const channel = await source.channel('c')
     await expect(source.relatedVideos(channel.videos.cursor!)).rejects.toThrow('not a watch sidebar')
@@ -1251,19 +1085,13 @@ describe('youtube source', () => {
       fetch: globalThis.fetch,
       createClient: async () => createFakeClient(),
     })
-    // Unknown cursors report the same way every other feed reports them.
     await expect(source.commentReplies('youtube:bogus')).rejects.toThrow('unknown continuation')
-    // A REAL cursor from the comment list is a different mistake: replies and
-    // the list they hang off page different things through one registry.
     const list = await source.comments('abc')
     expect(list.cursor).toBeTruthy()
     await expect(source.commentReplies(list.cursor!)).rejects.toThrow('not a reply thread')
   })
 
   it('only lets a cursored read opt out of replay through a cursor argument', () => {
-    // A method classified 'unless-cursor' decides replay by reading one
-    // argument position, so it has to have one. Without this, the policy
-    // silently degrades to 'always' and a paged feed restarts at page one.
     for (const [method, policy] of Object.entries(SOURCE_REPLAY)) {
       if (policy === 'unless-cursor') {
         expect(SOURCE_CURSOR_ARGUMENT).toHaveProperty(method)

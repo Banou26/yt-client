@@ -14,16 +14,7 @@ import { FeedSentinel, useInfiniteFeed } from '../components/use-infinite-feed'
 import { gql } from '../generated'
 import { useSession } from '../session'
 
-// Named for this route rather than `Playlists`: the save panel already selects
-// its own narrower shape off the same field, and two operations cannot share a
-// name.
-/* No `updatedText` and no `privacy`. The library feed parses to GridPlaylist and
-   playlist lockups, and neither node carries an update date or a visibility, so
-   the source cannot fill them and they would arrive as null. That is worse than
-   absent: Playlist is keyed by id in graphcache, so those nulls would overwrite
-   whatever a /playlist read had already stored on the same entity and blank the
-   stats line on a page that HAD loaded them. Only the playlist page selects
-   them, because only Playlist.info actually carries them. */
+// no `updatedText` and no `privacy`: this feed cannot fill them, and Playlist is keyed by id in graphcache, so the nulls would overwrite what a /playlist read had stored
 const LIBRARY_PLAYLISTS_QUERY = gql(`
   query LibraryPlaylists($cursor: String) {
     playlists(cursor: $cursor) {
@@ -42,17 +33,11 @@ const LIBRARY_PLAYLISTS_QUERY = gql(`
 type LibraryPage = LibraryPlaylistsQuery['playlists']
 type LibraryPlaylist = LibraryPage['items'][number]
 
-// The two fixed-id playlists, pinned here and filtered back out of the fetched
-// list below to rule out a duplicate: the library aggregation does not list
-// them reliably, and an empty library still has somewhere to go.
 const PINNED = [
   { id: WATCH_LATER_ID, title: 'Watch later', Icon: Clock },
   { id: LIKED_VIDEOS_ID, title: 'Liked videos', Icon: ThumbsUp }
 ]
 
-// Same split the video grid uses: a first load fills the viewport, while a page
-// arriving under cards already on screen gets a trailing hint instead of
-// replacing the rows the reader is looking at.
 const FIRST_PAGE_SKELETONS = 12
 const NEXT_PAGE_SKELETONS = 4
 
@@ -257,19 +242,13 @@ const PlaylistsFeedPage = () => {
   const [{ data, error, fetching }] = useQuery({
     query: LIBRARY_PLAYLISTS_QUERY,
     variables: { cursor: loaded[loaded.length - 1]?.cursor },
-    // The source refuses this feed before the network call when signed out, and
-    // errors are unmasked, so that refusal would land in the UI verbatim.
     pause: !ready || !signedIn
   })
 
   const page = data?.playlists
-  // urql keeps the previous result while the next page is in flight, so the
-  // live page can repeat one already consumed: useInfiniteFeed dedupes by id.
   const { items, cursor } = useInfiniteFeed({
     pages: page ? [...loaded, page] : loaded,
-    // Annotated rather than inferred: the item type does not survive inference
-    // from the pages array here, and an unannotated parameter lands on unknown
-    // instead of tripping noImplicitAny, so nothing downstream would object.
+    // annotated rather than inferred: an unannotated parameter lands on unknown here instead of tripping noImplicitAny
     key: (playlist: LibraryPlaylist) => playlist.id
   })
   const playlists = items.filter(playlist => !PINNED.some(pinned => pinned.id === playlist.id))
@@ -310,9 +289,7 @@ const PlaylistsFeedPage = () => {
     <main css={style}>
       <h1 className='heading'>Playlists</h1>
       {error && playlists.length === 0 ? <p className='notice'>{readable(error.message)}</p> : undefined}
-      {/* The two pinned cards stay in the grid through every state: they are
-          known ids rather than results, so nothing about the fetch can remove
-          them, and an empty library still has somewhere to go. */}
+      {/* the two pinned cards are known ids rather than results, so no fetch state can remove them */}
       <div className='grid'>
         {PINNED.map(pinned => (
           <PlaylistCard key={pinned.id} id={pinned.id} title={pinned.title} fallbackIcon={pinned.Icon} />

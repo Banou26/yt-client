@@ -26,9 +26,6 @@ const SHORTS_FEED_QUERY = gql(`
   }
 `)
 
-/* The rail metadata is the ordinary watch call. The reel sequence carries a
-   title for only one entry, so everything the rail shows (channel, counts, like
-   state) comes from here, and only for the slide the viewer is actually on. */
 const SHORT_META_QUERY = gql(`
   query ShortMeta($id: ID!) {
     watch(id: $id) {
@@ -300,13 +297,6 @@ const style = css`
   }
 `
 
-/**
- * One slide.
- *
- * Split out so the metadata query is scoped to the slide and unmounts with it:
- * a hook on the parent would have to key on the active id and would keep every
- * visited slide's data alive for the life of the route.
- */
 const Slide = (
   { id, poster, fallbackTitle, active, onComments, onShare }: {
     id: string
@@ -321,8 +311,6 @@ const Slide = (
   const [{ data }] = useQuery({
     query: SHORT_META_QUERY,
     variables: { id },
-    // Metadata is a tunneled round trip per slide, so it is only paid for the
-    // slide in view. A swipe past a short never fetches it.
     pause: !active,
   })
   const meta = data?.watch
@@ -331,7 +319,6 @@ const Slide = (
 
   const onRate = (status: 'LIKE' | 'DISLIKE') => {
     if (!meta || rateState.fetching) return
-    // Clicking the lit button clears the rating, matching the watch page.
     const next = meta.likeStatus === status ? 'INDIFFERENT' : status
     void rate({ id, status: next })
   }
@@ -398,10 +385,7 @@ const Slide = (
 
 const ShortsPage = () => {
   const [, params] = useRoute('/shorts/:videoId')
-  /* Frozen at mount. The pager rewrites the path as slides scroll, and the
-     route key deliberately collapses those rewrites so the component survives
-     them; re-reading the param here would instead change the feed's variables
-     on every swipe and refetch the whole sequence from the new slide. */
+  // frozen at mount: re-reading the param would refetch the whole sequence on every path rewrite the pager makes
   const [seed] = useState(() => (params?.videoId ? safeDecode(params.videoId) : undefined))
   const [, navigate] = useLocation()
   const { ready, signedIn } = useSession()
@@ -424,9 +408,7 @@ const ShortsPage = () => {
 
   useDocumentTitle('Shorts')
 
-  /* The persistent player follows the viewer out of the watch page, and this
-     route starts its own playback, so leaving both alive would play two videos
-     at once. The pager takes over sound entirely. */
+  // the persistent player survives route changes, so leaving it alive would play two videos at once
   useEffect(() => closePlayer(), [])
 
   const onMore = useCallback(() => {
@@ -434,16 +416,11 @@ const ShortsPage = () => {
     setLoaded(previous => previous[previous.length - 1] === page ? previous : [...previous, page])
   }, [page, fetching, error])
 
-  // The first slide is active before any scrolling happens, so it is seeded
-  // here rather than waiting for the observer's first callback.
   useEffect(() => {
     if (!activeId && items[0]) setActiveId(items[0].id)
   }, [items, activeId])
 
-  /* Which slide is playing is decided by the observer rather than by scroll
-     maths: snap points and rubber-banding make an offset calculation wrong at
-     exactly the moments it matters. The threshold is deliberately over half, so
-     exactly one slide can ever qualify and two players can never be live. */
+  // the threshold MUST stay over half, so exactly one slide can qualify and two players can never be live
   useEffect(() => {
     const root = scrollerRef.current
     if (!root) return
@@ -461,16 +438,11 @@ const ShortsPage = () => {
     return () => observer.disconnect()
   }, [items.length])
 
-  // Two slides of lookahead: the next page is in hand well before the viewer
-  // reaches the end of the list.
   useEffect(() => {
     const index = items.findIndex(short => short.id === activeId)
     if (index >= 0 && index >= items.length - 3) onMore()
   }, [activeId, items, onMore])
 
-  /* The address bar follows the pager so a reload or a shared link lands on the
-     short being watched. Replacing rather than pushing keeps Back leaving the
-     Shorts feed instead of walking every slide the viewer scrolled past. */
   useEffect(() => {
     if (!activeId) return
     const next = `/shorts/${encodeURIComponent(activeId)}`
@@ -488,9 +460,6 @@ const ShortsPage = () => {
   }
 
   if (items.length === 0) {
-    /* There is no Shorts destination feed to browse: the pager is seeded from
-       the home shelf, and a signed-out home carries none. Saying so is more
-       useful than an empty scroller. */
     return (
       <main css={style}>
         <div className='empty'>

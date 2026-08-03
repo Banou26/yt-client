@@ -53,9 +53,7 @@ const PLAYLIST_VIEW_QUERY = gql(`
   }
 `)
 
-// Only identity is selected back. The write cannot recompute a localized count,
-// so asking for `videoCountText` here would write the pre-write string over the
-// cached one: see the Mutation comment in src/worker/schema.gql.
+// only identity is selected back: the write cannot recompute a localized count, so `videoCountText` would overwrite the cached one (src/worker/schema.gql)
 const REMOVE_FROM_PLAYLIST = gql(`
   mutation RemoveFromPlaylist($playlistId: ID!, $setVideoIds: [ID!]!) {
     removeFromPlaylist(playlistId: $playlistId, setVideoIds: $setVideoIds) {
@@ -69,9 +67,7 @@ type PlaylistItemData = PlaylistViewPage['items'][number]
 
 const SKELETON_ROWS = 8
 
-// A playlist can hold the same video twice, each occurrence its own slot with
-// its own setVideoId, so the dedupe key addresses the SLOT. Keying on the video
-// id would merge the two copies onto one row.
+// a playlist can hold the same video twice, each occurrence its own slot, so the dedupe key addresses the SLOT
 const keyOf = (item: PlaylistItemData) => item.setVideoId ?? `${item.index ?? ''}:${item.video.id}`
 
 const style = css`
@@ -361,53 +357,35 @@ const style = css`
   }
 `
 
-// /playlist carries the playlist in the query string, matching youtube.com, so
-// a pasted link works. wouter's useSearch keeps the leading '?', which
-// URLSearchParams accepts. The route has NO path params, and reading one would
-// yield undefined silently: wouter checks the component prop bivariantly, so
-// the compiler would not object.
+// the route has NO path params, and reading one would yield undefined silently: wouter checks the component prop bivariantly
 const PlaylistPage = () => {
   const params = new URLSearchParams(useSearch())
   const listId = params.get('list') ?? ''
   const indexParam = params.get('index')
-  // 1-based, the way youtube.com writes it and the way PlaylistItem.index comes
-  // back. Anything that is not a plain number marks no row rather than row NaN.
+  // 1-based, the way youtube.com writes it and the way PlaylistItem.index comes back
   const activeIndex = indexParam !== null && /^\d+$/.test(indexParam) ? Number(indexParam) : undefined
   const [, navigate] = useLocation()
-  // Consumed pages carry the playlist they came from, so opening another list
-  // starts from an empty list in the same render rather than one frame later.
   const [loaded, setLoaded] = useState<{ id: string, pages: PlaylistViewPage[] }>({ id: listId, pages: [] })
   const pages = loaded.id === listId ? loaded.pages : []
-  // Watch later and Liked videos are the two ids that are account-scoped rather
-  // than public, and the guide links both of them on every page, signed in or
-  // not. Browsing one anonymously comes back as an upstream ERROR alert that
-  // youtubei.js throws on, and errors are unmasked, so the raw sentence would
-  // render under a bare 'Playlist' heading with no way to act on it.
+  // the two account-scoped ids the guide links on every page; browsing one anonymously comes back as an upstream ERROR alert
   const accountScoped = listId === WATCH_LATER_ID || listId === LIKED_VIDEOS_ID
   const { ready, signedIn } = useSession()
   const signedOutOfOwnList = accountScoped && ready && !signedIn
   const [{ data, error, fetching }] = useQuery({
     query: PLAYLIST_VIEW_QUERY,
     variables: { id: listId, cursor: pages[pages.length - 1]?.cursor },
-    // Any other id is a public playlist and opens signed out.
     pause: listId.length === 0 || (accountScoped && (!ready || !signedIn))
   })
   const [, removeFromPlaylist] = useMutation(REMOVE_FROM_PLAYLIST)
-  // The write answers with the playlist id alone, and the page it edited is
-  // whichever cursor happened to be live, so the row leaves the list from here.
   const [removed, setRemoved] = useState<Set<string>>(() => new Set())
   const [removing, setRemoving] = useState<string[]>([])
 
   const page = data?.playlist
-  // urql keeps the previous result while the next page is in flight, so the
-  // live page can repeat one already consumed: useInfiniteFeed dedupes by slot.
+  // urql keeps the previous result while the next page is in flight, so the live page can repeat one already consumed
   const { items, cursor } = useInfiniteFeed({
     pages: page ? [...pages, page] : pages,
     key: keyOf
   })
-  // Identical on every page (a continuation carries no header, so the source
-  // replays the first one), which is why it can be read off whichever page is
-  // in hand rather than held separately.
   const playlist = page?.playlist
   useDocumentTitle(playlist?.title ?? 'Playlist')
 
@@ -435,8 +413,6 @@ const PlaylistPage = () => {
 
   const onShare = () => {
     const clipboard = navigator.clipboard
-    // writeText rejects on a denied permission as well as on a non-secure
-    // context, and a silent failure is indistinguishable from a copy.
     if (!clipboard) {
       showToast('Could not copy the link')
       return
@@ -447,11 +423,6 @@ const PlaylistPage = () => {
     )
   }
 
-  // Only the rows already paged in are shuffled: the full order is not on the
-  // client, and the queue endpoint offers no "start me somewhere random". The
-  // random entry point is half the control; the other half is the queue landing
-  // in shuffle mode, which lives in the panel's module state because every
-  // queue navigation unmounts it.
   const onShuffle = () => {
     const pick = rows[Math.floor(Math.random() * rows.length)]
     if (!pick) return
@@ -548,10 +519,7 @@ const PlaylistPage = () => {
               }
             >
               <MenuItem icon={Share2} label='Share' onSelect={onShare} />
-              {/* No rename, privacy or delete rows. Every one of those is a
-                  write this page has no dialog for, and privacy in particular
-                  only applies reliably at creation: see setPlaylistPrivacy in
-                  src/worker/schema.gql. */}
+              {/* no rename, privacy or delete rows: privacy only applies reliably at creation, see setPlaylistPrivacy in src/worker/schema.gql */}
             </Menu>
           </div>
         </aside>
@@ -559,11 +527,7 @@ const PlaylistPage = () => {
           {error && rows.length === 0 ? <p className='notice'>{readable(error.message)}</p> : undefined}
           <div className='rows'>
             {rows.map((item, position) => {
-              // Two different numbers on purpose. The one on screen counts the
-              // rows actually rendered, so a local removal never leaves a gap
-              // in the column. The one in the href is upstream's slot, which is
-              // what ?index= addresses, and it keeps pointing at the right
-              // queue position after the visible numbering has shifted.
+              // the number on screen counts the rows rendered; the one in the href is upstream's slot, which is what ?index= addresses
               const queueIndex = item.index ?? position + 1
               const setVideoId = item.setVideoId
               return (
@@ -574,10 +538,7 @@ const PlaylistPage = () => {
                 >
                   <span className='number' aria-hidden='true'>{position + 1}</span>
                   <div className='card'>
-                    {/* The shared card carries the row's own overflow menu
-                        (save, share) and the queue-aware href, so the playlist
-                        adds only what is specific to it: the position and the
-                        one action the card cannot know about. */}
+                    {/* the shared card carries the row's own overflow menu and the queue-aware href */}
                     <VideoCardCompact video={item.video} context={{ list: listId, index: queueIndex }} />
                   </div>
                   {playlist?.isEditable === true && setVideoId

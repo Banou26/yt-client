@@ -1,20 +1,7 @@
 import { chromium, expect, test } from '@playwright/test'
 
-/* The real unpacked extension, which is the one thing the default fixture
-   cannot express: it needs its own persistent context, and loading an
-   extension needs a CDP command rather than a launch flag.
-
-   Kept because everything else about the extension path is tested against its
-   page-visible CONTRACT (see extension-notice.spec.ts), and a contract test
-   cannot notice the contract itself changing. This is the check that the
-   extension really does serve egress and really does announce itself.
-
-   Skipped rather than failed when the extension cannot be loaded: it is built
-   in another repo, so its presence cannot be a hard requirement of running this
-   suite. Build it with `npm run build` in fkn/web-extension. The skip is keyed
-   on the load actually failing rather than on the directory existing, so a
-   half-built or unloadable extension skips too instead of failing as if the app
-   were at fault. */
+/* Skipped rather than failed when the extension cannot be loaded: it is built
+   in another repo, with `npm run build` in fkn/web-extension. */
 
 const EXTENSION_BUILD = '/home/banou/dev/fkn/web-extension/build'
 
@@ -24,8 +11,7 @@ test.describe('with the FKN extension installed', () => {
     const context = await chromium.launchPersistentContext('', {
       headless: true,
       executablePath: '/etc/profiles/per-user/banou/bin/google-chrome',
-      // playwright's defaults include --disable-extensions, which silently
-      // defeats the load below, and --load-extension no longer works at all.
+      // playwright's --disable-extensions default defeats the load, and --load-extension no longer works
       ignoreDefaultArgs: ['--disable-extensions'],
       args: ['--enable-unsafe-extension-debugging', '--autoplay-policy=no-user-gesture-required'],
       viewport: { width: 1440, height: 900 },
@@ -48,16 +34,12 @@ test.describe('with the FKN extension installed', () => {
       await page.goto('http://localhost:4561/results?search_query=blender', { waitUntil: 'domcontentloaded' })
       await expect(page.locator('a[href^="/watch"]').first()).toBeVisible({ timeout: 90_000 })
 
-      // The content script announces itself in the page's own DOM, which is the
-      // contract every other test in the suite simulates.
       await expect(page.locator('html')).toHaveAttribute('data-fkn-extension', 'true')
 
-      // Results arrived, so egress worked; this is which path carried them.
       await expect.poll(() => egress.length, { timeout: 30_000 }).toBeGreaterThan(0)
       expect(egress.join(' ')).toContain('FKN extension')
       expect(egress.join(' ')).not.toContain('webvpn tunnel')
 
-      // And with the extension present there is nothing to offer.
       await expect(page.getByRole('button', { name: 'Faster with the extension' })).toHaveCount(0)
     } finally {
       await context.close()

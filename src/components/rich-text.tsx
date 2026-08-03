@@ -35,18 +35,7 @@ const style = css`
   }
 `
 
-/**
- * A rich text body rendered from its runs.
- *
- * `videoId` is the video the body belongs to, which is what decides whether a
- * timestamp seeks or navigates: a comment can link to a timestamp in a
- * DIFFERENT video, and that has to open it rather than jump the current one.
- *
- * `renderRun` lets a caller draw runs this component has no concept of, and
- * fall through for the rest. Live chat is the case: its custom emoji are images
- * with no meaningful text, while the words around them still want the mention,
- * link and timestamp handling below. Returning undefined defers to the default.
- */
+// a run can point at a DIFFERENT video than `videoId`, which is what decides seek vs navigate; `renderRun` returning undefined defers to the default
 export const RichText = <Run extends RichTextRun>(
   { runs, videoId, className, renderRun }: {
     runs: readonly Run[]
@@ -57,8 +46,6 @@ export const RichText = <Run extends RichTextRun>(
 ) => (
   <span css={style} className={className}>
     {runs.map((run, index) => {
-      // Runs are positional and their text repeats ('and ', ' - '), so the
-      // index is the only stable identity available.
       const key = `${index}:${run.text}`
 
       const custom = renderRun?.(run, key)
@@ -74,9 +61,6 @@ export const RichText = <Run extends RichTextRun>(
               key={key}
               className='seek'
               onClick={() => {
-                // Falls through to nothing only if the player has gone away
-                // between render and click, which a reload fixes and a thrown
-                // error would not.
                 seekTo(run.videoId!, seconds)
               }}
             >
@@ -95,8 +79,6 @@ export const RichText = <Run extends RichTextRun>(
 
       if (run.url) {
         return (
-          // noreferrer as well as noopener: these are author-supplied links and
-          // the referrer would leak which page they were followed from.
           <a key={key} href={run.url} target='_blank' rel='noreferrer noopener'>{run.text}</a>
         )
       }

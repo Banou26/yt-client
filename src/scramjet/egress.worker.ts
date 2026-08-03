@@ -8,11 +8,7 @@ import { libcurl } from 'libcurl.js/bundled'
 import { fetch as fetchWithFkn } from '@fkn/lib'
 import * as net from '@fkn/lib/net'
 
-// The node-polyfill plugin injects process/Buffer globals into the app and
-// dev-served workers, but the production worker chunk misses the injection —
-// and @fkn/lib's net Socket (Stream.Duplex polyfill) calls process.nextTick at
-// runtime, so without this every tunnel dial dies with "process is not
-// defined" (surfacing as libcurl error 7). Shim the globals explicitly.
+// the node-polyfill plugin misses the production worker chunk, so without this shim every dial dies on process.nextTick as libcurl error 7
 const workerGlobal = globalThis as Record<string, unknown>
 workerGlobal.process ??= process
 workerGlobal.Buffer ??= Buffer
@@ -224,9 +220,6 @@ const api = {
 
 void prepare()
 
-/* This worker outlives the engine now (it is owned by the app realm, not by
-   the host frame), so it has to be told when an engine goes away instead of
-   simply dying with it. */
 let enginePort: MessagePort | undefined
 
 self.addEventListener('message', (event) => {
@@ -237,9 +230,7 @@ self.addEventListener('message', (event) => {
   }
   if (event.data?.type !== EGRESS_KEY || !event.data.port) return
   const port = event.data.port as MessagePort
-  // One live engine at a time: a previous engine's port belongs to a frame
-  // that is already gone, so release it rather than stranding one osra
-  // listener per engine reset.
+  // one live engine at a time: the worker outlives the engine, so an old port strands an osra listener per reset
   enginePort?.close()
   enginePort = port
   port.start()

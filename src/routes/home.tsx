@@ -172,11 +172,8 @@ const style = css`
 const HomePage = () => {
   useDocumentTitle()
   const [chip, setChip] = useState<string>()
-  // Consumed pages carry the chip they came from, so picking another filter
-  // starts from an empty list in the same render rather than one frame later.
   const [loaded, setLoaded] = useState<{ chip?: string, pages: HomeFeedPage[] }>({ pages: [] })
-  // Continuations come back with an empty chips list, so the rail is kept in
-  // state rather than read off whichever page happens to be current.
+  // continuations come back with an empty chips list, so the rail is kept in state rather than read off the current page
   const [rail, setRail] = useState<{ chips: RailChip[], allId?: string }>({ chips: [] })
   const [arrows, setArrows] = useState({ start: false, end: false })
   const scrollerRef = useRef<HTMLDivElement>(null)
@@ -187,15 +184,8 @@ const HomePage = () => {
     variables: { chip, cursor: pages[pages.length - 1]?.cursor }
   })
 
-  // urql holds the previous result while the next request is in flight, so a
-  // page is only usable once it is known to come from the selected chip: a
-  // cursor is minted per filter and cannot page another filter's results.
+  // urql holds the previous result while the next request is in flight, so a page is only usable once it is known to come from the selected chip
   const page = operation?.variables.chip === chip ? data?.home : undefined
-  // Within one filter the same hold means the live page can repeat one already
-  // consumed, which useInfiniteFeed dedupes by id.
-  // Every page can carry a Shorts shelf, so they accumulate alongside the grid
-  // rather than being read off the first page only. Deduped the same way, since
-  // a repeated page would otherwise repeat its shelf.
   const shorts = useInfiniteFeed({
     pages: page ? [...pages, page].map(entry => ({ items: entry.shorts, cursor: entry.cursor })) : [],
     key: short => short.id,
@@ -213,11 +203,7 @@ const HomePage = () => {
         ? previous
         : {
           chips,
-          // YouTube's own rail leads with an All entry, which the unfiltered
-          // feed reports as selected. It is spotted that way rather than by
-          // label, which is localized, and dropped below so the synthetic All
-          // is not rendered twice. Only the first response can decide this: a
-          // later one also marks the applied chip selected.
+          // the rail's All entry is spotted as the selected one on the unfiltered feed, not by its localized label, and only the first response can decide it
           allId: previous.allId ?? chips.find(entry => entry.selected)?.id
         }
     ))
@@ -228,14 +214,10 @@ const HomePage = () => {
     const track = trackRef.current
     if (!scroller || !track) return
     const measure = () => {
-      // 1px of slack: fractional layout widths never land exactly on the edge.
       const start = scroller.scrollLeft > 1
       const end = scroller.scrollLeft + scroller.clientWidth < scroller.scrollWidth - 1
       setArrows(previous => previous.start === start && previous.end === end ? previous : { start, end })
     }
-    // The track is observed alongside the scroller because chips arriving and
-    // the web font landing both change the content width while leaving the
-    // scroller's own box untouched.
     const observer = new ResizeObserver(measure)
     observer.observe(scroller)
     observer.observe(track)

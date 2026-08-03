@@ -26,28 +26,10 @@ export type EgressApi = {
 export const EGRESS_KEY = 'yt-client-egress'
 export const ENGINE_READY = 'yt-client-engine-ready'
 
-/* Posted straight at the worker rather than carried on an EgressApi port,
-   because the app realm holds no port of its own: every port it opens is
-   transferred into a host frame. The worker now OUTLIVES the engine, so an
-   engine reset no longer takes its in-flight work down with it, and a failed
-   playback session would otherwise keep pulling media over the tunnel long
-   after the frame that asked for it is gone. */
 export const EGRESS_ABORT_ALL = 'yt-client-egress-abort-all'
 
-/* The host frame's boot handshake.
-
-   The host announces itself (HOST_HELLO) as soon as its script evaluates, and
-   the app answers with HOST_BOOTSTRAP carrying two ports:
-
-   - ports[0]: EgressApi, straight to the egress worker. No hop through the app
-     realm, so the hot media path is exactly as long as it was.
-   - ports[1]: the extension fetch, back into the app realm.
-
-   The second port exists because importing `@fkn/lib` ANYWHERE injects an
-   `fkn.app/api` broker iframe into that realm's document as a module-load side
-   effect. The app realm has to be the one that owns it (see platform.ts), so
-   the host frame must not import the lib at all - not even for the extension
-   path, which the content script would otherwise serve here perfectly well. */
+/* HOST_BOOTSTRAP carries two ports: ports[0] the EgressApi straight to the egress worker, ports[1] the extension fetch back into the app realm.
+   The host frame must not import `@fkn/lib` at all: importing it ANYWHERE injects an `fkn.app/api` broker iframe into that realm's document. */
 export const HOST_HELLO = 'yt-client-host-hello'
 export const HOST_BOOTSTRAP = 'yt-client-host-bootstrap'
 
@@ -66,8 +48,6 @@ export type ExtFetchRequest = {
 
 export type ExtFetchResponse = {
   id: number
-  /* null when the extension is not exposed, so the caller falls back to the
-     tunnelled transports exactly as it did when this was a local call. */
   response: TransportResponse | null
   error?: never
 } | {
@@ -100,6 +80,5 @@ export type HostControlEvent = {
 } | {
   type: typeof COOKIES_CLEARED
   id: number
-  // present when the clear failed — the caller must treat it as fatal.
   error?: string
 }

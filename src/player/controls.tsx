@@ -227,8 +227,6 @@ type ControlsProps = {
   storyboards: Storyboard[]
   quality: 'auto' | number
   onQuality: (value: 'auto' | number) => void
-  // Empty when the video publishes none, and always empty for live, which is
-  // what hides the button rather than offering one that cannot do anything.
   captionTracks: CaptionTrack[]
   caption: string | undefined
   onCaption: (trackId: string | undefined) => void
@@ -236,8 +234,6 @@ type ControlsProps = {
   onTheater: () => void
   onNext?: () => void
   visible: boolean
-  // Live has no meaningful position, duration or seek range, so the scrubber
-  // and clock are replaced rather than fed nonsense.
   isLive?: boolean
 }
 
@@ -267,8 +263,6 @@ export const PlayerControls = (
     return () => document.removeEventListener('fullscreenchange', onChange)
   }, [])
 
-  // PiP can also be entered and left from the browser's own UI, so the button
-  // state is driven by the element's events rather than by our own clicks.
   useEffect(() => {
     const sync = () => setPip(document.pictureInPictureElement === video)
     video.addEventListener('enterpictureinpicture', sync)
@@ -292,8 +286,6 @@ export const PlayerControls = (
     return Math.max(0, Math.min(1, (clientX - box.left) / box.width)) * duration
   }
 
-  // Pointer capture keeps the drag alive when the cursor leaves the rail, which
-  // is the normal way people scrub.
   const onPointerDown = (event: PointerEvent) => {
     if (duration <= 0) return
     const target = event.currentTarget as HTMLElement
@@ -302,8 +294,6 @@ export const PlayerControls = (
     setPreview(timeAt(event.clientX))
   }
 
-  // Hover tracking is separate from scrubbing so the preview follows the
-  // pointer before any button is pressed, which is when people actually use it.
   const onPointerMove = (event: PointerEvent) => {
     const rail = railRef.current
     if (rail && duration > 0) {
@@ -336,7 +326,6 @@ export const PlayerControls = (
   const toggleMute = () => {
     const muted = !video.muted
     video.muted = muted
-    // Unmuting from a zero volume is a dead click otherwise.
     if (!muted && video.volume === 0) video.volume = 0.5
     updateSettings({ muted, volume: video.volume })
   }
@@ -361,8 +350,7 @@ export const PlayerControls = (
     void video.requestPictureInPicture().catch(() => {})
   }
 
-  // Hidden rather than disabled where the browser cannot do it at all (Firefox
-  // exposes no API, and a video can opt out).
+  // hidden rather than disabled where the browser cannot do it at all (Firefox exposes no API, and a video can opt out)
   const pipSupported = document.pictureInPictureEnabled === true && !video.disablePictureInPicture
 
   const board = bestStoryboard(storyboards)
@@ -371,10 +359,7 @@ export const PlayerControls = (
   const VolumeIcon = state.muted || state.volume === 0 ? VolumeX : state.volume < 0.5 ? Volume1 : Volume2
 
   const activeCaption = captionTracks.find((track) => track.id === caption)
-  /* What the CC button turns back ON. Remembering the last pick is what makes
-     the button a toggle rather than a reset: without it, turning captions off
-     and on again would silently swap the viewer's chosen track for the
-     default one. */
+  // remembering the last pick is what makes the CC button a toggle rather than a reset
   const lastCaption = useRef<string | undefined>(undefined)
   if (caption) lastCaption.current = caption
   const toggleCaption = () => {
@@ -384,8 +369,6 @@ export const PlayerControls = (
       : preferredTrack(captionTracks, undefined)?.id
     if (restored) onCaption(restored)
   }
-  // The decoded height is what is actually on screen, which is more honest than
-  // whichever variant Shaka currently has selected.
   const activeLabel = video.videoHeight > 0 ? `${video.videoHeight}p` : undefined
 
   return (
@@ -452,10 +435,7 @@ export const PlayerControls = (
             />
           </div>
         </div>
-        {/* A live stream's presentation timeline is the stream's own clock, so
-            the position is a number like 3348:05:43 and the duration is 0. Both
-            are meaningless to a viewer, and there is no seeking to describe, so
-            the pair is replaced by the state itself. */}
+        {/* a live presentation timeline is the stream's own clock: the position reads like 3348:05:43 and the duration is 0 */}
         {isLive
           ? <span className='live-badge'>LIVE</span>
           : <span className='time'>{clock(position)} / {clock(duration)}</span>}
@@ -533,8 +513,6 @@ export const PlayerControls = (
                       <MenuItem
                         key={track.id}
                         icon={caption === track.id ? Check : undefined}
-                        // Generated tracks are named as such rather than left
-                        // to be discovered by reading them.
                         detail={track.auto ? 'auto' : undefined}
                         onSelect={() => {
                           onCaption(track.id)
@@ -589,7 +567,7 @@ export const PlayerControls = (
           )
           : undefined}
         <button type='button' className='control' aria-label='Theater mode' aria-pressed={theater} onClick={onTheater}>
-          {/* Two nested rectangles read as "wide screen" without pulling in an icon set variant. */}
+          {/* two nested rectangles read as "wide screen" */}
           <svg width='24' height='24' viewBox='0 0 24 24' aria-hidden='true' fill='none' stroke='currentColor' strokeWidth='1.8'>
             <rect x='2' y='6' width='20' height='12' rx='1.5' />
             {theater ? <rect x='6' y='9' width='12' height='6' rx='1' /> : undefined}
@@ -605,8 +583,6 @@ export const PlayerControls = (
 
 export default PlayerControls
 
-// Exported for the player shell so both agree on what counts as a text entry
-// target and never steal a key from the search box.
 export const isTypingTarget = (target: EventTarget | null) => {
   const element = target as HTMLElement | null
   return Boolean(element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.isContentEditable))

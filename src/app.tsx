@@ -13,10 +13,7 @@ import PersistentPlayer from './player/persistent-player'
 import HomePage from './routes/home'
 import { getSettings, updateSettings } from './settings'
 
-/* Every route except Home loads on demand. Home stays static because it is the
-   landing page: routing it through Suspense would put a chunk fetch in front of
-   the very first paint, which is the one navigation that has no previous page
-   to keep showing. */
+// HomePage is deliberately static while every other route is lazy: routing the landing page through Suspense would put a chunk fetch in front of the very first paint, the one navigation with no previous page to keep showing
 const ChannelPage = lazy(() => import('./routes/channel'))
 const FeedHistoryPage = lazy(() => import('./routes/feed-history'))
 const FeedPlaylistsPage = lazy(() => import('./routes/feed-playlists'))
@@ -63,33 +60,21 @@ const style = css`
 
 const BASE_TITLE = 'yt-client'
 
-// index.html ships a static <title> and nothing else writes document.title, so
-// a route owns the title while it is mounted and hands the base title back on
-// the way out. Without the restore, a route with no title of its own inherits
-// whatever the previous page left behind.
 export const useDocumentTitle = (title?: string) => {
   useEffect(() => {
     if (title === undefined) return
     document.title = `${title} - ${BASE_TITLE}`
   }, [title])
-  // Restoring on UNMOUNT only, not on every title change. A route whose title
-  // arrives with async data re-renders with it briefly absent, and a cleanup
-  // keyed on the title would race that render and leave the base title behind.
+  // restores on UNMOUNT only: a cleanup keyed on the title would race a route whose title arrives late
   useEffect(() => () => {
     document.title = BASE_TITLE
   }, [])
 }
 
-// A start time addresses a position inside the watch page rather than a
-// different page, so it is kept out of the route identity: counting it as a
-// navigation would remount the player mid-playback and jump the page to the top.
+// kept out of the route identity: a position is not a navigation, and remounting would kill playback
 const POSITION_PARAMS = ['t']
 
-/* The short being watched is a position inside the Shorts pager for exactly
-   the same reason. The pager rewrites the path as slides scroll, and that path
-   is what makes a reload land where the viewer was; but treating each rewrite
-   as a navigation would remount the pager through the keyed ErrorBoundary and
-   tear down the running player on every swipe. */
+// same for the path the Shorts pager rewrites as slides scroll
 const collapsePath = (pathname: string) =>
   pathname.startsWith('/shorts/') ? '/shorts' : pathname
 
@@ -101,10 +86,6 @@ const routeKeyOf = (pathname: string, search: string) => {
   return rest ? `${path}?${rest}` : path
 }
 
-// The path-param URLs shipped first and are linked from outside the app, so
-// they bounce to the canonical query-string form instead of being served by a
-// second copy of the page. Replacing rather than pushing keeps Back from
-// landing on the legacy URL and redirecting again.
 const LegacySearchRedirect = ({ params }: { params: { query: string } }) => (
   <Redirect to={`/results?${new URLSearchParams({ search_query: safeDecode(params.query) })}`} replace />
 )
@@ -113,14 +94,7 @@ const LegacyWatchRedirect = ({ params }: { params: { videoId: string } }) => (
   <Redirect to={`/watch?${new URLSearchParams({ v: params.videoId })}`} replace />
 )
 
-/* youtube.com addresses a channel's tabs by path (`/@blender/videos`), while
-   this client keeps them in the query string because they are a view of one
-   page rather than separate pages. Both are real URLs a reader arrives with, so
-   the path form is accepted and bounced to the canonical one.
-
-   Keyed by upstream's OWN path words, which do not all match the enum: `live`
-   is `/streams` upstream, and the home tab is `/featured`. Anything not listed
-   is a genuine 404 rather than a channel page with a dropped tab. */
+// keyed by upstream's OWN path words, which do not all match the enum: `live` is `/streams`, home is `/featured`
 const CHANNEL_TAB_PATHS: Record<string, ChannelTab> = {
   featured: 'HOME',
   videos: 'VIDEOS',
@@ -137,8 +111,6 @@ const CHANNEL_TAB_PATHS: Record<string, ChannelTab> = {
 const ChannelTabRedirect = ({ base, tab }: { base: string, tab?: string }) => {
   const mapped = CHANNEL_TAB_PATHS[safeDecode(tab ?? '').toLowerCase()]
   if (!mapped) return <p className='not-found'>Not found</p>
-  // Home is the channel's default view, so it is the bare URL rather than one
-  // carrying a redundant parameter.
   return <Redirect to={mapped === 'HOME' ? base : `${base}?${new URLSearchParams({ tab: mapped })}`} replace />
 }
 
@@ -156,8 +128,6 @@ const useMediaQuery = (query: string) => {
 
 export const App = () => {
   const [location] = useLocation()
-  // Subscribes App to the query string as well as the path: without it a move
-  // from ?v=A to ?v=B would not re-render, so nothing below would notice.
   const search = useSearch()
   const route = routeKeyOf(location, search)
   const [collapsed, setCollapsed] = useState(() => getSettings().guideCollapsed)
@@ -174,17 +144,12 @@ export const App = () => {
   const guideVariant = overlayOnly ? undefined : collapsed || narrow ? 'mini' as const : 'expanded' as const
 
   useEffect(() => {
-    // The browser only restores scroll for real document loads, and its attempt
-    // lands before a client-rendered page has any height, so own it here.
     history.scrollRestoration = 'manual'
     const onScroll = () => offsets.current.set(currentRoute.current, scrollY)
     const onPopState = () => {
       wentBack.current = true
     }
-    // wouter patches history.pushState to dispatch this event, and it is the
-    // counterpart to popstate: clearing the flag on every push keeps it
-    // describing the last navigation even when that navigation left the route
-    // key alone and the effect below never ran.
+    // wouter patches history.pushState to dispatch this nonstandard event, the counterpart to popstate
     const onPushState = () => {
       wentBack.current = false
     }
@@ -198,22 +163,16 @@ export const App = () => {
     }
   }, [])
 
-  // Before paint, so the new page never flashes at the outgoing page's offset.
   useLayoutEffect(() => {
     if (currentRoute.current === route) return
     currentRoute.current = route
     setDrawerOpen(false)
-    // Back and forward return to a page that was already read, so they land
-    // where it was left. Every other navigation opens a page for the first time
-    // and starts at the top, the way a fresh document load would.
     const restored = wentBack.current ? offsets.current.get(route) : undefined
     wentBack.current = false
     scrollTo(0, restored ?? 0)
   }, [route])
 
   const onMenu = useCallback(() => {
-    // overlay-only routes (watch, signin) have no in-flow guide, and narrow
-    // widths force the mini rail: all open the overlay drawer instead.
     if (overlayOnly || narrow) {
       setDrawerOpen(open => !open)
       return
@@ -227,23 +186,13 @@ export const App = () => {
       <div className='content'>
         {guideVariant ? <Guide variant={guideVariant} /> : undefined}
         <div className={guideVariant ? `page guide-${guideVariant}` : 'page'}>
-          {/* Keyed on the route so navigating away from a failed page clears
-              the error instead of pinning the whole app to it. */}
-          {/* A chunk that fails to load (a stale deploy, a dropped
-              connection) throws into the boundary above rather than blanking
-              the page. */}
           <ErrorBoundary key={route}>
             <Suspense fallback={<div className='route-loading' />}>
             <Switch>
               <Route path='/' component={HomePage} />
               <Route path='/results' component={SearchPage} />
               <Route path='/watch' component={WatchPage} />
-              {/* No path param: the playlist and the position live in the query
-                  string, matching youtube.com. */}
               <Route path='/playlist' component={PlaylistPage} />
-              {/* Both forms are real routes rather than one redirecting to the
-                  other: /shorts is the feed entry and /shorts/:videoId is a
-                  deep link into it, and the pager rewrites the path as it goes. */}
               <Route path='/shorts' component={ShortsPage} />
               <Route path='/shorts/:videoId' component={ShortsPage} />
               <Route path='/feed/subscriptions' component={FeedSubscriptionsPage} />
@@ -255,26 +204,13 @@ export const App = () => {
               <Route path='/signin' component={SignInPage} />
               <Route path='/search/:query' component={LegacySearchRedirect} />
               <Route path='/watch/:videoId' component={LegacyWatchRedirect} />
-              {/* `/@handle`, the channel URL youtube.com hands out today, which
-                  a reader following a link from outside the app arrives with.
-                  Wouter's parser does not accept a literal prefix before a param
-                  inside one segment, so `/@:handle` silently never matches and
-                  such a link landed on Not found. Claim the whole segment and
-                  keep it only when it is a handle: every real single-segment
-                  route is declared above, and Switch takes the first match, so
-                  this can only ever see paths nothing else wanted.
-
-                  The source resolves the handle itself (it detects the leading
-                  `@` and spends one resolveURL round trip), so it is passed
-                  through rather than resolved here. */}
+              {/* claims the whole segment because wouter's parser never matches `/@:handle`, so it MUST stay declared after every real single-segment route: Switch takes the first match, and this can then only see paths nothing else wanted */}
               <Route path='/:segment'>
                 {(params: { segment?: string }) => params.segment?.startsWith('@')
                   ? <ChannelPage params={{ handle: params.segment.slice(1) }} />
                   : <p className='not-found'>Not found</p>}
               </Route>
-              {/* The tab-by-path forms, which have to be declared before the
-                  generic two-segment route below or it would answer them with
-                  Not found. */}
+              {/* MUST stay before the generic two-segment route below, which would answer with Not found */}
               <Route path='/channel/:channelId/:tab'>
                 {(params: { channelId?: string, tab?: string }) => (
                   <ChannelTabRedirect base={`/channel/${params.channelId ?? ''}`} tab={params.tab} />
@@ -294,8 +230,7 @@ export const App = () => {
         </div>
       </div>
       {(overlayOnly || narrow) && drawerOpen ? <Guide variant='drawer' onClose={() => setDrawerOpen(false)} /> : undefined}
-      {/* Outside the <Switch> on purpose: this is the one thing on the page
-          that has to survive a route change. */}
+      {/* outside the <Switch> on purpose: the one thing that has to survive a route change */}
       <PersistentPlayer />
     </div>
   )

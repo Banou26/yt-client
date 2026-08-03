@@ -19,22 +19,13 @@ jobs:
       # TypeScript 7 needs legacy peer resolution here, matching .npmrc.
       - run: npm ci --legacy-peer-deps
 
-      # Runs graphql-codegen first, so a schema change that outgrows the
-      # hand-written Source types fails here rather than at runtime. The
-      # SOURCE_METHODS / FRAME_METHODS exhaustiveness guards and the
-      # SOURCE_REPLAY classification are compile-time only, so this job is what
-      # actually enforces them.
+      # Runs graphql-codegen first, and this job is what actually ENFORCES the SOURCE_METHODS / FRAME_METHODS
+      # exhaustiveness guards and the SOURCE_REPLAY classification: they are compile-time only and fail nowhere else.
       - run: npm run type-check
 
       - run: npm test
 
-      # oxlint was configured in vite.config.ts from the start but nothing ever
-      # ran it, so the rules were decoration. It catches the class of bug the
-      # type-checker cannot see: an expression whose result is discarded, a
-      # handler that is imported and never wired, a comment describing code that
-      # was deleted.
       - run: npm run lint
 
-      # Includes the separate frame bundle, which has no HMR and is easy to
-      # leave stale after a src/frame change.
+      # Kept because it includes the separate frame bundle, which has no HMR and is easy to leave stale after a src/frame change.
       - run: npm run build

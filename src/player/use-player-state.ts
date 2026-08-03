@@ -32,8 +32,6 @@ const read = (video: HTMLVideoElement, buffering: boolean): PlayerState => ({
   paused: video.paused,
   ended: video.ended,
   currentTime: video.currentTime,
-  // A SABR session reports duration through the manifest, but a not-yet-loaded
-  // element reports NaN, which would render as "NaN:NaN".
   duration: Number.isFinite(video.duration) ? video.duration : 0,
   buffered: video.buffered.length > 0 ? video.buffered.end(video.buffered.length - 1) : 0,
   volume: video.volume,
@@ -43,9 +41,7 @@ const read = (video: HTMLVideoElement, buffering: boolean): PlayerState => ({
   seeking: video.seeking,
 })
 
-// timeupdate fires about four times a second, which is too coarse for a
-// scrubber that should track the playhead smoothly, so position comes off the
-// animation frame while the discrete state changes stay event driven.
+// timeupdate fires about four times a second, too coarse to track the playhead smoothly
 export const usePlayerState = (video: HTMLVideoElement | null, player: shaka.Player | undefined) => {
   const [state, setState] = useState<PlayerState>(EMPTY)
 
@@ -59,7 +55,6 @@ export const usePlayerState = (video: HTMLVideoElement | null, player: shaka.Pla
 
     const tick = () => {
       if (!running) return
-      // Only re-render while something is actually moving.
       if (!video.paused || video.seeking) sync()
       frame = requestAnimationFrame(tick)
     }

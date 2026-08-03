@@ -78,8 +78,6 @@ const style = css`
 
 const copy = (value: string) => {
   const clipboard = navigator.clipboard
-  // writeText rejects on a denied permission as well as on a non-secure
-  // context, and a silent failure is indistinguishable from a copy.
   if (!clipboard) {
     showToast('Could not copy the link')
     return
@@ -90,13 +88,7 @@ const copy = (value: string) => {
   )
 }
 
-/**
- * The share sheet for one video.
- *
- * The start-at offset is read ONCE, when the dialog opens, rather than tracked:
- * a checkbox that kept moving with playback would mean the link copied is not
- * the one the reader saw.
- */
+// the start-at offset is read ONCE, when the dialog opens: an offset that kept moving with playback would copy a link the reader never saw
 export const ShareDialog = (
   { videoId, list, onClose }: { videoId: string, list?: string, onClose: () => void },
 ) => {
@@ -104,8 +96,6 @@ export const ShareDialog = (
   const [useStart, setUseStart] = useState(false)
 
   const params = new URLSearchParams({ v: videoId })
-  // A shared link carries the playlist only when the reader was actually inside
-  // one, so sharing from a plain watch page never hands over a queue.
   if (list) params.set('list', list)
   if (useStart && startAt !== undefined) params.set('t', String(startAt))
   const url = `${location.origin}/watch?${params}`

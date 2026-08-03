@@ -80,14 +80,9 @@ export const Dialog = (
   const panelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    // Restore focus to whatever opened the dialog: the trigger is usually gone
-    // from the tab order by the time this unmounts otherwise.
     const previous = document.activeElement as HTMLElement | null
     const panel = panelRef.current
-    /* Not `first?.focus() ?? panel?.focus()`: focus() returns undefined, so `??`
-       always evaluated its right side too and the panel took focus straight back
-       off the control that had just received it. Opening a dialog left focus on
-       the panel every time, so the first control was never the one focused. */
+    // Not `first?.focus() ?? panel?.focus()`: focus() returns undefined, so `??` always evaluated its right side too
     const first = panel?.querySelector<HTMLElement>(FOCUSABLE)
     if (first) first.focus()
     else panel?.focus()
@@ -100,8 +95,6 @@ export const Dialog = (
         return
       }
       if (event.key !== 'Tab' || !panel) return
-      // A modal that lets Tab escape into the page behind the scrim is worse
-      // than no trap at all, so the cycle is closed explicitly.
       const focusable = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)]
       if (focusable.length === 0) return
       const first = focusable[0]!

@@ -45,9 +45,7 @@ const MARK_READ = gql(`
   }
 `)
 
-/* Every poll is a tunneled round trip on EVERY page, so this is deliberately
-   slow. The panel itself fetches on open, which is the only moment a precise
-   count matters; the badge just has to be roughly right. */
+// Every poll is a tunneled round trip on EVERY page, so this is deliberately slow
 const POLL_MS = 5 * 60_000
 
 const style = css`
@@ -167,8 +165,6 @@ export const NotificationsMenu = () => {
 
   useEffect(() => {
     if (!ready || !signedIn) return
-    // Paused while the tab is hidden: a backgrounded tab polling every five
-    // minutes forever is a round trip nobody is waiting for.
     const tick = () => {
       if (!document.hidden) refetchCount({ requestPolicy: 'network-only' })
     }
@@ -183,7 +179,6 @@ export const NotificationsMenu = () => {
   const [{ data, error, fetching }] = useQuery({
     query: NOTIFICATIONS_QUERY,
     variables: { cursor: loaded[loaded.length - 1]?.cursor },
-    // The list costs a round trip and is only worth it once the panel is open.
     pause: !open || !ready || !signedIn,
   })
   const page = data?.notifications

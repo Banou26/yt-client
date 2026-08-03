@@ -36,10 +36,6 @@ const RATE_VIDEO = gql(`
   }
 `)
 
-// one /next round trip serves the whole page (title included). The /player
-// data rides in with the playback path already, so no video(id) query here.
-// The queue rides in on that same call: passing `playlistId` is what makes
-// upstream return the playlist panel, so there is no second round trip for it.
 const WATCH_META_QUERY = gql(`
   query WatchMeta($id: ID!, $playlistId: ID, $playlistIndex: Int) {
     watch(id: $id, playlistId: $playlistId, playlistIndex: $playlistIndex) {
@@ -85,8 +81,6 @@ const WATCH_META_QUERY = gql(`
   }
 `)
 
-/* Grid rather than flex so theater mode is a placement change: the player keeps
-   its DOM position and only spans differently. */
 const style = css`
   display: grid;
   grid-template-columns: minmax(0, 128rem) 40.2rem;
@@ -365,88 +359,46 @@ type RelatedPage = RelatedVideosQuery['relatedVideos']
 
 const RELATED_SKELETON_KEYS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 
-// /watch carries the id in the query string, matching youtube.com, so a pasted
-// link works. wouter's useSearch keeps the leading '?', which URLSearchParams
-// accepts. Nothing here is a path param any more, and reading one would yield
-// undefined silently: wouter checks the component prop bivariantly, so the
-// compiler would not object.
 const WatchPage = () => {
   const params = new URLSearchParams(useSearch())
   const videoId = params.get('v') ?? ''
   prefetchPlayback(videoId)
-  // The queue context, exactly as youtube.com spells it. `list` is the playlist
-  // id; `index` is 1-BASED there (index=1 is the first entry) while the schema
-  // takes a 0-based `playlistIndex`, so it is shifted here. Anything that is not
-  // a whole position is dropped rather than forwarded: upstream clamps an
-  // out-of-range index, but a NaN would serialize as null and lose a position
-  // that the URL actually carried.
+  // `index` is 1-BASED in the URL, matching youtube.com, while the schema takes a 0-based `playlistIndex`
   const listId = params.get('list') ?? undefined
-  // A shared link can carry a start offset. app.tsx deliberately keeps `t` out
-  // of the route identity, so changing it does NOT remount the player: this is
-  // the position a FRESH load of the page starts at.
+  // app.tsx keeps `t` out of the route identity, so changing it does NOT remount the player
   const startAt = parseStartSeconds(params.get('t'))
   const indexParam = Number(params.get('index'))
   const playlistIndex = Number.isInteger(indexParam) && indexParam > 0 ? indexParam - 1 : undefined
   const [{ data: watchData, error: watchError, fetching: watchFetching }] = useQuery({
     query: WATCH_META_QUERY,
-    // Both are undefined without a `list`, which the resolver reads as "no
-    // queue" and graphcache leaves out of the field key entirely, so a plain
-    // watch URL resolves to the same field it did before the queue existed.
     variables: { id: videoId, playlistId: listId, playlistIndex },
-    // WatchMeta is keyed by video id and WatchPlaylist is embedded in it, so
-    // every argument set for one video shares a single `playlist` slot: a plain
-    // ?v= read writes null over it, and a read from another queue writes that
-    // queue's panel. Under cache-first the stale slot would be served straight
-    // back. Revalidating keeps the cached render instant while making the panel
-    // converge on the queue the URL actually asked for.
+    // load-bearing: WatchMeta is keyed by video id and WatchPlaylist is embedded in it, so every argument set for one video shares a single `playlist` slot (a plain ?v= read writes null over it, a read from another queue writes that queue's panel), and cache-first would serve the stale slot straight back
     requestPolicy: 'cache-and-network',
     pause: videoId === ''
   })
   const [, navigate] = useLocation()
   const [rateState, rateVideo] = useMutation(RATE_VIDEO)
-  /* Theater belongs to the player, and the player now lives above the router,
-     so the persisted preference is pushed into the session rather than held
-     here. Reading it here as well keeps the layout in step: `.theater` is a
-     class on this page's grid, not on the player. */
   const playerSession = usePlayerSession()
   const theater = playerSession.theater
   const toggleTheater = useCallback(() => {
     setPlayerTheater(updateSettings({ theater: !getSettings().theater }).theater)
   }, [])
 
-  // A new video means a new sidebar: its pages and its cursor both belong to
-  // the video that produced them.
   useEffect(() => {
     setRelatedPages([])
     setWantMoreRelated(false)
   }, [videoId])
-  // The share sheet closes when the video changes: it is about the video it was
-  // opened over, and leaving it up would copy a link to a different one.
   useEffect(() => setSharing(false), [videoId])
 
   const watch = watchData?.watch
   useDocumentTitle(watch?.title ?? undefined)
   const channel = watch?.channel
 
-  /* Opening is deliberately NOT gated on the watch query. Playback starts from
-     the id alone, and waiting for /next would add a tunneled round trip to
-     every first frame. The title arrives later and is folded in then, because
-     the dock needs it once this page unmounts.
-
-     Liveness used to close the player here, back when a live video could only
-     fail. Live plays over SABR now, so there is nothing to close and `isLive`
-     is not part of this decision. */
   useEffect(() => {
     if (videoId === '') return
     openPlayer({ videoId, startAt, title: watch?.title ?? undefined })
   }, [videoId, startAt, watch?.title])
-  // Annotated rather than inferred so the two selections above are checked
-  // against the contracts the components actually publish, which is the only
-  // place that mismatch can be caught: a field dropped from the document would
-  // otherwise surface as an undefined at runtime.
-  /* The sidebar pages from its own cursor rather than the watch query, so
-     loading more never re-runs /next: that call also drives the player's page
-     data, and re-executing it would restart the whole watch. */
+  // the sidebar pages from its own cursor: re-running /next would restart the whole watch
   const [wantMoreRelated, setWantMoreRelated] = useState(false)
   const [relatedPages, setRelatedPages] = useState<RelatedPage[]>([])
   const relatedCursor = relatedPages[relatedPages.length - 1]?.cursor ?? watch?.relatedCursor
@@ -460,24 +412,13 @@ const WatchPage = () => {
     ? [...watch.related, ...relatedPages.flatMap(entry => entry.items)]
       .filter((video, index, all) => all.findIndex(other => other.id === video.id) === index)
     : undefined
-  /* Gated on the URL, not just on the response. WatchMeta is keyed by video id
-     in graphcache and WatchPlaylist is embedded in it, so watching a video
-     inside a queue writes the panel onto the same entity a plain ?v= read links
-     to: without this the queue would reappear on a bare watch URL for any video
-     already opened from a playlist. Requirement is that no-list renders exactly
-     as before, and only the URL can answer whether a queue was asked for.
-     Matched on id as well: that shared slot can still be holding another
-     queue's panel from an earlier read of this same video, and rendering it
-     would navigate the viewer into a playlist they never opened. */
+  // gated on the URL: WatchMeta is keyed by video id, so its one `playlist` slot can hold another queue's panel
   const playlist: PlaylistPanelData | undefined =
     listId === undefined || watch?.playlist?.id !== listId ? undefined : watch.playlist
-  // The rating now comes back with the video rather than living in component
-  // state, so it survives navigation and reflects what the account already did.
   const liked = watch?.likeStatus === 'LIKE'
   const disliked = watch?.likeStatus === 'DISLIKE'
 
   const rate = (status: 'LIKE' | 'DISLIKE') => {
-    // Absent (rather than INDIFFERENT) is what a signed-out read looks like.
     if (!watch?.likeStatus) {
       navigate('/signin')
       return
@@ -488,20 +429,12 @@ const WatchPage = () => {
     })
   }
 
-  // Replaces a bare clipboard write with a real sheet: the old control could
-  // only copy the current URL, so sharing from a position or embedding was not
-  // reachable at all.
   const [sharing, setSharing] = useState(false)
 
   return (
     <main css={style} className={theater ? 'theater' : undefined}>
-      {/* The player stays in one place in the DOM across theater toggles: moving
-          it to another parent would remount it and restart playback. Only the
-          grid placement of .stage changes. */}
       <div className='stage'>
-        {/* The player is NOT mounted here. It lives above the router, and this
-            slot only says where to show it, so leaving the page moves it to the
-            miniplayer dock instead of destroying its SABR session. */}
+        {/* The player is NOT mounted here: it lives above the router, so leaving the page docks it rather than destroying its SABR session */}
         <div className='player-slot' ref={claimPlayer} />
       </div>
       <div className='primary'>
@@ -558,11 +491,7 @@ const WatchPage = () => {
                   <Share2 size={20} strokeWidth={1.5} />
                   Share
                 </button>
-                {/* Save owns a trigger and a panel of its own, so it sits beside
-                    Share rather than inside the More menu: menu.tsx finds its
-                    rows with one DOM query rooted at the wrapper, so a menu
-                    nested in a menu would hand the outer panel the inner
-                    panel's rows to navigate. */}
+                {/* Save sits beside Share rather than inside the More menu: menu.tsx finds its rows with one DOM query rooted at the wrapper */}
                 <SaveMenu videoId={videoId} />
                 <Menu
                   label='More actions'
@@ -572,19 +501,10 @@ const WatchPage = () => {
                     </button>
                   }
                 >
-                  {/* Only rows that do something. YouTube's own overflow menu
-                      also offers Report, Transcript and Show clip; none of the
-                      three has a mutation or a query behind it here, and a row
-                      that opens nothing is worse than an absent one. */}
                   <MenuItem icon={Link2} label='Share' onSelect={() => setSharing(true)} />
-                  {/* No icon: a checkable row draws the tick box in the icon
-                      slot, so one passed here would never be rendered. */}
                   <MenuItem
                     label='Theater mode'
                     checked={theater}
-                    // Checkable rows keep the panel up by default, which is
-                    // right for ticking several playlists but wrong here: the
-                    // change is behind the panel that would stay over it.
                     closeOnSelect
                     onSelect={toggleTheater}
                   />
@@ -605,21 +525,14 @@ const WatchPage = () => {
             />
           )
           : undefined}
-        {/* mount after the /next answer so the comments call never contends with startup */}
         {!watchFetching
           ? <Comments key={`comments:${videoId}`} videoId={videoId} commentCountText={watch?.commentCountText} />
           : undefined}
       </div>
-      {/* `playlist` only widens this condition when the URL carried a list, so
-          the no-queue page keeps rendering (and not rendering) the column on
-          exactly the terms it did before. */}
       {watchFetching || playlist || watch?.isLive || (related && related.length > 0)
         ? (
           <aside className='secondary'>
             {playlist ? <PlaylistPanel playlist={playlist} /> : undefined}
-            {/* Above the related rail, the way upstream places it, and keyed on
-                the video so switching streams starts a new transcript rather
-                than appending to the previous one. */}
             {watch?.isLive ? <LiveChat key={`chat:${videoId}`} videoId={videoId} /> : undefined}
             {related
               ? related.map(item => <VideoCardCompact key={item.id} video={item} />)

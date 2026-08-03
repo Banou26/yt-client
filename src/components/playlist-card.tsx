@@ -6,13 +6,6 @@ import { Link } from 'wouter'
 
 import { playlistHrefFor, restrictedPrivacyIcon } from './playlist'
 
-/* One playlist card, styles included.
-
-   Self-contained rather than styled by whichever page renders it: the card used
-   to live inside the library route's own `css` block, so a second surface that
-   needed it had to either copy the markup or inherit class names from a parent
-   it does not control. The channel Playlists tab is that second surface. */
-
 export const playlistCardStyle = css`
   display: flex;
   flex-direction: column;
@@ -100,13 +93,10 @@ export const PlaylistCard = (
     fallbackIcon?: PlaylistIcon
   },
 ) => {
-  // A card list is mostly public playlists, so PUBLIC stays bare here and only
-  // a restricted visibility earns the icon.
   const Privacy = restrictedPrivacyIcon(privacy)
   const meta = [channelName, updatedText].filter(part => part !== undefined && part !== null && part !== '')
   return (
-    // One link over the whole card: a channel link nested inside it would be an
-    // anchor inside an anchor, which the parser flattens.
+    // One link over the whole card: an anchor inside an anchor gets flattened
     <Link href={playlistHrefFor(id)} css={playlistCardStyle} className='card'>
       <div className='cover'>
         {thumbnail

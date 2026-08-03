@@ -105,21 +105,14 @@ const SignInPage = () => {
     let active = true
     setLoaded(false)
     setError(undefined)
-    // Fallback: reveal the frame after a max wait even if the loaded signal
-    // never arrives (e.g. a page that renders slowly or oddly through the
-    // proxy), so the user is never stranded on an endless spinner. The loaded
-    // signal now waits for the Google auth page (the youtube.com entry hop
-    // stays covered), so the budget spans both navigations.
     const revealTimer = setTimeout(() => { if (active) setLoaded(true) }, 20000)
     void openSignIn({ onLoaded: () => { if (active) setLoaded(true) } })
       .then(async () => {
         if (!active) return
-        // Full reload picks up the authenticated jar with clean identity state.
         await (await startEngine()).resetIdentity().catch(() => {})
         location.assign('/')
       })
       .catch((cause: Error) => {
-        // deliberate closes (cancel/unmount) keep quiet; genuine failures surface.
         if (!active || /sign-in (closed|restarted)/.test(String(cause?.message))) return
         setError(String(cause?.message ?? cause))
       })

@@ -24,9 +24,6 @@ export const dismissToast = (id: number) => {
   publish()
 }
 
-// A module-level queue rather than a context provider: the callers are mutation
-// handlers and event listeners as often as components, and they should not each
-// have to reach a hook to say "Saved to Watch later".
 export const showToast = (message: string, action?: Toast['action']) => {
   const id = ++nextId
   toasts = [...toasts, { id, message, action }]

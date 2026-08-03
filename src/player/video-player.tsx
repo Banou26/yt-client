@@ -2,8 +2,7 @@ import type shaka from 'shaka-player'
 
 import type { CaptionTrack, Storyboard } from '../frame/protocol'
 
-// Type-only, so it is erased at build and adds no runtime edge back to the
-// chunk this file deliberately loads on demand.
+// must stay type-only: a value import puts the on-demand shaka chunk back in the entry
 import type { startShakaPlayback } from './shaka'
 
 import { LIVE_UNSUPPORTED } from '../frame/protocol'
@@ -104,10 +103,6 @@ const requestPlayerFullscreen = (video: HTMLVideoElement | null) => {
 const VideoPlayer = (
   { videoId, startAt, theater = false, onTheater }: {
     videoId: string
-    // Where a fresh load starts, from a shared link's `t`. Only the INITIAL
-    // value is used: after that this ref tracks the live playhead so a retry
-    // resumes where playback failed rather than jumping back to the link's
-    // offset.
     startAt?: number
     theater?: boolean
     onTheater?: () => void
@@ -134,10 +129,7 @@ const VideoPlayer = (
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
-    // Applied to the fresh element BEFORE playback starts, so the autoplay
-    // attempt happens at the viewer's real volume. Doing it after startup meant
-    // play() was attempted at the default volume of 1, and the browser's
-    // block-then-mute fallback made a restored volume look like it was lost.
+    // applied BEFORE playback starts, or autoplay is attempted at volume 1 and the browser's block-then-mute fallback loses the stored volume
     const audio = getSettings()
     video.volume = audio.volume
     video.muted = audio.muted
@@ -145,14 +137,9 @@ const VideoPlayer = (
     const abort = new AbortController()
     let controller: Awaited<ReturnType<typeof startShakaPlayback>> | undefined
     let retryTimer: ReturnType<typeof setTimeout> | undefined
-    // On failure, capture the playhead and remount (key=attempt) so the retry
-    // resumes in place; engine-level failures (youtube:) rebuild the scramjet
-    // engine first. Bounded to 3 attempts.
     const restart = (error: unknown) => {
       if (abort.signal.aborted || retryTimer !== undefined) return
       resumeAt.current = video.currentTime || resumeAt.current
-      // A refusal that cannot succeed is reported once rather than retried
-      // three times over four seconds.
       const terminal = error instanceof Error && error.message === LIVE_UNSUPPORTED
       if (terminal || attempt >= 3) {
         void controller?.destroy()
@@ -167,16 +154,10 @@ const VideoPlayer = (
           if (engineFailure) resetEngine()
           setAttempt((value) => value + 1)
         }
-        // A fast first retry only when the engine is kept: engine rebuilds are
-        // heavy and deserve the old backoff.
       }, attempt === 0 && !engineFailure ? 100 : 1_000)
     }
     setStatus('Loading player')
     void (async () => {
-      // Imported here rather than at the top so Shaka stays out of the entry
-      // chunk. `warmShaka` has normally already resolved this, so it is a
-      // registry hit; the await is what makes a cold path correct rather than
-      // fast.
       const [api, { startShakaPlayback }] = await Promise.all([startEngine(), warmShaka()])
       controller = await startShakaPlayback({
         api,
@@ -188,8 +169,6 @@ const VideoPlayer = (
       })
       if (abort.signal.aborted) return
       setStatus('')
-      // Published for the description and comment timestamps, which sit outside
-      // this subtree and cannot reach the element any other way.
       registerSeek(
         videoId,
         (seconds) => {
@@ -205,22 +184,13 @@ const VideoPlayer = (
       selectQualityRef.current = controller.selectQuality
       setCaptionTracks(controller.captionTracks)
       selectCaptionRef.current = controller.selectCaption
-      // A stored preference has to be reapplied per video, once this session's
-      // formats exist, or every new video silently reverts to auto.
       const stored = getSettings().quality
       if (stored !== 'auto') void controller.selectQuality(stored).catch(() => {})
-      /* Captions follow the same rule, resolved per video because the stored
-         preference is a LANGUAGE while a track id is only meaningful inside one
-         video. A video that publishes nothing in that language shows none,
-         rather than falling back to a language nobody asked for. */
       const subtitles = getSettings()
       const wanted = subtitles.captionsEnabled
         ? preferredTrack(controller.captionTracks, subtitles.captionsLanguage)
         : undefined
       setCaption(wanted?.id)
-      // Reverted silently when the cues do not arrive: this ran because of a
-      // stored preference rather than a click, so there is nothing to report
-      // back to a viewer who did not ask for anything yet.
       if (wanted) {
         void controller.selectCaption(wanted.id).catch(() => {
           setCaption((current) => (current === wanted.id ? undefined : current))
@@ -248,10 +218,7 @@ const VideoPlayer = (
     void selectQualityRef.current?.(value).catch(() => {})
   }, [])
 
-  /* Stores the LANGUAGE rather than the track id, since ids are per video and
-     the next video would not recognize one. Turning captions off is a
-     preference in its own right, so it clears the enabled flag rather than
-     leaving it set with nothing selected. */
+  // stores the LANGUAGE rather than the track id, since ids are per video and the next video would not recognize one
   const applyCaption = useCallback((trackId: string | undefined) => {
     setCaption(trackId)
     const picked = captionTracks.find((track) => track.id === trackId)
@@ -259,9 +226,6 @@ const VideoPlayer = (
       ? { captionsEnabled: true, captionsLanguage: picked.languageCode }
       : { captionsEnabled: false })
     void selectCaptionRef.current?.(trackId).catch(() => {
-      /* A track whose cues never arrive is not showing, and the control must
-         not go on claiming it is. Reverted only if the viewer has not picked
-         something else since, so a slow failure cannot undo a later choice. */
       if (!trackId) return
       setCaption((current) => (current === trackId ? undefined : current))
       showToast('Subtitles are not available for this video right now')
@@ -283,8 +247,6 @@ const VideoPlayer = (
       video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + delta))
     }
     const onKeyDown = (event: KeyboardEvent) => {
-      // The header binds '/' to focus search, so a player shortcut must never
-      // fire while the user is typing.
       if (event.defaultPrevented || isTypingTarget(event.target)) return
       if (event.ctrlKey || event.metaKey || event.altKey) return
       const key = event.key
@@ -329,7 +291,6 @@ const VideoPlayer = (
         case 'Home': handled(); video.currentTime = 0; return
         case 'End': handled(); video.currentTime = video.duration || 0; return
         default:
-          // 0-9 jump to that tenth of the video, matching youtube.com.
           if (/^[0-9]$/.test(key) && Number.isFinite(video.duration)) {
             handled()
             video.currentTime = (video.duration * Number(key)) / 10

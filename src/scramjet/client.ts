@@ -13,8 +13,6 @@ let engineReject: ((error: Error) => void) | undefined
 let engineGeneration = 0
 let engineControl: MessagePort | undefined
 let signInPending: { resolve: () => void, reject: (error: Error) => void, onStatus?: (signedIn: boolean) => void, onLoaded?: () => void } | undefined
-// bumped by closeSignIn so an openSignIn parked on startEngine() bails instead
-// of raising an orphaned overlay after the user has navigated away.
 let signInGeneration = 0
 let controlRequestId = 0
 const CONTROL_TIMEOUT_MS = 15_000
@@ -96,8 +94,6 @@ const createFrameApi = (port: MessagePort, onFatal: (error: Error) => void) => {
   })
 
   return {
-    // Every method forwards identically, so the surface is assembled from the
-    // shared name list: a new frame method needs no edit here.
     api: Object.fromEntries(
       FRAME_METHODS.map((method) => [method, (...args: unknown[]) => call(method, args)]),
     ) as FrameApi,
@@ -108,9 +104,7 @@ const createFrameApi = (port: MessagePort, onFatal: (error: Error) => void) => {
 const showHostFrame = () => {
   if (!engineFrame) return
   engineFrame.hidden = false
-  // An iframe is a replaced element: inset offsets don't stretch it (it falls
-  // back to the intrinsic 300x150), so size it explicitly. The header-height
-  // token keeps it in step with the real header under font scaling.
+  // an iframe is a replaced element: inset offsets don't stretch it (it falls back to the intrinsic 300x150), so size it explicitly
   engineFrame.style.cssText = 'position: fixed; top: var(--header-height); left: 0; width: 100vw; height: calc(100vh - var(--header-height)); border: 0; z-index: var(--z-host-frame); background: var(--bg-base);'
 }
 
@@ -150,10 +144,7 @@ const connectControl = (port: MessagePort) => {
 
 const invalidateEngine = (generation: number, error: Error) => {
   if (generation !== engineGeneration) return
-  /* The egress worker outlives the engine now, so its in-flight work has to be
-     dropped explicitly. It used to die with the host frame, and an invalidation
-     is usually a playback failure: exactly when a dead session's media fetches
-     must stop occupying the tunnel. */
+  // the egress worker outlives the engine, so its in-flight work has to be dropped explicitly
   abortPlatformEgress()
   engineCleanup?.()
   engineCleanup = undefined
@@ -178,24 +169,14 @@ export const startEngine = () => {
   const generation = ++engineGeneration
   engine = new Promise((resolve, reject) => {
     engineReject = reject
-    /* Started alongside the host frame rather than on its hello, so the broker
-       and relay come up while the frame is still booting - the same overlap the
-       host had when it owned them. Memoized, so this is a no-op after the first
-       engine. */
     const platformReady = startPlatform()
-    // answerHello is the real handler; this only keeps a platform failure from
-    // surfacing as an unhandled rejection when the engine is invalidated before
-    // the host ever says hello.
+    // answerHello is the real handler; this only keeps a platform failure from surfacing as an unhandled rejection
     platformReady.catch(() => {})
 
     const frame = document.createElement('iframe')
     engineFrame = frame
     frame.hidden = true
     frame.src = '/__yt_scramjet__/host.html'
-    /* The host frame builds no egress of its own: it announces itself and this
-       realm hands it a port to the egress worker plus a port back to the
-       extension fetch. Both are opened fresh per engine, so a reset cannot
-       leave the new frame holding a dead peer's channel. */
     const answerHello = async () => {
       try {
         const platform = await platformReady
@@ -252,9 +233,7 @@ export const resetEngine = () => invalidateEngine(engineGeneration, new Error('y
 export const openSignIn = async (
   { onStatus, onLoaded }: { onStatus?: (signedIn: boolean) => void, onLoaded?: () => void } = {},
 ) => {
-  // capture the generation BEFORE the engine await: a closeSignIn issued while
-  // the engine is still booting must cancel this open instead of letting it
-  // raise the overlay over whatever route the user navigated to.
+  // capture the generation BEFORE the engine await, so a closeSignIn issued while the engine is still booting cancels this open
   const generation = ++signInGeneration
   await startEngine()
   if (generation !== signInGeneration) throw new Error('yt-client: sign-in closed')
@@ -281,8 +260,6 @@ export const clearSessionCookies = async () => {
   if (!control) throw new Error('yt-client: engine host control is missing')
   const id = ++controlRequestId
   await new Promise<void>((resolve, reject) => {
-    // the ack carries no payload, so a dead host must surface as an error
-    // rather than an eternal await — sign-out treats failure as fatal.
     const timeout = setTimeout(() => {
       clearPending.delete(id)
       reject(new Error('yt-client: clearing session cookies timed out'))

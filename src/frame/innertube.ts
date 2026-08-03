@@ -19,8 +19,6 @@ export { GVS_ORIGIN_KEY }
 
 type YoutubeFormat = {
   itag: number
-  // Live only. `target_duration_dec` is the parsed spelling of the raw
-  // response's targetDurationSec.
   target_duration_dec?: number
   width?: number
   height?: number
@@ -56,22 +54,9 @@ const FALLBACK_CLIENT_VERSION = '2.20260618.05.00'
 
 ;(Constants as unknown as { CLIENTS: { WEB: { VERSION: string } } }).CLIENTS.WEB.VERSION = FALLBACK_CLIENT_VERSION
 
-/* Runs the extracted player script, which is how a stream URL's `n` and `sig`
-   parameters get descrambled. A shim is needed at all because youtubei.js's
-   default one reaches for a VM this realm does not have.
-
-   The whole body is what youtubei.js already built. Player.decipher appends its
-   own processor to `data.output`, ending in `return process(n, sp, s)` with the
-   values baked in, so this function only has to evaluate that and hand back
-   what it returns. `env` carries the same three values and is deliberately
-   unused: they are already in the script.
-
-   This used to append a second `return` of its own that read
-   `exportedVars.nFunction` and `exportedVars.sigFunction`. Both were dead: the
-   appended `return process(...)` above them always fired first, and neither
-   name exists in youtubei.js 17.0.1, whose only export is `nsigFunction`. It
-   worked by accident, and would have thrown the moment upstream stopped
-   appending its own return. */
+/* Evaluates only what youtubei.js already built: Player.decipher appends its own processor ending in
+   `return process(n, sp, s)`, so `env` is deliberately unused. Do not re-add a second `return` reading
+   `exportedVars.nFunction`/`sigFunction`: neither name exists in youtubei.js 17.0.1, whose only export is `nsigFunction`. */
 Platform.shim.eval = async (data: Types.BuildScriptResult, _env: Record<string, Types.VMPrimative>) =>
   new Function(data.output)()
 
@@ -89,9 +74,6 @@ const storeVisitorData = (visitorData: string) => {
   } catch {}
 }
 
-// document.cookie is scramjet-trapped to the shared jar; SAPISID is not
-// httpOnly, so its presence is the signed-in probe and the string itself is
-// what youtubei.js needs to compute SAPISIDHASH.
 const readAuthCookie = () => {
   try {
     return document.cookie.includes('SAPISID=') ? document.cookie : undefined
@@ -102,13 +84,8 @@ const readAuthCookie = () => {
 
 export const hasSessionCookie = () => readAuthCookie() !== undefined
 
-// Frozen at boot: the cookie is baked into the Innertube clients below, and
-// any auth change rebuilds the whole engine frame anyway.
 const authCookie = readAuthCookie()
 
-/* Which account on the login to act as. Frozen for the same reason the cookie
-   is: it becomes X-Goog-Authuser on every request these clients make, and
-   changing it means building them again, which is a whole engine rebuild. */
 const accountIndex = readAccountIndex()
 
 export const catalogInnertube = Innertube.create({
@@ -116,24 +93,12 @@ export const catalogInnertube = Innertube.create({
   generate_session_locally: false,
   retrieve_innertube_config: true,
   retrieve_player: false,
-  // Reusing the visitor id keeps persisted PoTokens valid across page loads.
   visitor_data: readVisitorData(),
-  // A SAPISID-bearing jar means the user is signed in: passing the cookie
-  // flips youtubei.js into SAPISIDHASH + X-Goog-Authuser mode — identity
-  // cookies arriving without a matching Authorization header get 401s.
   ...(authCookie && { cookie: authCookie }),
-  // Only meaningful alongside a cookie: authuser selects among the accounts a
-  // signed-in jar carries.
   ...(authCookie && accountIndex !== undefined && { account_index: accountIndex }),
 }).then((client) => {
   const context = client.session.context as unknown as InnertubeContext
-  // retrieve_innertube_config can hand back a canary/experiment clientVersion
-  // (e.g. "2.20260710.06.00-canary_experiment_2.20260708.00.00") — YouTube's
-  // public innertube API then rejects EVERY request with FAILED_PRECONDITION.
-  // (Seen on Firefox: its proxied-request fingerprint gets bucketed into the
-  // canary experiment where Chromium gets the stable version.) Pin it back to a
-  // plain stable X.YYYYMMDD.NN.NN version — the stable one is embedded at the
-  // tail of the canary string; fall back to the pinned version otherwise.
+  // retrieve_innertube_config can hand back a canary/experiment clientVersion; YouTube's public innertube API then rejects EVERY request with FAILED_PRECONDITION.
   const rawVersion = context.client.clientVersion
   if (rawVersion && !/^\d+\.\d{8}\.\d{2}\.\d{2}$/.test(rawVersion)) {
     context.client.clientVersion = rawVersion.match(/(\d+\.\d{8}\.\d{2}\.\d{2})$/)?.[1] ?? FALLBACK_CLIENT_VERSION
@@ -149,8 +114,6 @@ const innertube = catalogInnertube.then((client) => {
     generate_session_locally: true,
     retrieve_innertube_config: false,
     retrieve_player: true,
-    // Persists the analyzed player script so later loads skip the base.js
-    // download and extraction entirely.
     cache: new UniversalCache(true),
     visitor_data: context.client.visitorData,
     user_agent: context.client.userAgent,
@@ -159,9 +122,6 @@ const innertube = catalogInnertube.then((client) => {
   })
 })
 
-// Warm the botguard/PoToken session as soon as the frame boots (unless a
-// persisted token already covers it) so it overlaps the player download and,
-// on browse-first navigation, finishes before the first video is even opened.
 void catalogInnertube
   .then((client) => {
     const context = client.session.context as unknown as InnertubeContext
@@ -169,9 +129,6 @@ void catalogInnertube
   })
   .catch(() => {})
 
-// The googlevideo edge host that streams end up redirected to is stable across
-// videos, so dial it at frame boot: the first segment request then reuses a
-// live connection instead of paying redirect + TLS setup.
 try {
   const gvsOrigin = localStorage.getItem(GVS_ORIGIN_KEY)
   if (gvsOrigin) {
@@ -208,9 +165,6 @@ const extractInitialPlayerResponse = (html: string) => {
   return parsed
 }
 
-// The player response sits early in the watch page, well before the bulk of
-// the document (ytInitialData, UI payload): parse it incrementally off the
-// stream and drop the rest of the transfer as soon as it closes.
 const fetchInitialPlayerResponse = async (videoId: string) => {
   const response = await fetch(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`)
   const reader = response.body?.getReader()
@@ -231,10 +185,6 @@ const fetchInitialPlayerResponse = async (videoId: string) => {
   return extractInitialPlayerResponse(html)
 }
 
-// The watch-page fetch can be kicked as soon as the videoId is known (route
-// resolution), well before the player subtree mounts and calls openPlayback.
-// Memoized by id so getSabrSource reuses the in-flight transfer instead of
-// starting its own ~500ms fetch; getSabrSource consumes-and-evicts it (below).
 const playbackResponseCache = new Map<string, Promise<Record<string, unknown>>>()
 
 export const prefetchInitialPlayerResponse = (videoId: string) => {
@@ -242,12 +192,9 @@ export const prefetchInitialPlayerResponse = (videoId: string) => {
   if (cached) return cached
   const promise = fetchInitialPlayerResponse(videoId)
   playbackResponseCache.set(videoId, promise)
-  // A rejected prefetch must not poison the real open: drop it so getSabrSource
-  // refetches cleanly.
   promise.catch(() => {
     if (playbackResponseCache.get(videoId) === promise) playbackResponseCache.delete(videoId)
   })
-  // Bound the map — only a handful of prefetched-but-unopened ids matter at once.
   if (playbackResponseCache.size > 6) {
     const oldest = playbackResponseCache.keys().next().value
     if (oldest !== undefined && oldest !== videoId) playbackResponseCache.delete(oldest)
@@ -287,16 +234,9 @@ const beaconFormats = (raw: Record<string, unknown>): BeaconFormat[] => {
   })
 }
 
-/* `init_range` is required for VOD and absent for live.
-
-   It describes a DASH SegmentBase, which only the VOD manifest uses, and
-   requiring it unconditionally dropped every live format before a session could
-   be built: that single gate is the whole reason live never reached the SABR
-   transport, which serves it fine.
-
-   It still gates VOD, though. Letting range-less formats through there admits
-   ones the VOD manifest cannot describe, and playback stops before the first
-   frame. */
+/* `init_range` is required for VOD and absent for live. It still gates VOD on purpose: letting range-less
+   formats through there admits ones the VOD manifest cannot describe and playback stops before the first
+   frame. Requiring it unconditionally is what dropped every live format before a session could be built. */
 const playbackFormat = (format: YoutubeFormat, isLive: boolean): PlaybackFormat | undefined => {
   if (!format.mime_type) return undefined
   if (!isLive && !format.init_range) return undefined
@@ -321,8 +261,6 @@ const playbackFormat = (format: YoutubeFormat, isLive: boolean): PlaybackFormat 
 
 export type SabrSource = {
   videoId: string
-  // Live needs its own manifest, generated after a probe segment reveals the
-  // edge, so the source says which kind it is rather than the caller guessing.
   isLive: boolean
   durationMs: number
   manifest: string
@@ -338,17 +276,11 @@ export type SabrSource = {
 }
 
 export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
-  // The watch page depends on nothing else: fetch it while the player client
-  // and botguard session come up. Reuse a prefetch fired at route resolution if
-  // one is in flight, then evict — a session refresh / retry re-enters here for
-  // fresh streaming URLs and must not reuse this response. Only the page's
-  // /player API alternative is NOT an option: anonymous /player calls yield
-  // preview-tier (~60s) SABR sessions (see the "past one minute" browser test).
+  // The /player API alternative is NOT an option: anonymous /player calls yield preview-tier (~60s) SABR sessions.
   const rawPromise = prefetchInitialPlayerResponse(videoId)
+  // Consumed and EVICTED: a session refresh or retry re-enters here needing fresh streaming URLs and must not reuse the cached response.
   playbackResponseCache.delete(videoId)
   void rawPromise.catch(() => {})
-  // Warm the egress connection to the streaming host as soon as it is known so
-  // the first segment request skips the tunneled TCP+TLS dial.
   void rawPromise.then((raw) => {
     const streamingUrl = (raw as {
       streamingData?: { serverAbrStreamingUrl?: string }
@@ -361,8 +293,6 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
   const catalogContext = catalogClient.session.context as unknown as InnertubeContext
   warmPoTokenSession(catalogContext, catalogContext.client.visitorData)
   const nonce = Utils.generateRandomString(16)
-  // The playback registration beacon is fire-and-forget: it must not gate the
-  // player, and a failed beacon is not worth failing playback over.
   void rawPromise.then((raw) => registerPlayback(raw, nonce, beaconFormats(raw))).catch(() => {})
   const client = await innertube
   const context = client.session.context as unknown as InnertubeContext
@@ -372,34 +302,14 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
     throw new Error(`youtube: ${info.playability_status?.reason ?? info.playability_status?.status ?? 'not playable'}`)
   }
   const streaming = info.streaming_data
-  /* Live is refused here, ahead of any SABR work, so it fails as one clear
-     statement rather than as a toDash exception three retries deep.
-
-     What was measured (2026-07-28, against a live stream): the WEB watch page
-     carries NO dashManifestUrl and NO hlsManifestUrl, only
-     serverAbrStreamingUrl. The per-format `url` values it does carry answer 403
-     with an empty body on every variant tried: bare, with &sq, with a minted
-     &pot, with &alr=yes, and with &cpn/&c/&cver. So neither of the two cheap
-     routes exists for this client: there is no manifest to proxy, and the
-     direct segment URLs are not served. Live on web is SABR, and reaching it
-     means driving the SABR session with live semantics behind a hand-written
-     dynamic MPD, which is its own piece of work.
-
-     `is_live` rather than `is_live_content`, which stays true for the VOD a
-     finished stream leaves behind. */
+  /* `is_live` rather than `is_live_content`, which stays true for the VOD a finished stream leaves behind. */
   const isLive = info.basic_info?.is_live === true
   if (!streaming?.server_abr_streaming_url) throw new Error('youtube: SABR URL is missing')
   const rawFormats = playableFormats(streaming.adaptive_formats ?? []) as unknown as YoutubeFormat[]
   const playbackFormats = rawFormats
     .map((format) => playbackFormat(format, isLive))
     .filter((format) => format !== undefined)
-  // The manifest must advertise EXACTLY the formats the SABR session can serve,
-  // so it is filtered by format KEY rather than by itag. Filtering by itag is
-  // not enough: a DRC or dubbed audio track shares itag 251 with the plain one
-  // and differs only in xtags, so it passed the itag filter into the manifest
-  // while being excluded from the session's format list. Auto ABR never chose
-  // it, but any manual variant switch could, and then every segment request for
-  // it failed with "unknown audio format 251:...".
+  // The manifest must advertise EXACTLY the formats the SABR session can serve, so it is filtered by format KEY rather than by itag: a DRC or dubbed audio track shares itag 251 with the plain one and differs only in xtags.
   const allowedKeys = new Set(playbackFormats.map((format) => format.key))
   const [manifest, decipheredUrl] = await Promise.all([
     isLive ? Promise.resolve('') : info.toDash({
@@ -416,16 +326,8 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
   url.searchParams.set('cpn', nonce)
   const ustreamerConfig = info.player_config?.media_common_config?.media_ustreamer_request_config?.video_playback_ustreamer_config
   if (!ustreamerConfig) throw new Error('youtube: ustreamer configuration is missing')
-  // The WEB GVS/streaming poToken is bound to the VIDEO ID, not the visitor or
-  // datasync id: YouTube moved web playback to video-id-bound tokens, and a
-  // session/visitor-bound token now only earns the ~60s StreamProtectionStatus=2
-  // preview before media is withheld. (Ref: LuanRT/kira mintAsWebsafeString(videoId),
-  // FreeTube #8137, yt-dlp PO Token Guide.) The botguard session itself stays
-  // visitor/attestation-bound; only the mint's content binding is the video id.
+  // The WEB GVS/streaming poToken is bound to the VIDEO ID, not the visitor or datasync id; the botguard session itself stays visitor/attestation-bound.
   const mintIdentifier = videoId
-  // The boot-time warmup builds the shared botguard session (keyed on visitor
-  // data); this re-check is a no-op once that session is live, and otherwise
-  // kicks it off so the per-video mint below has a real minter to use.
   warmPoTokenSession(context, mintIdentifier)
   return {
     videoId,
@@ -436,15 +338,9 @@ export const getSabrSource = async (videoId: string): Promise<SabrSource> => {
     ustreamerConfig,
     formats: rawFormats.map((format) => buildSabrFormat(format as never)),
     playbackFormats,
-    // VideoInfo does not surface the storyboard spec, so it is read straight
-    // off the raw player response.
     storyboards: parseStoryboards((raw as {
       storyboards?: { playerStoryboardSpecRenderer?: { spec?: string } }
     }).storyboards?.playerStoryboardSpecRenderer?.spec),
-    /* Rides on the watch page that playback already needed, so the track list
-       costs no extra round trip. The cue file itself is fetched only when a
-       viewer picks a track, because `openPlayback` is also the hover-preview
-       path and must stay cheap. */
     captions: parseCaptionTracks(info.captions),
     clientInfo: {
       clientName: Number((Constants.CLIENT_NAME_IDS as Record<string, string>)[context.client.clientName]),

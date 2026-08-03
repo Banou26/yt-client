@@ -107,13 +107,10 @@ const SubscriptionsFeedPage = () => {
   const [{ data, error, fetching }] = useQuery({
     query: SUBSCRIPTIONS_FEED_QUERY,
     variables: { cursor: loaded[loaded.length - 1]?.cursor },
-    // The source refuses this feed before the network call when signed out, and
-    // errors are unmasked, so that refusal would land in the UI verbatim.
     pause: !ready || !signedIn
   })
   const page = data?.subscriptions
-  // urql keeps the previous result while the next page is in flight, so the
-  // live page can repeat one already consumed: useInfiniteFeed dedupes by id.
+  // urql keeps the previous result while the next page is in flight, so the live page can repeat one already consumed
   const { items, cursor } = useInfiniteFeed({
     pages: page ? [...loaded, page] : loaded,
     key: video => video.id

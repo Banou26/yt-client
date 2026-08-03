@@ -27,9 +27,6 @@ const callSource = async <Result>(call: (api: SourceApi) => Promise<Result>, ret
     if (!(error instanceof Error && error.message.startsWith('yt-client:'))) throw error
     const next = await startEngine()
     setSource(next)
-    /* Carry the cause. Without it every non-replayable failure reads as
-       "the engine restarted", which sends the reader looking at engine
-       lifecycle for what is usually an ordinary error underneath. */
     if (!retry) {
       throw new Error(`youtube: continuation expired after engine restart (${error.message})`, { cause: error })
     }
@@ -39,10 +36,7 @@ const callSource = async <Result>(call: (api: SourceApi) => Promise<Result>, ret
 
 const cursorArgument = SOURCE_CURSOR_ARGUMENT as Partial<Record<SourceMethod, number>>
 
-// Every method is the same guarded forward, so the surface is assembled from the
-// shared name list. Whether a failed call may be replayed against the rebuilt
-// engine comes from SOURCE_REPLAY rather than from a default, so a write can
-// never be replayed into a duplicate like or subscribe.
+// Replayability comes from SOURCE_REPLAY rather than a default, so a write can never be replayed into a duplicate like or subscribe
 const replayable = (method: SourceMethod, args: unknown[]) => {
   const policy = SOURCE_REPLAY[method]
   if (policy !== 'unless-cursor') return policy === 'always'
